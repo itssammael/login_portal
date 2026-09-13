@@ -51,4 +51,65 @@ class SystemRule extends Model
             'priority' => 'integer',
         ];
     }
+
+    /**
+     * Get parsed system rule value by key.
+     */
+    public static function getValue(string $key, mixed $default = null): mixed
+    {
+        $rule = static::where('key', $key)->first();
+        if (! $rule || ! $rule->is_active) {
+            return $default;
+        }
+
+        if ($rule->rule_type === 'boolean') {
+            return filter_var($rule->value, FILTER_VALIDATE_BOOLEAN);
+        }
+
+        if ($rule->rule_type === 'integer') {
+            return (int) $rule->value;
+        }
+
+        if ($rule->rule_type === 'json') {
+            $decoded = json_decode($rule->value, true);
+
+            return json_last_error() === JSON_ERROR_NONE ? $decoded : $default;
+        }
+
+        return $rule->value;
+    }
+
+    /**
+     * Determine if a user is permitted to broadcast system announcements based on system engine rule.
+     */
+    public static function canUserBroadcastAnnouncements(?User $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+
+        if ($user->isAdmin()) {
+            return true;
+        }
+
+        $allowedRoles = static::getValue('announcement_broadcast_roles', ['admin', 'support']);
+
+        $roleSlug = $user->role?->slug;
+
+        if (! $roleSlug) {
+            return false;
+        }
+
+        if (is_array($allowedRoles)) {
+            return in_array($roleSlug, $allowedRoles, true);
+        }
+
+        if (is_string($allowedRoles)) {
+            $rolesArray = array_map('trim', explode(',', $allowedRoles));
+
+            return in_array($roleSlug, $rolesArray, true);
+        }
+
+        return false;
+    }
 }

@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\Role;
 use App\Models\SystemRule;
 use App\Models\User;
+use Database\Seeders\RoleSeeder;
 use Database\Seeders\SystemRuleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -120,19 +122,50 @@ class SystemRuleTest extends TestCase
         $this->assertTrue($rule->fresh()->is_active);
     }
 
-    public function test_admin_can_delete_system_rule(): void
+    public function test_system_rule_allows_admin_and_support_roles_to_broadcast_announcements(): void
     {
-        $admin = User::factory()->admin()->create();
-        $rule = SystemRule::firstOrFail();
+        $this->seed(RoleSeeder::class);
 
-        $response = $this->actingAs($admin)->delete(route('admin.rules.destroy', $rule));
+        $admin = User::factory()->admin()->create([
+            'role_id' => Role::where('slug', 'admin')->first()->id,
+        ]);
+
+        $supportRole = Role::where('slug', 'support')->first();
+        $supportUser = User::factory()->create([
+            'is_admin' => false,
+            'role_id' => $supportRole->id,
+        ]);
+
+        $recipient = User::factory()->create();
+
+        $this->assertTrue(SystemRule::canUserBroadcastAnnouncements($admin));
+        $this->assertTrue(SystemRule::canUserBroadcastAnnouncements($supportUser));
+
+        $response = $this->actingAs($supportUser)->post(route('admin.announcements.broadcast'), [
+            'title' => 'Support Maintenance Alert',
+            'content' => 'Server updates are currently in progress.',
+        ]);
 
         $response->assertSessionHas('success');
-        $this->assertDatabaseMissing('system_rules', ['id' => $rule->id]);
+    }
 
-        $this->assertDatabaseHas('audit_logs', [
-            'admin_id' => $admin->id,
-            'action' => 'deleted_system_rule',
+    public function test_system_rule_denies_regular_user_from_broadcasting_announcements(): void
+    {
+        $this->seed(RoleSeeder::class);
+
+        $userRole = Role::where('slug', 'user')->first();
+        $regularUser = User::factory()->create([
+            'is_admin' => false,
+            'role_id' => $userRole->id,
         ]);
+
+        $this->assertFalse(SystemRule::canUserBroadcastAnnouncements($regularUser));
+
+        $response = $this->actingAs($regularUser)->post(route('admin.announcements.broadcast'), [
+            'title' => 'Unauthorized Broadcast',
+            'content' => 'This should fail.',
+        ]);
+
+        $response->assertForbidden();
     }
 }

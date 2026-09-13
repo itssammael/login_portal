@@ -70,15 +70,15 @@ const logout = () => {
 
         <Banner />
 
-        <div class="h-dvh w-full bg-gray-100 flex overflow-hidden">
+        <div class="h-dvh w-full bg-cream-300 flex overflow-hidden">
             <!-- Left Vertical Sidebar (Desktop) -->
             <aside
-                class="hidden md:flex flex-col bg-white border-r border-gray-200 shrink-0 h-full z-30 justify-between transition-all duration-300 ease-in-out"
+                class="hidden md:flex flex-col bg-cream-100 border-r border-cream-500/60 shrink-0 h-full z-30 justify-between transition-all duration-300 ease-in-out"
                 :class="isCollapsed ? 'w-20' : 'w-64 lg:w-72'"
             >
                 <!-- Top Sidebar Header & Brand with Toggle Button -->
                 <div
-                    class="p-4 border-b border-gray-100 flex items-center justify-between shrink-0"
+                    class="p-4 border-b border-cream-500/40 flex items-center justify-between shrink-0"
                     :class="isCollapsed ? 'px-2 flex-col space-y-3' : 'px-5'"
                 >
                     <Link :href="route('dashboard')" class="flex items-center space-x-3 shrink-0">
@@ -89,7 +89,7 @@ const logout = () => {
                     <button
                         @click="toggleSidebar"
                         type="button"
-                        class="p-1.5 rounded-xl text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition"
+                        class="p-1.5 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-cream-200 transition"
                         :title="isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'"
                     >
                         <svg
@@ -119,7 +119,7 @@ const logout = () => {
                         :href="route('dashboard')"
                         class="flex items-center rounded-xl text-sm font-semibold transition-all duration-150 group relative"
                         :class="[
-                            route().current('dashboard') ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100/80',
+                            route().current('dashboard') ? 'bg-forest-900 text-white shadow-sm' : 'text-gray-700 hover:text-gray-950 hover:bg-cream-200/80',
                             isCollapsed ? 'justify-center p-3' : 'space-x-3 px-3.5 py-2.5'
                         ]"
                         :title="isCollapsed ? 'Dashboard' : ''"
@@ -135,7 +135,7 @@ const logout = () => {
                         :href="route('chat.index')"
                         class="flex items-center rounded-xl text-sm font-semibold transition-all duration-150 relative"
                         :class="[
-                            route().current('chat.*') ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100/80',
+                            route().current('chat.*') ? 'bg-forest-500 text-white shadow-sm' : 'text-gray-700 hover:text-gray-950 hover:bg-cream-200/80',
                             isCollapsed ? 'justify-center p-3' : 'justify-between px-3.5 py-2.5'
                         ]"
                         :title="isCollapsed ? 'Messenger' : ''"
@@ -150,18 +150,18 @@ const logout = () => {
                             v-if="$page.props.unread_messages_count > 0"
                             class="px-2 py-0.5 text-xs font-bold rounded-full animate-pulse"
                             :class="[
-                                isCollapsed ? 'absolute -top-1 -right-1 size-4 p-0 flex items-center justify-center text-[10px] bg-red-500 text-white ring-2 ring-white' : (route().current('chat.*') ? 'bg-white text-indigo-600' : 'bg-indigo-600 text-white')
+                                isCollapsed ? 'absolute -top-1 -right-1 size-4 p-0 flex items-center justify-center text-[10px] bg-red-500 text-white ring-2 ring-white' : (route().current('chat.*') ? 'bg-white text-forest-700' : 'bg-forest-700 text-white')
                             ]"
                         >
                             {{ isCollapsed ? ($page.props.unread_messages_count > 9 ? '9+' : $page.props.unread_messages_count) : $page.props.unread_messages_count }}
                         </span>
                     </Link>
-                     <!-- Broadcast Announcements Modal Trigger (Admins Only) -->
+                     <!-- Broadcast Announcements Modal Trigger (Admins & Support Roles) -->
                     <button
-                        v-if="$page.props.auth.user?.is_admin"
+                        v-if="$page.props.auth.user?.can_broadcast_announcements || $page.props.auth.user?.is_admin"
                         @click="openAnnouncementModal"
                         type="button"
-                        class="w-full flex items-center rounded-xl text-sm font-semibold transition-all duration-150 text-gray-600 hover:text-gray-900 hover:bg-gray-100/80 cursor-pointer"
+                        class="w-full flex items-center rounded-xl text-sm font-semibold transition-all duration-150 text-gray-700 hover:text-gray-950 hover:bg-cream-200/80 cursor-pointer"
                         :class="[
                             isCollapsed ? 'justify-center p-3' : 'space-x-3 px-3.5 py-2.5'
                         ]"
@@ -171,13 +171,13 @@ const logout = () => {
                         <span v-if="!isCollapsed" class="truncate">Announcements</span>
                     </button>
 
-                    <!-- Admin Panel (Admins Only) -->
+                    <!-- Admin Panel (Admins & Allowed Roles) -->
                     <Link
-                        v-if="$page.props.auth.user?.is_admin"
+                        v-if="$page.props.auth.user?.can_access_admin || $page.props.auth.user?.is_admin"
                         :href="route('admin.dashboard')"
                         class="flex items-center rounded-xl text-sm font-semibold transition-all duration-150"
                         :class="[
-                            route().current('admin.*') ? 'bg-indigo-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100/80',
+                            route().current('admin.*') ? 'bg-forest-900 text-white shadow-sm' : 'text-gray-700 hover:text-gray-950 hover:bg-cream-200/80',
                             isCollapsed ? 'justify-center p-3' : 'space-x-3 px-3.5 py-2.5'
                         ]"
                         :title="isCollapsed ? 'Admin Panel' : ''"
@@ -236,11 +236,11 @@ const logout = () => {
                 </div>
 
                 <!-- Bottom User Profile Footer -->
-                <div class="border-t border-gray-100 bg-gray-50/60 shrink-0" :class="isCollapsed ? 'p-2 flex justify-center' : 'p-4'">
+                <div class="border-t border-cream-500/40 bg-cream-100 shrink-0" :class="isCollapsed ? 'p-2 flex justify-center' : 'p-4'">
                     <Dropdown align="top-left" width="48">
                         <template #trigger>
                             <button
-                                class="rounded-xl hover:bg-white transition border border-transparent hover:border-gray-200"
+                                class="rounded-xl hover:bg-cream-200 transition border border-transparent hover:border-cream-500/40"
                                 :class="isCollapsed ? 'p-1.5' : 'w-full flex items-center justify-between p-2'"
                                 :title="isCollapsed ? $page.props.auth.user.name : ''"
                             >
@@ -287,14 +287,14 @@ const logout = () => {
             </aside>
 
             <!-- Mobile Top Header Bar (Only visible on small screens < md) -->
-            <div class="md:hidden fixed top-0 inset-x-0 z-40 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+            <div class="md:hidden fixed top-0 inset-x-0 z-40 bg-cream-100 border-b border-cream-500/60 px-4 py-3 flex items-center justify-between">
                 <Link :href="route('dashboard')" class="flex items-center space-x-2">
                     <ApplicationMark class="h-8 w-auto" />
                 </Link>
 
                 <button
                     @click="showingMobileSidebar = !showingMobileSidebar"
-                    class="p-2 rounded-xl text-gray-600 hover:bg-gray-100 transition"
+                    class="p-2 rounded-xl text-gray-600 hover:bg-cream-200 transition"
                 >
                     <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                         <path v-if="!showingMobileSidebar" stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
@@ -307,8 +307,8 @@ const logout = () => {
             <div v-if="showingMobileSidebar" class="md:hidden fixed inset-0 z-50 flex">
                 <div class="fixed inset-0 bg-gray-900/50 backdrop-blur-xs" @click="showingMobileSidebar = false"></div>
 
-                <aside class="relative bg-white w-72 h-full shadow-2xl flex flex-col justify-between z-10">
-                    <div class="p-5 border-b border-gray-100 flex items-center justify-between">
+                <aside class="relative bg-cream-100 w-72 h-full shadow-2xl flex flex-col justify-between z-10 border-r border-cream-500/60">
+                    <div class="p-5 border-b border-cream-500/40 flex items-center justify-between">
                         <ApplicationMark class="h-8 w-auto" />
                         <button @click="showingMobileSidebar = false" class="text-gray-400 hover:text-gray-600">
                             <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -322,7 +322,7 @@ const logout = () => {
                             :href="route('dashboard')"
                             @click="showingMobileSidebar = false"
                             class="flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition"
-                            :class="route().current('dashboard') ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'"
+                            :class="route().current('dashboard') ? 'bg-forest-900 text-white' : 'text-gray-700 hover:bg-cream-200'"
                         >
                             <span>Dashboard</span>
                         </Link>
@@ -331,26 +331,26 @@ const logout = () => {
                             :href="route('chat.index')"
                             @click="showingMobileSidebar = false"
                             class="flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-semibold transition"
-                            :class="route().current('chat.*') ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'"
+                            :class="route().current('chat.*') ? 'bg-forest-500 text-white' : 'text-gray-700 hover:bg-cream-200'"
                         >
                             <span>Messenger</span>
-                            <span v-if="$page.props.unread_messages_count > 0" class="px-2 py-0.5 text-xs font-bold bg-blue-600 text-white rounded-full">
+                            <span v-if="$page.props.unread_messages_count > 0" class="px-2 py-0.5 text-xs font-bold bg-forest-600 text-white rounded-full">
                                 {{ $page.props.unread_messages_count }}
                             </span>
                         </Link>
 
                         <Link
-                            v-if="$page.props.auth.user?.is_admin"
+                            v-if="$page.props.auth.user?.can_access_admin || $page.props.auth.user?.is_admin"
                             :href="route('admin.dashboard')"
                             @click="showingMobileSidebar = false"
                             class="flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition"
-                            :class="route().current('admin.*') ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'"
+                            :class="route().current('admin.*') ? 'bg-forest-900 text-white' : 'text-gray-700 hover:bg-cream-200'"
                         >
                             <span>Admin Panel</span>
                         </Link>
 
                         <button
-                            v-if="$page.props.auth.user?.is_admin"
+                            v-if="$page.props.auth.user?.can_broadcast_announcements || $page.props.auth.user?.is_admin"
                             @click="showingMobileSidebar = false; openAnnouncementModal();"
                             class="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition text-gray-600 hover:bg-gray-100"
                         >
@@ -392,7 +392,7 @@ const logout = () => {
         <DialogModal :show="showingAnnouncementModal" @close="closeAnnouncementModal">
             <template #title>
                 <div class="flex items-center space-x-3 text-gray-900 font-bold">
-                    <div class="p-2 bg-amber-100 text-amber-600 rounded-xl">
+                    <div class="p-2 bg-forest-900 text-emerald-200 rounded-xl">
                         <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.26.117-1.527-.461a20.845 20.845 0 01-1.44-4.282m3.102.069a18.03 18.03 0 01-.59-4.59c0-1.586.205-3.124.59-4.59m0 9.18a23.848 23.848 0 018.835 2.535M10.34 6.66a23.847 23.847 0 008.835-2.535m0 0A23.74 23.74 0 0018.795 3m.38 1.125a23.91 23.91 0 011.014 5.395m-1.014 8.855c-.118.38-.245.754-.38 1.125m.38-1.125a23.91 23.91 0 001.014-5.395m0-3.46c.495.41.811 1.035.811 1.73 0 .695-.316 1.32-.811 1.73m0-3.46a24.347 24.347 0 010 3.46" />
                         </svg>
@@ -402,18 +402,18 @@ const logout = () => {
             </template>
 
             <template #content>
-                <p class="text-xs text-gray-500 mb-4">
+                <p class="text-xs text-gray-600 mb-4">
                     Send a high-priority system announcement to all registered users. This will create or update direct message threads with every user.
                 </p>
 
                 <div class="space-y-4">
                     <div>
-                        <InputLabel for="modal_announcement_title" value="ANNOUNCEMENT TITLE" class="text-xs font-bold uppercase tracking-wider text-gray-500" />
-                        <TextInput
+                        <InputLabel for="modal_announcement_title" value="ANNOUNCEMENT TITLE" class="text-xs font-bold uppercase tracking-wider text-gray-700" />
+                        <input
                             id="modal_announcement_title"
                             v-model="announcementForm.title"
                             type="text"
-                            class="mt-1.5 block w-full rounded-xl border-gray-200 focus:border-indigo-500 focus:ring-indigo-500 text-sm"
+                            class="mt-1.5 block w-full rounded-xl bg-[#d8f3dc]/70 border border-[#b7e4c7] focus:bg-white focus:border-forest-900 focus:ring-forest-900 text-sm text-gray-900 placeholder:text-gray-500"
                             placeholder="e.g. Scheduled System Maintenance / Platform Update"
                             required
                         />
@@ -421,12 +421,12 @@ const logout = () => {
                     </div>
 
                     <div>
-                        <InputLabel for="modal_announcement_content" value="ANNOUNCEMENT CONTENT" class="text-xs font-bold uppercase tracking-wider text-gray-500" />
+                        <InputLabel for="modal_announcement_content" value="ANNOUNCEMENT CONTENT" class="text-xs font-bold uppercase tracking-wider text-gray-700" />
                         <textarea
                             id="modal_announcement_content"
                             v-model="announcementForm.content"
                             rows="5"
-                            class="mt-1.5 block w-full rounded-xl border-gray-200 focus:border-indigo-500 focus:ring-indigo-500 text-sm"
+                            class="mt-1.5 block w-full rounded-xl bg-[#d8f3dc]/70 border border-[#b7e4c7] focus:bg-white focus:border-forest-900 focus:ring-forest-900 text-sm text-gray-900 placeholder:text-gray-500"
                             placeholder="Type the full announcement message here..."
                             required
                         ></textarea>
@@ -437,17 +437,22 @@ const logout = () => {
 
             <template #footer>
                 <div class="flex items-center space-x-3">
-                    <SecondaryButton @click="closeAnnouncementModal">
+                    <button
+                        type="button"
+                        @click="closeAnnouncementModal"
+                        class="px-4 py-2 bg-cream-200 border border-cream-500 text-gray-700 hover:bg-cream-300 font-semibold text-xs uppercase tracking-widest rounded-xl transition"
+                    >
                         Cancel
-                    </SecondaryButton>
+                    </button>
 
-                    <PrimaryButton
+                    <button
+                        type="button"
                         @click="sendAnnouncement"
                         :disabled="announcementForm.processing"
-                        class="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-xl font-bold shadow-md shadow-indigo-500/20"
+                        class="px-4 py-2 bg-forest-900 hover:bg-forest-950 active:bg-forest-950 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-md transition disabled:opacity-50"
                     >
                         {{ announcementForm.processing ? 'Broadcasting...' : 'Broadcast to All Users' }}
-                    </PrimaryButton>
+                    </button>
                 </div>
             </template>
         </DialogModal>

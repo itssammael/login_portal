@@ -90,7 +90,7 @@ const setQuickReason = (reason) => {
                     <h2 class="font-bold text-xl text-gray-900 leading-tight">
                         Chat Monitoring & Content Moderation
                     </h2>
-                    <p class="text-xs text-gray-500 mt-0.5">Audit platform conversations, review message threads, and remove policy violations</p>
+                    <p class="text-xs text-gray-600 mt-0.5">Audit platform conversations, review message threads, and remove policy violations</p>
                 </div>
             </div>
         </template>
@@ -100,7 +100,7 @@ const setQuickReason = (reason) => {
                 <AdminNav />
 
                 <!-- Flash Alerts -->
-                <div v-if="$page.props.flash?.success" class="mb-6 p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm font-medium flex items-center shadow-xs">
+                <div v-if="$page.props.flash?.success" class="mb-6 p-4 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl text-sm font-medium flex items-center shadow-xs">
                     <svg class="size-5 me-2 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
@@ -108,14 +108,14 @@ const setQuickReason = (reason) => {
                 </div>
 
                 <!-- Search Input Toolbar -->
-                <div class="bg-white p-4 rounded-2xl shadow-xs border border-gray-100 mb-6 flex items-center justify-between">
+                <div class="bg-cream-200 p-4 rounded-2xl shadow-xs border border-cream-500/50 mb-6 flex items-center justify-between">
                     <div class="relative flex-1 max-w-md">
                         <input
                             v-model="search"
                             @keyup.enter="searchChats"
                             type="text"
                             placeholder="Filter by participant name or email..."
-                            class="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm rounded-xl transition"
+                            class="w-full pl-10 pr-4 py-2 bg-[#fffef9] border border-cream-500 focus:bg-white focus:border-forest-600 focus:ring-2 focus:ring-forest-200 text-sm rounded-xl transition text-gray-900 placeholder:text-gray-400"
                         />
                         <svg class="size-4 text-gray-400 absolute left-3.5 top-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -124,17 +124,17 @@ const setQuickReason = (reason) => {
 
                     <button
                         @click="searchChats"
-                        class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition shadow-sm"
+                        class="px-4 py-2 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl transition shadow-xs"
                     >
                         Search
                     </button>
                 </div>
 
                 <!-- Conversations Grid / Table -->
-                <div class="bg-white rounded-2xl shadow-xs border border-gray-100 overflow-hidden">
+                <div class="bg-cream-200 rounded-2xl shadow-xs border border-cream-500/50 overflow-hidden">
                     <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-100 text-left text-sm">
-                            <thead class="bg-gray-50/70 text-gray-500 text-xs font-semibold uppercase tracking-wider">
+                        <table class="min-w-full divide-y divide-cream-500/30 text-left text-sm">
+                            <thead class="bg-cream-100/70 text-gray-600 text-xs font-semibold uppercase tracking-wider">
                                 <tr>
                                     <th class="px-6 py-3.5">Conversation</th>
                                     <th class="px-6 py-3.5">Participants</th>
@@ -143,15 +143,15 @@ const setQuickReason = (reason) => {
                                     <th class="px-6 py-3.5 text-right">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody class="divide-y divide-gray-100">
+                            <tbody class="divide-y divide-cream-500/20">
                                 <tr
                                     v-for="chat in conversations.data"
                                     :key="chat.id"
-                                    class="hover:bg-gray-50/50 transition"
+                                    class="hover:bg-cream-100/40 transition"
                                 >
                                     <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
                                         <div class="flex items-center space-x-2">
-                                            <span class="size-2 rounded-full bg-indigo-500"></span>
+                                            <span class="size-2 rounded-full bg-forest-600"></span>
                                             <span>#{{ chat.id }} - {{ chat.type === 'direct' ? 'Direct Message' : chat.title }}</span>
                                         </div>
                                     </td>
@@ -164,7 +164,7 @@ const setQuickReason = (reason) => {
                                                     :key="u.id"
                                                     :src="u.profile_photo_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.name)"
                                                     :title="u.name"
-                                                    class="inline-block size-7 rounded-full ring-2 ring-white object-cover"
+                                                    class="inline-block size-7 rounded-full ring-2 ring-cream-200 object-cover"
                                                 />
                                             </div>
                                             <span class="text-xs text-gray-600 truncate max-w-xs">
@@ -184,7 +184,7 @@ const setQuickReason = (reason) => {
                                     <td class="px-6 py-4 whitespace-nowrap text-right">
                                         <button
                                             @click="inspectChat(chat.id)"
-                                            class="inline-flex items-center px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg transition"
+                                            class="inline-flex items-center px-3 py-1.5 bg-cream-100 hover:bg-cream-300 text-forest-900 text-xs font-semibold rounded-lg border border-cream-500/40 transition"
                                         >
                                             <svg class="size-3.5 me-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
@@ -199,8 +199,8 @@ const setQuickReason = (reason) => {
                     </div>
 
                     <!-- Pagination -->
-                    <div v-if="conversations.links && conversations.links.length > 3" class="p-4 border-t border-gray-100 flex items-center justify-between">
-                        <div class="text-xs text-gray-500">
+                    <div v-if="conversations.links && conversations.links.length > 3" class="p-4 border-t border-cream-500/30 flex items-center justify-between">
+                        <div class="text-xs text-gray-600">
                             Showing {{ conversations.from }} to {{ conversations.to }} of {{ conversations.total }} chats
                         </div>
                         <div class="flex space-x-1">
@@ -208,13 +208,14 @@ const setQuickReason = (reason) => {
                                 v-for="link in conversations.links"
                                 :key="link.label"
                                 :href="link.url || '#'"
-                                v-html="link.label"
                                 class="px-3 py-1.5 text-xs font-medium rounded-lg transition"
                                 :class="[
-                                    link.active ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-100',
+                                    link.active ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:bg-cream-300',
                                     !link.url ? 'opacity-40 pointer-events-none' : ''
                                 ]"
-                            />
+                            >
+                                <span v-html="link.label"></span>
+                            </Link>
                         </div>
                     </div>
                 </div>
@@ -222,16 +223,16 @@ const setQuickReason = (reason) => {
                 <!-- Chat Transcript Inspection Modal -->
                 <div 
                     v-if="selectedChat"
-                    class="fixed inset-0 z-40 overflow-y-auto bg-gray-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+                    class="fixed inset-0 z-40 overflow-y-auto bg-black/40 backdrop-blur-xs flex items-center justify-center p-4"
                 >
-                    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden border border-gray-100 flex flex-col max-h-[85vh]">
+                    <div class="bg-cream-200 rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden border border-cream-500/60 flex flex-col max-h-[85vh]">
                         <!-- Modal Header -->
-                        <div class="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                        <div class="p-4 border-b border-cream-500/30 flex items-center justify-between bg-cream-100/60">
                             <div>
                                 <h3 class="font-bold text-base text-gray-900">
                                     Moderation Inspection: Chat #{{ selectedChat.id }}
                                 </h3>
-                                <p class="text-xs text-gray-500">
+                                <p class="text-xs text-gray-600">
                                     Participants: {{ selectedChat.users.map(u => u.name).join(', ') }}
                                 </p>
                             </div>
@@ -249,12 +250,12 @@ const setQuickReason = (reason) => {
                                     v-for="msg in selectedChat.messages"
                                     :key="msg.id"
                                     class="p-3 rounded-xl border transition"
-                                    :class="msg.is_deleted ? 'bg-red-50/50 border-red-100 opacity-60' : 'bg-gray-50/60 border-gray-100'"
+                                    :class="msg.is_deleted ? 'bg-red-50/70 border-red-200 opacity-70' : 'bg-cream-100 border-cream-500/40'"
                                 >
                                     <div class="flex items-center justify-between mb-1">
                                         <div class="flex items-center space-x-2">
                                             <span class="font-bold text-xs text-gray-900">{{ msg.sender_name }}</span>
-                                            <span class="text-[10px] text-gray-400">{{ msg.created_at }}</span>
+                                            <span class="text-[10px] text-gray-500">{{ msg.created_at }}</span>
                                         </div>
                                         <button
                                             v-if="!msg.is_deleted"
@@ -278,16 +279,16 @@ const setQuickReason = (reason) => {
                                 </div>
                             </template>
 
-                            <div v-else class="text-center py-8 text-gray-400 text-sm">
+                            <div v-else class="text-center py-8 text-gray-500 text-sm">
                                 No messages logged in this chat.
                             </div>
                         </div>
 
                         <!-- Modal Footer -->
-                        <div class="p-3 border-t border-gray-100 bg-gray-50/50 flex justify-end">
+                        <div class="p-3 border-t border-cream-500/30 bg-cream-100/60 flex justify-end">
                             <button
                                 @click="closeInspection"
-                                class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 text-sm font-semibold rounded-xl transition"
+                                class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-sm font-semibold rounded-xl border border-cream-500/40 transition"
                             >
                                 Close Inspection
                             </button>
@@ -298,9 +299,9 @@ const setQuickReason = (reason) => {
                 <!-- Custom Moderation Reason Modal Dialog -->
                 <div
                     v-if="showModerateModal"
-                    class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+                    class="fixed inset-0 z-50 overflow-y-auto bg-black/40 backdrop-blur-xs flex items-center justify-center p-4"
                 >
-                    <div class="bg-white rounded-3xl max-w-md w-full shadow-2xl overflow-hidden transform transition-all border border-gray-100">
+                    <div class="bg-cream-200 rounded-3xl max-w-md w-full shadow-2xl overflow-hidden transform transition-all border border-cream-500/60">
                         <div class="p-6">
                             <div class="flex items-center space-x-3 mb-4">
                                 <div class="size-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
@@ -310,7 +311,7 @@ const setQuickReason = (reason) => {
                                 </div>
                                 <div>
                                     <h3 class="text-base font-bold text-gray-900">Moderate & Delete Message</h3>
-                                    <p class="text-xs text-gray-500">Specify the administrative reason for removing this message</p>
+                                    <p class="text-xs text-gray-600">Specify the administrative reason for removing this message</p>
                                 </div>
                             </div>
 
@@ -322,7 +323,7 @@ const setQuickReason = (reason) => {
                                         v-model="moderationReason"
                                         type="text"
                                         placeholder="Enter moderation reason..."
-                                        class="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-red-500 focus:ring-2 focus:ring-red-200 rounded-xl text-sm transition"
+                                        class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:bg-white focus:border-red-500 focus:ring-2 focus:ring-red-200 rounded-xl text-sm transition text-gray-900"
                                         required
                                         @keyup.enter="submitModerateDelete"
                                     />
@@ -330,13 +331,13 @@ const setQuickReason = (reason) => {
 
                                 <!-- Quick Reason Chips -->
                                 <div>
-                                    <span class="block text-[11px] font-semibold text-gray-400 mb-1.5">Quick Presets:</span>
+                                    <span class="block text-[11px] font-semibold text-gray-500 mb-1.5">Quick Presets:</span>
                                     <div class="flex flex-wrap gap-1.5">
                                         <button
                                             type="button"
                                             @click="setQuickReason('Inappropriate content')"
                                             class="px-2.5 py-1 text-xs rounded-lg border font-medium transition"
-                                            :class="moderationReason === 'Inappropriate content' ? 'bg-red-50 border-red-300 text-red-700' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'"
+                                            :class="moderationReason === 'Inappropriate content' ? 'bg-red-100 border-red-300 text-red-800' : 'bg-cream-100 border-cream-500/40 text-gray-700 hover:bg-cream-300'"
                                         >
                                             Inappropriate content
                                         </button>
@@ -344,7 +345,7 @@ const setQuickReason = (reason) => {
                                             type="button"
                                             @click="setQuickReason('Spam / Unsolicited')"
                                             class="px-2.5 py-1 text-xs rounded-lg border font-medium transition"
-                                            :class="moderationReason === 'Spam / Unsolicited' ? 'bg-red-50 border-red-300 text-red-700' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'"
+                                            :class="moderationReason === 'Spam / Unsolicited' ? 'bg-red-100 border-red-300 text-red-800' : 'bg-cream-100 border-cream-500/40 text-gray-700 hover:bg-cream-300'"
                                         >
                                             Spam / Unsolicited
                                         </button>
@@ -352,7 +353,7 @@ const setQuickReason = (reason) => {
                                             type="button"
                                             @click="setQuickReason('Harassment / Abuse')"
                                             class="px-2.5 py-1 text-xs rounded-lg border font-medium transition"
-                                            :class="moderationReason === 'Harassment / Abuse' ? 'bg-red-50 border-red-300 text-red-700' : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'"
+                                            :class="moderationReason === 'Harassment / Abuse' ? 'bg-red-100 border-red-300 text-red-800' : 'bg-cream-100 border-cream-500/40 text-gray-700 hover:bg-cream-300'"
                                         >
                                             Harassment / Abuse
                                         </button>
@@ -365,7 +366,7 @@ const setQuickReason = (reason) => {
                                 <button
                                     type="button"
                                     @click="closeModerateModal"
-                                    class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-xl transition"
+                                    class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 text-sm font-semibold rounded-xl border border-cream-500/40 transition"
                                 >
                                     Cancel
                                 </button>

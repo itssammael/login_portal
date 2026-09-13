@@ -53,35 +53,35 @@ const sendAnnouncement = () => {
 
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     <!-- Form Column -->
-                    <div class="lg:col-span-2 bg-white rounded-2xl shadow-xs border border-gray-100 p-6">
+                    <div class="lg:col-span-2 bg-cream-200 rounded-2xl shadow-xs border border-cream-500/50 p-6">
                         <h3 class="font-bold text-gray-900 text-base mb-4 flex items-center space-x-2">
                             <span>📢 Compose Broadcast Message</span>
                         </h3>
 
                         <form @submit.prevent="sendAnnouncement" class="space-y-4">
                             <div>
-                                <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                                <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1.5">
                                     Announcement Title
                                 </label>
                                 <input
                                     v-model="form.title"
                                     type="text"
                                     placeholder="e.g. Scheduled System Maintenance / Platform Update"
-                                    class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm rounded-xl transition"
+                                    class="w-full px-4 py-2.5 bg-[#fffef9] border border-cream-500 focus:bg-white focus:border-forest-600 focus:ring-2 focus:ring-forest-200 text-gray-900 text-sm rounded-xl transition"
                                     required
                                 />
                                 <div v-if="form.errors.title" class="text-xs text-red-600 mt-1">{{ form.errors.title }}</div>
                             </div>
 
                             <div>
-                                <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                                <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1.5">
                                     Announcement Content
                                 </label>
                                 <textarea
                                     v-model="form.content"
                                     rows="6"
                                     placeholder="Type the full announcement message here..."
-                                    class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm rounded-xl transition"
+                                    class="w-full px-4 py-2.5 bg-[#fffef9] border border-cream-500 focus:bg-white focus:border-forest-600 focus:ring-2 focus:ring-forest-200 text-gray-900 text-sm rounded-xl transition"
                                     required
                                 ></textarea>
                                 <div v-if="form.errors.content" class="text-xs text-red-600 mt-1">{{ form.errors.content }}</div>
@@ -94,7 +94,7 @@ const sendAnnouncement = () => {
                                 <button
                                     type="submit"
                                     :disabled="form.processing || !form.title.trim() || !form.content.trim()"
-                                    class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold rounded-xl shadow-md hover:shadow-lg transition transform active:scale-95"
+                                    class="px-5 py-2.5 bg-forest-900 hover:bg-forest-950 disabled:opacity-40 text-white text-sm font-semibold rounded-xl shadow-xs transition transform active:scale-95"
                                 >
                                     {{ form.processing ? 'Broadcasting...' : 'Broadcast to All Users' }}
                                 </button>
@@ -103,10 +103,10 @@ const sendAnnouncement = () => {
                     </div>
 
                     <!-- Past Broadcasts Column -->
-                    <div class="bg-white rounded-2xl shadow-xs border border-gray-100 p-6">
+                    <div class="bg-cream-200 rounded-2xl shadow-xs border border-cream-500/50 p-6">
                         <h3 class="font-bold text-gray-900 text-base mb-4">Past Broadcasts</h3>
 
-                        <div class="divide-y divide-gray-100">
+                        <div class="divide-y divide-cream-500/20">
                             <template v-if="recentAnnouncements.length > 0">
                                 <div
                                     v-for="item in recentAnnouncements"
@@ -123,7 +123,7 @@ const sendAnnouncement = () => {
                                 </div>
                             </template>
 
-                            <div v-else class="py-8 text-center text-gray-400 text-xs">
+                            <div v-else class="py-8 text-center text-gray-500 text-xs">
                                 No previous broadcasts.
                             </div>
                         </div>

@@ -51,10 +51,10 @@ const formatActionName = (action) => {
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <AdminNav />
 
-                <div class="bg-white rounded-2xl shadow-xs border border-gray-100 overflow-hidden">
+                <div class="bg-cream-200 rounded-2xl shadow-xs border border-cream-500/50 overflow-hidden">
                     <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-100 text-left text-sm">
-                            <thead class="bg-gray-50/70 text-gray-500 text-xs font-semibold uppercase tracking-wider">
+                        <table class="min-w-full divide-y divide-cream-500/20 text-left text-sm">
+                            <thead class="bg-cream-100/90 text-forest-900 text-xs font-semibold uppercase tracking-wider">
                                 <tr>
                                     <th class="px-6 py-3.5">Timestamp</th>
                                     <th class="px-6 py-3.5">Administrator</th>
@@ -62,12 +62,12 @@ const formatActionName = (action) => {
                                     <th class="px-6 py-3.5">Details</th>
                                 </tr>
                             </thead>
-                            <tbody class="divide-y divide-gray-100">
+                            <tbody class="divide-y divide-cream-500/20">
                                 <template v-if="logs.data.length > 0">
                                     <tr
                                         v-for="log in logs.data"
                                         :key="log.id"
-                                        class="hover:bg-gray-50/50 transition"
+                                        class="hover:bg-cream-300/40 transition"
                                     >
                                         <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500 font-mono">
                                             {{ new Date(log.created_at).toLocaleString() }}
@@ -108,7 +108,7 @@ const formatActionName = (action) => {
                     </div>
 
                     <!-- Pagination -->
-                    <div v-if="logs.links && logs.links.length > 3" class="p-4 border-t border-gray-100 flex items-center justify-between">
+                    <div v-if="logs.links && logs.links.length > 3" class="p-4 border-t border-cream-500/30 flex items-center justify-between">
                         <div class="text-xs text-gray-500">
                             Showing {{ logs.from }} to {{ logs.to }} of {{ logs.total }} audit entries
                         </div>
@@ -117,13 +117,14 @@ const formatActionName = (action) => {
                                 v-for="link in logs.links"
                                 :key="link.label"
                                 :href="link.url || '#'"
-                                v-html="link.label"
                                 class="px-3 py-1.5 text-xs font-medium rounded-lg transition"
                                 :class="[
-                                    link.active ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-100',
+                                    link.active ? 'bg-forest-900 text-white' : 'text-gray-800 hover:bg-cream-300',
                                     !link.url ? 'opacity-40 pointer-events-none' : ''
                                 ]"
-                            />
+                            >
+                                <span v-html="link.label"></span>
+                            </Link>
                         </div>
                     </div>
                 </div>

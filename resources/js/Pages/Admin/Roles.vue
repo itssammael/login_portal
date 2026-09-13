@@ -146,7 +146,7 @@ const getColorBadgeClasses = (colorKey) => {
 
                 <button
                     @click="openCreateModal"
-                    class="inline-flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl shadow-xs transition"
+                    class="inline-flex items-center px-4 py-2 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl shadow-xs transition"
                 >
                     <svg class="size-4 me-1.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -177,8 +177,8 @@ const getColorBadgeClasses = (colorKey) => {
 
                 <!-- Metrics Row -->
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-                    <div class="bg-white p-5 rounded-2xl shadow-xs border border-gray-100 flex items-center space-x-4">
-                        <div class="p-3 bg-indigo-50 text-indigo-600 rounded-xl shrink-0">
+                    <div class="bg-cream-200 p-5 rounded-2xl shadow-xs border border-cream-500/50 flex items-center space-x-4">
+                        <div class="p-3 bg-lime-200 text-forest-900 rounded-xl shrink-0">
                             <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
                             </svg>
@@ -189,8 +189,8 @@ const getColorBadgeClasses = (colorKey) => {
                         </div>
                     </div>
 
-                    <div class="bg-white p-5 rounded-2xl shadow-xs border border-gray-100 flex items-center space-x-4">
-                        <div class="p-3 bg-purple-50 text-purple-600 rounded-xl shrink-0">
+                    <div class="bg-cream-200 p-5 rounded-2xl shadow-xs border border-cream-500/50 flex items-center space-x-4">
+                        <div class="p-3 bg-lime-200 text-forest-900 rounded-xl shrink-0">
                             <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
                             </svg>
@@ -201,8 +201,8 @@ const getColorBadgeClasses = (colorKey) => {
                         </div>
                     </div>
 
-                    <div class="bg-white p-5 rounded-2xl shadow-xs border border-gray-100 flex items-center space-x-4">
-                        <div class="p-3 bg-blue-50 text-blue-600 rounded-xl shrink-0">
+                    <div class="bg-cream-200 p-5 rounded-2xl shadow-xs border border-cream-500/50 flex items-center space-x-4">
+                        <div class="p-3 bg-lime-200 text-forest-900 rounded-xl shrink-0">
                             <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
                             </svg>
@@ -219,7 +219,7 @@ const getColorBadgeClasses = (colorKey) => {
                     <div
                         v-for="role in roles"
                         :key="role.id"
-                        class="bg-white rounded-2xl border border-gray-100 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between overflow-hidden"
+                        class="bg-cream-200 rounded-2xl border border-cream-500/50 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between overflow-hidden"
                     >
                         <div class="p-6">
                             <!-- Card Header -->
@@ -240,13 +240,13 @@ const getColorBadgeClasses = (colorKey) => {
                                 <div class="shrink-0 text-right">
                                     <span
                                         v-if="role.is_system"
-                                        class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-gray-100 text-gray-600 border border-gray-200"
+                                        class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-cream-100 text-gray-700 border border-cream-400"
                                     >
                                         🔒 System Protected
                                     </span>
                                     <span
                                         v-else
-                                        class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                        class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-lime-200 text-forest-900 border border-forest-500/30"
                                     >
                                         ✨ Custom Role
                                     </span>
@@ -255,28 +255,28 @@ const getColorBadgeClasses = (colorKey) => {
 
                             <!-- Permissions List -->
                             <div class="mt-5">
-                                <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Granted Capabilities</div>
+                                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Granted Capabilities</div>
 
                                 <div v-if="role.permissions && role.permissions.length > 0" class="flex flex-wrap gap-1.5">
                                     <span
                                         v-for="permKey in role.permissions"
                                         :key="permKey"
-                                        class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200/60"
+                                        class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-cream-100 text-gray-800 border border-cream-400"
                                     >
-                                        <svg class="size-3.5 me-1 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                        <svg class="size-3.5 me-1 text-forest-700 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                                         </svg>
                                         {{ availablePermissions[permKey] || permKey }}
                                     </span>
                                 </div>
-                                <div v-else class="text-xs text-gray-400 italic bg-gray-50/50 p-2 rounded-lg border border-dashed border-gray-200">
+                                <div v-else class="text-xs text-gray-400 italic bg-cream-100/50 p-2 rounded-lg border border-dashed border-cream-400">
                                     No special administrative permissions granted. Standard user permissions apply.
                                 </div>
                             </div>
                         </div>
 
                         <!-- Card Footer -->
-                        <div class="bg-gray-50/80 px-6 py-3.5 border-t border-gray-100 flex items-center justify-between">
+                        <div class="bg-cream-100/80 px-6 py-3.5 border-t border-cream-500/30 flex items-center justify-between">
                             <div class="text-xs text-gray-600 font-medium">
                                 <span class="font-bold text-gray-900">{{ role.users_count }}</span> assigned {{ role.users_count === 1 ? 'user' : 'users' }}
                             </div>
@@ -284,7 +284,7 @@ const getColorBadgeClasses = (colorKey) => {
                             <div class="flex items-center space-x-2">
                                 <button
                                     @click="openEditModal(role)"
-                                    class="px-3 py-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition"
+                                    class="px-3 py-1.5 text-xs font-semibold text-forest-900 hover:text-forest-950 hover:bg-cream-300 rounded-lg transition"
                                 >
                                     Edit Role
                                 </button>
@@ -305,9 +305,9 @@ const getColorBadgeClasses = (colorKey) => {
 
         <!-- Create / Edit Modal -->
         <div v-if="showModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <div class="bg-white rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden transform transition-all">
+            <div class="bg-cream-200 rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden border border-cream-500/60 transform transition-all">
                 <!-- Modal Header -->
-                <div class="px-6 py-5 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                <div class="px-6 py-5 border-b border-cream-500/40 flex items-center justify-between bg-cream-100">
                     <div>
                         <h3 class="text-lg font-bold text-gray-900">
                             {{ editingRole ? 'Edit Role: ' + editingRole.name : 'Create New Role' }}
@@ -315,7 +315,7 @@ const getColorBadgeClasses = (colorKey) => {
                         <p class="text-xs text-gray-500 mt-0.5">Define name, color badge, and access control capabilities</p>
                     </div>
 
-                    <button @click="closeModal" class="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition">
+                    <button @click="closeModal" class="text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-cream-300 transition">
                         <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                         </svg>
@@ -327,25 +327,25 @@ const getColorBadgeClasses = (colorKey) => {
                     <!-- Role Name & Slug -->
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">Role Name *</label>
+                            <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1.5">Role Name *</label>
                             <input
                                 v-model="form.name"
                                 type="text"
                                 placeholder="e.g., Community Manager"
-                                class="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 rounded-xl text-sm transition"
+                                class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-sm transition"
                                 required
                             />
                             <div v-if="form.errors.name" class="text-xs text-red-600 mt-1 font-medium">{{ form.errors.name }}</div>
                         </div>
 
                         <div>
-                            <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">Slug / Identifier</label>
+                            <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1.5">Slug / Identifier</label>
                             <input
                                 v-model="form.slug"
                                 type="text"
                                 placeholder="Auto-generated if left blank"
                                 :disabled="editingRole?.is_system"
-                                class="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 rounded-xl text-sm transition disabled:opacity-60"
+                                class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-sm transition disabled:opacity-60"
                             />
                             <div v-if="form.errors.slug" class="text-xs text-red-600 mt-1 font-medium">{{ form.errors.slug }}</div>
                         </div>
@@ -353,19 +353,19 @@ const getColorBadgeClasses = (colorKey) => {
 
                     <!-- Description -->
                     <div>
-                        <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">Description</label>
+                        <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1.5">Description</label>
                         <textarea
                             v-model="form.description"
                             rows="2"
                             placeholder="Brief description of responsibilities and scope..."
-                            class="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 rounded-xl text-sm transition"
+                            class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-sm transition"
                         ></textarea>
                         <div v-if="form.errors.description" class="text-xs text-red-600 mt-1 font-medium">{{ form.errors.description }}</div>
                     </div>
 
                     <!-- Color Badge Selection -->
                     <div>
-                        <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Badge Color Theme</label>
+                        <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-2">Badge Color Theme</label>
                         <div class="flex flex-wrap gap-2">
                             <button
                                 v-for="color in availableColors"
@@ -377,7 +377,7 @@ const getColorBadgeClasses = (colorKey) => {
                                     color.bg,
                                     color.text,
                                     color.border,
-                                    form.color === color.key ? 'ring-2 ring-indigo-500 ring-offset-1 font-bold' : 'opacity-80 hover:opacity-100'
+                                    form.color === color.key ? 'ring-2 ring-forest-600 ring-offset-1 font-bold' : 'opacity-80 hover:opacity-100'
                                 ]"
                             >
                                 <span class="size-2 rounded-full bg-current"></span>
@@ -389,25 +389,25 @@ const getColorBadgeClasses = (colorKey) => {
                     <!-- Permissions Selection -->
                     <div>
                         <div class="flex items-center justify-between mb-2">
-                            <label class="block text-xs font-bold text-gray-700 uppercase tracking-wider">Permissions & Capabilities</label>
+                            <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider">Permissions & Capabilities</label>
                             <div class="space-x-2">
-                                <button type="button" @click="selectAllPermissions" class="text-xs text-indigo-600 hover:underline font-medium">Select All</button>
+                                <button type="button" @click="selectAllPermissions" class="text-xs text-forest-800 hover:underline font-medium">Select All</button>
                                 <span class="text-gray-300">|</span>
                                 <button type="button" @click="clearAllPermissions" class="text-xs text-gray-500 hover:underline font-medium">Clear All</button>
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-cream-100 p-4 rounded-2xl border border-cream-500/40">
                             <label
                                 v-for="(label, permKey) in availablePermissions"
                                 :key="permKey"
-                                class="flex items-start p-2.5 rounded-xl bg-white border border-gray-200/70 hover:border-indigo-300 cursor-pointer transition"
+                                class="flex items-start p-2.5 rounded-xl bg-[#fffef9] border border-cream-500/60 hover:border-forest-600 cursor-pointer transition"
                             >
                                 <input
                                     type="checkbox"
                                     :checked="form.permissions.includes(permKey)"
                                     @change="togglePermission(permKey)"
-                                    class="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 size-4 border-gray-300"
+                                    class="mt-0.5 rounded text-forest-900 focus:ring-forest-600 size-4 border-cream-500"
                                 />
                                 <span class="ms-2.5 text-xs font-semibold text-gray-800 leading-tight">
                                     {{ label }}
@@ -417,18 +417,18 @@ const getColorBadgeClasses = (colorKey) => {
                     </div>
 
                     <!-- Modal Actions -->
-                    <div class="pt-4 border-t border-gray-100 flex items-center justify-end space-x-3">
+                    <div class="pt-4 border-t border-cream-500/40 flex items-center justify-end space-x-3">
                         <button
                             type="button"
                             @click="closeModal"
-                            class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-xl transition"
+                            class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-sm font-semibold rounded-xl transition"
                         >
                             Cancel
                         </button>
                         <button
                             type="submit"
                             :disabled="form.processing"
-                            class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl shadow-xs transition disabled:opacity-50"
+                            class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl shadow-xs transition disabled:opacity-50"
                         >
                             {{ form.processing ? 'Saving...' : (editingRole ? 'Update Role' : 'Create Role') }}
                         </button>
@@ -439,7 +439,7 @@ const getColorBadgeClasses = (colorKey) => {
 
         <!-- Delete Confirmation Modal -->
         <div v-if="showDeleteConfirm" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <div class="bg-white rounded-3xl max-w-md w-full shadow-2xl p-6 text-center">
+            <div class="bg-cream-200 rounded-3xl max-w-md w-full shadow-2xl p-6 text-center border border-cream-500/60">
                 <div class="size-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-4">
                     <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.008v.008H12v-.008z" />
@@ -454,7 +454,7 @@ const getColorBadgeClasses = (colorKey) => {
                 <div class="mt-6 flex items-center justify-center space-x-3">
                     <button
                         @click="showDeleteConfirm = false"
-                        class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-semibold rounded-xl transition"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-sm font-semibold rounded-xl transition"
                     >
                         Cancel
                     </button>

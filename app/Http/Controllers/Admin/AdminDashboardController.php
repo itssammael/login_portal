@@ -318,6 +318,11 @@ class AdminDashboardController extends Controller
         ]);
 
         $admin = $request->user();
+
+        if (! $admin->canBroadcastAnnouncements()) {
+            abort(403, 'Unauthorized access. You do not have permission to broadcast system announcements.');
+        }
+
         $title = $request->input('title');
         $content = $request->input('content');
 
@@ -357,6 +362,7 @@ class AdminDashboardController extends Controller
             'action' => 'broadcast_announcement',
             'details' => [
                 'title' => $title,
+                'content' => $content,
                 'recipients_count' => $count,
             ],
         ]);

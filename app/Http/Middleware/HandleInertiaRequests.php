@@ -57,6 +57,13 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $user ? array_merge($user->toArray(), [
                     'is_admin' => $user->isAdmin(),
+                    'can_access_admin' => $user->canAccessAdmin(),
+                    'can_broadcast_announcements' => $user->canBroadcastAnnouncements(),
+                    'role' => $user->role ? [
+                        'id' => $user->role->id,
+                        'name' => $user->role->name,
+                        'slug' => $user->role->slug,
+                    ] : null,
                 ]) : null,
             ],
             'unread_messages_count' => $unreadCount,

@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\SystemRuleController;
 use App\Http\Controllers\ChatController;
+use App\Models\AuditLog;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -24,7 +25,23 @@ Route::middleware([
     'verified',
 ])->group(function () {
     Route::get('/dashboard', function () {
-        return Inertia::render('Dashboard');
+        $latest = AuditLog::with('admin:id,name,email')
+            ->where('action', 'broadcast_announcement')
+            ->latest()
+            ->first();
+
+        $latestAnnouncement = $latest ? [
+            'id' => $latest->id,
+            'title' => $latest->details['title'] ?? 'System Announcement',
+            'content' => $latest->details['content'] ?? 'Important system update has been posted.',
+            'author' => $latest->admin?->name ?? 'Administrator',
+            'created_at' => $latest->created_at->toIso8601String(),
+            'formatted_date' => $latest->created_at->diffForHumans(),
+        ] : null;
+
+        return Inertia::render('Dashboard', [
+            'latestAnnouncement' => $latestAnnouncement,
+        ]);
     })->name('dashboard');
 
     Route::get('/test-broadcast', function () {

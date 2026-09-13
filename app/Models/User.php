@@ -5,6 +5,7 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -102,6 +103,48 @@ class User extends Authenticatable
     public function isAdmin(): bool
     {
         return (bool) $this->is_admin;
+    }
+
+    /**
+     * The role assigned to this user.
+     *
+     * @return BelongsTo<Role, User>
+     */
+    public function role(): BelongsTo
+    {
+        return $this->belongsTo(Role::class);
+    }
+
+    /**
+     * Determine if the user can access administrative panels.
+     */
+    public function canAccessAdmin(): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        return $this->role?->hasPermission('access_admin') ?? false;
+    }
+
+    /**
+     * Determine if the user is allowed to broadcast system announcements via system engine rules.
+     */
+    public function canBroadcastAnnouncements(): bool
+    {
+        return SystemRule::canUserBroadcastAnnouncements($this);
+    }
+
+    /**
+     * Check if the user has a specific permission.
+     */
+    public function hasPermission(string $permission): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        return $this->role?->hasPermission($permission) ?? false;
     }
 
     /**

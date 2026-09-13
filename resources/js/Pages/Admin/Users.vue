@@ -84,14 +84,14 @@ const toggleAdmin = (user) => {
                 </div>
 
                 <!-- Filters & Search Toolbar -->
-                <div class="bg-white p-4 rounded-2xl shadow-xs border border-gray-100 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div class="bg-cream-200 p-4 rounded-2xl shadow-xs border border-cream-500/50 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div class="relative flex-1 max-w-md">
                         <input
                             v-model="search"
                             @keyup.enter="applyFilters"
                             type="text"
                             placeholder="Search by name or email (Press Enter)..."
-                            class="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm rounded-xl transition"
+                            class="w-full pl-10 pr-4 py-2 bg-[#fffef9] border border-cream-500 text-gray-900 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 text-sm rounded-xl transition"
                         />
                         <svg class="size-4 text-gray-400 absolute left-3.5 top-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -102,7 +102,7 @@ const toggleAdmin = (user) => {
                         <select
                             v-model="role"
                             @change="applyFilters"
-                            class="py-2 pl-3 pr-8 bg-gray-50 border border-gray-200 text-sm rounded-xl focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+                            class="py-2 pl-3 pr-8 bg-[#fffef9] border border-cream-500 text-gray-900 text-sm rounded-xl focus:border-forest-600 focus:ring-2 focus:ring-forest-200"
                         >
                             <option value="">All Roles</option>
                             <option value="admin">Administrators</option>
@@ -112,7 +112,7 @@ const toggleAdmin = (user) => {
                         <select
                             v-model="status"
                             @change="applyFilters"
-                            class="py-2 pl-3 pr-8 bg-gray-50 border border-gray-200 text-sm rounded-xl focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+                            class="py-2 pl-3 pr-8 bg-[#fffef9] border border-cream-500 text-gray-900 text-sm rounded-xl focus:border-forest-600 focus:ring-2 focus:ring-forest-200"
                         >
                             <option value="">All Statuses</option>
                             <option value="active">Active</option>
@@ -121,7 +121,7 @@ const toggleAdmin = (user) => {
 
                         <button
                             @click="applyFilters"
-                            class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl transition shadow-sm"
+                            class="px-4 py-2 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl transition shadow-xs"
                         >
                             Filter
                         </button>
@@ -129,10 +129,10 @@ const toggleAdmin = (user) => {
                 </div>
 
                 <!-- Users Table -->
-                <div class="bg-white rounded-2xl shadow-xs border border-gray-100 overflow-hidden">
+                <div class="bg-cream-200 rounded-2xl shadow-xs border border-cream-500/50 overflow-hidden">
                     <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-100 text-left text-sm">
-                            <thead class="bg-gray-50/70 text-gray-500 text-xs font-semibold uppercase tracking-wider">
+                        <table class="min-w-full divide-y divide-cream-500/20 text-left text-sm">
+                            <thead class="bg-cream-100/90 text-forest-900 text-xs font-semibold uppercase tracking-wider">
                                 <tr>
                                     <th class="px-6 py-3.5">User</th>
                                     <th class="px-6 py-3.5">Role</th>
@@ -142,11 +142,11 @@ const toggleAdmin = (user) => {
                                     <th class="px-6 py-3.5 text-right">Actions</th>
                                 </tr>
                             </thead>
-                            <tbody class="divide-y divide-gray-100">
+                            <tbody class="divide-y divide-cream-500/20">
                                 <tr
                                     v-for="user in users.data"
                                     :key="user.id"
-                                    class="hover:bg-gray-50/50 transition"
+                                    class="hover:bg-cream-300/40 transition"
                                 >
                                     <!-- User Info -->
                                     <td class="px-6 py-4 whitespace-nowrap">
@@ -155,11 +155,11 @@ const toggleAdmin = (user) => {
                                                 <img
                                                     :src="user.profile_photo_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.name)"
                                                     :alt="user.name"
-                                                    class="size-10 rounded-full object-cover ring-1 ring-gray-200"
+                                                    class="size-10 rounded-full object-cover ring-1 ring-cream-400"
                                                 />
                                                 <span
                                                     v-if="user.is_online"
-                                                    class="absolute bottom-0 right-0 size-2.5 bg-emerald-500 border-2 border-white rounded-full"
+                                                    class="absolute bottom-0 right-0 size-2.5 bg-forest-500 border-2 border-white rounded-full"
                                                 ></span>
                                             </div>
                                             <div>
@@ -173,13 +173,13 @@ const toggleAdmin = (user) => {
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <span
                                             v-if="user.is_admin"
-                                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800"
+                                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-lime-200 text-forest-900"
                                         >
                                             🛡️ Admin
                                         </span>
                                         <span
                                             v-else
-                                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700"
+                                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-cream-100 text-gray-800 border border-cream-400"
                                         >
                                             User
                                         </span>
@@ -204,7 +204,7 @@ const toggleAdmin = (user) => {
                                     <!-- Chat Activity -->
                                     <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-600">
                                         <div><span class="font-semibold text-gray-900">{{ user.messages_count }}</span> messages</div>
-                                        <div class="text-gray-400">{{ user.conversations_count }} conversations</div>
+                                        <div class="text-gray-500">{{ user.conversations_count }} conversations</div>
                                     </td>
 
                                     <!-- Registered -->
@@ -218,8 +218,7 @@ const toggleAdmin = (user) => {
                                             <!-- Toggle Admin -->
                                             <button
                                                 @click="toggleAdmin(user)"
-                                                class="px-2.5 py-1 text-xs font-medium rounded-lg border transition"
-                                                :class="user.is_admin ? 'border-amber-300 text-amber-700 hover:bg-amber-50' : 'border-indigo-300 text-indigo-700 hover:bg-indigo-50'"
+                                                class="px-2.5 py-1 text-xs font-medium rounded-lg border border-cream-500 text-forest-900 hover:bg-cream-300 transition"
                                             >
                                                 {{ user.is_admin ? 'Demote' : 'Make Admin' }}
                                             </button>
@@ -234,7 +233,7 @@ const toggleAdmin = (user) => {
                                             </button>
                                         </template>
 
-                                        <span v-else class="text-xs text-gray-400 italic">
+                                        <span v-else class="text-xs text-gray-500 italic">
                                             Current Admin
                                         </span>
                                     </td>
@@ -244,7 +243,7 @@ const toggleAdmin = (user) => {
                     </div>
 
                     <!-- Pagination -->
-                    <div v-if="users.links && users.links.length > 3" class="p-4 border-t border-gray-100 flex items-center justify-between">
+                    <div v-if="users.links && users.links.length > 3" class="p-4 border-t border-cream-500/30 flex items-center justify-between">
                         <div class="text-xs text-gray-500">
                             Showing {{ users.from }} to {{ users.to }} of {{ users.total }} users
                         </div>
@@ -253,13 +252,14 @@ const toggleAdmin = (user) => {
                                 v-for="link in users.links"
                                 :key="link.label"
                                 :href="link.url || '#'"
-                                v-html="link.label"
                                 class="px-3 py-1.5 text-xs font-medium rounded-lg transition"
                                 :class="[
-                                    link.active ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-100',
+                                    link.active ? 'bg-forest-900 text-white' : 'text-gray-800 hover:bg-cream-300',
                                     !link.url ? 'opacity-40 pointer-events-none' : ''
                                 ]"
-                            />
+                            >
+                                <span v-html="link.label"></span>
+                            </Link>
                         </div>
                     </div>
                 </div>

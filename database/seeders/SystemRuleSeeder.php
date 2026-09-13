@@ -118,6 +118,16 @@ class SystemRuleSeeder extends Seeder
                 'is_active' => true,
                 'priority' => 3,
             ],
+            [
+                'key' => 'announcement_broadcast_roles',
+                'name' => 'Roles Permitted to Broadcast System Announcements',
+                'category' => 'user_access',
+                'description' => 'Defines user roles (e.g. admin, support) that are authorized to create and broadcast system announcements.',
+                'rule_type' => 'json',
+                'value' => '["admin", "support"]',
+                'is_active' => true,
+                'priority' => 4,
+            ],
         ];
 
         foreach ($defaultRules as $rule) {
