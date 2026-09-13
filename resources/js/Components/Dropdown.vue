@@ -35,14 +35,26 @@ const widthClass = computed(() => {
 
 const alignmentClasses = computed(() => {
     if (props.align === 'left') {
-        return 'ltr:origin-top-left rtl:origin-top-right start-0';
+        return 'ltr:origin-top-left rtl:origin-top-right start-0 mt-2';
     }
 
     if (props.align === 'right') {
-        return 'ltr:origin-top-right rtl:origin-top-left end-0';
+        return 'ltr:origin-top-right rtl:origin-top-left end-0 mt-2';
     }
 
-    return 'origin-top';
+    if (props.align === 'top-left') {
+        return 'bottom-full mb-2 start-0 origin-bottom-left';
+    }
+
+    if (props.align === 'top-right') {
+        return 'bottom-full mb-2 end-0 origin-bottom-right';
+    }
+
+    if (props.align === 'top') {
+        return 'bottom-full mb-2 start-0 origin-bottom';
+    }
+
+    return 'origin-top mt-2';
 });
 </script>
 
@@ -65,9 +77,8 @@ const alignmentClasses = computed(() => {
         >
             <div
                 v-show="open"
-                class="absolute z-50 mt-2 rounded-md shadow-lg"
+                class="absolute z-50 rounded-md shadow-lg"
                 :class="[widthClass, alignmentClasses]"
-                style="display: none;"
                 @click="open = false"
             >
                 <div class="rounded-md ring-1 ring-black ring-opacity-5" :class="contentClasses">
