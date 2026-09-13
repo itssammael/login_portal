@@ -213,4 +213,14 @@ class User extends Authenticatable
 
         return $record->encryption_key;
     }
+
+    /**
+     * Get the SSO user bindings for this user.
+     *
+     * @return HasMany<SsoUserBinding>
+     */
+    public function ssoBindings(): HasMany
+    {
+        return $this->hasMany(SsoUserBinding::class);
+    }
 }

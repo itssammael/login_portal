@@ -1,0 +1,207 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use App\Models\AuditLog;
+use App\Models\Sso;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Inertia\Inertia;
+use Inertia\Response;
+
+class SsoPortalController extends Controller
+{
+    /**
+     * Display the SSO Portal management dashboard.
+     */
+    public function index(Request $request): Response
+    {
+        $search = $request->query('search');
+        $status = $request->query('status', 'all');
+
+        $query = Sso::query()->latest();
+
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                    ->orWhere('client_id', 'like', "%{$search}%")
+                    ->orWhere('redirect_uri', 'like', "%{$search}%");
+            });
+        }
+
+        if ($status === 'active') {
+            $query->where('is_active', true);
+        } elseif ($status === 'inactive') {
+            $query->where('is_active', false);
+        }
+
+        $clients = $query->get();
+
+        $stats = [
+            'total_clients' => Sso::count(),
+            'active_clients' => Sso::where('is_active', true)->count(),
+            'inactive_clients' => Sso::where('is_active', false)->count(),
+        ];
+
+        return Inertia::render('Admin/SsoPortal', [
+            'clients' => $clients,
+            'stats' => $stats,
+            'filters' => [
+                'search' => $search ?? '',
+                'status' => $status,
+            ],
+        ]);
+    }
+
+    /**
+     * Store a newly created SSO client in storage.
+     */
+    public function store(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'client_id' => 'required|string|max:255|unique:sso,client_id',
+            'client_secret' => 'required|string|max:255',
+            'redirect_uri' => 'required|string',
+            'is_active' => 'boolean',
+        ]);
+
+        $client = Sso::create([
+            'name' => $validated['name'],
+            'client_id' => $validated['client_id'],
+            'client_secret' => $validated['client_secret'],
+            'redirect_uri' => $validated['redirect_uri'],
+            'is_active' => $validated['is_active'] ?? true,
+        ]);
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'created_sso_client',
+            'target_type' => 'sso',
+            'target_id' => (string) $client->id,
+            'details' => [
+                'name' => $client->name,
+                'client_id' => $client->client_id,
+            ],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return back()->with('success', "SSO Client \"{$client->name}\" created successfully.");
+    }
+
+    /**
+     * Update the specified SSO client in storage.
+     */
+    public function update(Request $request, Sso $sso): RedirectResponse
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'client_id' => 'required|string|max:255|unique:sso,client_id,'.$sso->id,
+            'client_secret' => 'required|string|max:255',
+            'redirect_uri' => 'required|string',
+            'is_active' => 'boolean',
+        ]);
+
+        $sso->update([
+            'name' => $validated['name'],
+            'client_id' => $validated['client_id'],
+            'client_secret' => $validated['client_secret'],
+            'redirect_uri' => $validated['redirect_uri'],
+            'is_active' => $validated['is_active'] ?? true,
+        ]);
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'updated_sso_client',
+            'target_type' => 'sso',
+            'target_id' => (string) $sso->id,
+            'details' => [
+                'name' => $sso->name,
+                'client_id' => $sso->client_id,
+            ],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return back()->with('success', "SSO Client \"{$sso->name}\" updated successfully.");
+    }
+
+    /**
+     * Toggle the active state of an SSO client.
+     */
+    public function toggle(Request $request, Sso $sso): RedirectResponse
+    {
+        $sso->update([
+            'is_active' => ! $sso->is_active,
+        ]);
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => $sso->is_active ? 'enabled_sso_client' : 'disabled_sso_client',
+            'target_type' => 'sso',
+            'target_id' => (string) $sso->id,
+            'details' => [
+                'name' => $sso->name,
+                'client_id' => $sso->client_id,
+                'is_active' => $sso->is_active,
+            ],
+            'ip_address' => $request->ip(),
+        ]);
+
+        $status = $sso->is_active ? 'enabled' : 'disabled';
+
+        return back()->with('success', "SSO Client \"{$sso->name}\" has been {$status}.");
+    }
+
+    /**
+     * Regenerate client secret for an SSO client.
+     */
+    public function regenerateSecret(Request $request, Sso $sso): RedirectResponse
+    {
+        $newSecret = Str::random(64);
+        $sso->update([
+            'client_secret' => $newSecret,
+        ]);
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'regenerated_sso_secret',
+            'target_type' => 'sso',
+            'target_id' => (string) $sso->id,
+            'details' => [
+                'name' => $sso->name,
+                'client_id' => $sso->client_id,
+            ],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return back()->with('success', "New client secret generated for \"{$sso->name}\".");
+    }
+
+    /**
+     * Remove the specified SSO client from storage.
+     */
+    public function destroy(Request $request, Sso $sso): RedirectResponse
+    {
+        $name = $sso->name;
+        $clientId = $sso->client_id;
+        $id = $sso->id;
+
+        $sso->delete();
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'deleted_sso_client',
+            'target_type' => 'sso',
+            'target_id' => (string) $id,
+            'details' => [
+                'name' => $name,
+                'client_id' => $clientId,
+            ],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return back()->with('success', "SSO Client \"{$name}\" was permanently deleted.");
+    }
+}

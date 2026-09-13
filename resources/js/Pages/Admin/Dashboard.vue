@@ -22,6 +22,7 @@ defineProps({
 <template>
     <AppLayout title="Admin Dashboard">
         <template #header>
+            <AdminNav />
             <div class="flex items-center justify-between">
                 <div>
                     <h2 class="font-bold text-xl text-gray-900 leading-tight flex items-center space-x-2">
@@ -33,10 +34,7 @@ defineProps({
         </template>
 
         <div class="py-6">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <!-- Navigation Tabs -->
-                <AdminNav />
-
+            <div class="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8">
                 <!-- Flash Message Alerts -->
                 <div v-if="$page.props.flash?.success" class="mb-6 p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-sm font-medium flex items-center shadow-xs">
                     <svg class="size-5 me-2 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">

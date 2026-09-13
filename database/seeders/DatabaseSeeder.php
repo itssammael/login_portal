@@ -17,6 +17,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->call(RoleSeeder::class);
         $this->call(SystemRuleSeeder::class);
+        $this->call(SsoClientSeeder::class);
 
         if (User::count() === 0) {
             User::factory(10)->create();

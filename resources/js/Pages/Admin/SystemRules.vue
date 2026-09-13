@@ -149,6 +149,7 @@ const getCategoryBadgeClasses = (catKey) => {
 <template>
     <AppLayout title="Admin - System Rules Engine">
         <template #header>
+            <AdminNav />
             <div class="flex items-center justify-between">
                 <div>
                     <h2 class="font-bold text-xl text-gray-900 leading-tight">
@@ -170,8 +171,7 @@ const getCategoryBadgeClasses = (catKey) => {
         </template>
 
         <div class="py-6">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <AdminNav />
+            <div class="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8">
 
                 <!-- Flash Alerts -->
                 <div v-if="$page.props.flash?.success" class="mb-6 p-4 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl text-sm font-medium flex items-center shadow-xs">

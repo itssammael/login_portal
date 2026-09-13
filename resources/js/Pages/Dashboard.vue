@@ -134,19 +134,96 @@ onMounted(() => {
                             </div>
                         </div>
 
-                        <!-- Placeholder for System App list  -->
+                        <!-- Connected Systems (SSO Portal Applications) -->
+                        <div class="bg-cream-200 rounded-3xl p-6 sm:p-7 shadow-xs border border-cream-500/50 flex-1 flex flex-col justify-between transition hover:shadow-sm">
+                            <div class="flex items-center justify-between gap-3 mb-4">
+                                <div class="flex items-center space-x-2.5">
+                                    <div class="p-2 bg-amber-500/20 text-amber-950 rounded-xl">
+                                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 002.25-2.25V6a2.25 2.25 0 00-2.25-2.25H6A2.25 2.25 0 003.75 6v2.25A2.25 2.25 0 006 10.5zm0 9.75h2.25a2.25 2.25 0 002.25-2.25v-2.25a2.25 2.25 0 00-2.25-2.25H6a2.25 2.25 0 00-2.25 2.25v2.25A2.25 2.25 0 006 20.25zM15 10.5h2.25a2.25 2.25 0 002.25-2.25V6a2.25 2.25 0 00-2.25-2.25H15A2.25 2.25 0 0012.75 6v2.25a2.25 2.25 0 002.25 2.25z" />
+                                        </svg>
+                                    </div>
+                                    <h2 class="text-xl sm:text-2xl font-extrabold text-gray-950 tracking-tight">
+                                        My Systems
+                                    </h2>
+                                </div>
+                                <span class="px-3 py-1 rounded-full text-xs font-extrabold uppercase tracking-wider bg-forest-900 text-white shadow-xs">
+                                    SSO ENABLED
+                                </span>
+                            </div>
 
-                        <div class="bg-cream-200 rounded-3xl p-8 sm:p-12 shadow-xs border border-cream-500/50 flex-1 flex flex-col items-center justify-center min-h-[360px] sm:min-h-[420px] transition hover:shadow-sm">
-                            <!-- list of connectected apps goes here -->
-                            <div class="w-full max-w-[320px] sm:max-w-[380px] flex items-center justify-center">
-                                <img
-                                    src="/assets/imgs/icons/work-in-progress.png"
-                                    alt="Work in Progress"
-                                    class="w-full h-auto object-contain select-none pointer-events-none drop-shadow-xs"
-                                    draggable="false"
-                                />
+                            <p class="text-xs text-gray-700 font-medium mb-4">
+                                Authenticate once with Login Portal to seamlessly access supported external applications.
+                            </p>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 my-auto">
+                                <!-- System Card 1: LFews 2.0 -->
+                                <div class="bg-[#fffef7] rounded-2xl p-5 border border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-3">
+                                            <div class="size-10 rounded-xl bg-blue-500/15 text-blue-800 flex items-center justify-center font-bold text-lg">
+                                                🌊
+                                            </div>
+                                            <span class="text-[10px] font-bold text-blue-900 bg-blue-100 px-2 py-0.5 rounded-full uppercase">
+                                                Flood Warning
+                                            </span>
+                                        </div>
+                                        <h3 class="font-bold text-base text-gray-950 group-hover:text-blue-700 transition">
+                                            LFews 2.0
+                                        </h3>
+                                        <p class="text-xs text-gray-600 mt-1 leading-relaxed">
+                                            Local Flood Early Warning System monitoring & sensor analytics.
+                                        </p>
+                                    </div>
+
+                                    <a
+                                        href="/sso/launch/lfews"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="mt-4 inline-flex items-center justify-center space-x-2 w-full px-4 py-2.5 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                                    >
+                                        <span>Open System</span>
+                                        <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                        </svg>
+                                    </a>
+                                </div>
+
+                                <!-- System Card 2: Project Tracker -->
+                                <div class="bg-[#fffef7] rounded-2xl p-5 border border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-3">
+                                            <div class="size-10 rounded-xl bg-amber-500/15 text-amber-800 flex items-center justify-center font-bold text-lg">
+                                                📋
+                                            </div>
+                                            <span class="text-[10px] font-bold text-amber-900 bg-amber-100 px-2 py-0.5 rounded-full uppercase">
+                                                Management
+                                            </span>
+                                        </div>
+                                        <h3 class="font-bold text-base text-gray-950 group-hover:text-amber-800 transition">
+                                            Project Tracker
+                                        </h3>
+                                        <p class="text-xs text-gray-600 mt-1 leading-relaxed">
+                                            Task board, workflow tracking & department activities portal.
+                                        </p>
+                                    </div>
+
+                                    <a
+                                        href="/sso/launch/project_tracker"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="mt-4 inline-flex items-center justify-center space-x-2 w-full px-4 py-2.5 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                                    >
+
+                                        <span>Open System</span>
+                                        <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                        </svg>
+                                    </a>
+                                </div>
                             </div>
                         </div>
+
 
                     </div>
 

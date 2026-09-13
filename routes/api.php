@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\LguActivityController;
+use App\Http\Controllers\Sso\SsoProviderController;
 use App\Models\AuditLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -8,6 +9,9 @@ use Illuminate\Support\Facades\Route;
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
+
+Route::post('/sso/token', [SsoProviderController::class, 'token'])->name('api.sso.token');
+Route::get('/sso/userinfo', [SsoProviderController::class, 'userinfo'])->name('api.sso.userinfo');
 
 Route::get('/lgu-activities', [LguActivityController::class, 'index'])->name('api.lgu-activities');
 

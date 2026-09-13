@@ -3,8 +3,12 @@
 use App\Events\MessageSent;
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\RoleController;
+use App\Http\Controllers\Admin\SsoPortalController;
 use App\Http\Controllers\Admin\SystemRuleController;
 use App\Http\Controllers\ChatController;
+use App\Http\Controllers\Sso\ConnectedSystemsController;
+use App\Http\Controllers\Sso\SsoProviderController;
+use App\Http\Middleware\CheckPendingSsoRequest;
 use App\Models\AuditLog;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -19,11 +23,21 @@ Route::get('/', function () {
     ]);
 });
 
+Route::get('/sso/authorize', [SsoProviderController::class, 'authorize'])->name('sso.authorize');
+
 Route::middleware([
     'auth:sanctum',
     config('jetstream.auth_session'),
     'verified',
+    CheckPendingSsoRequest::class,
 ])->group(function () {
+    Route::get('/sso/launch/{clientName}', [SsoProviderController::class, 'launch'])->name('sso.launch');
+
+    // Account Binding / Connected Systems Routes
+    Route::get('/connected-systems', [ConnectedSystemsController::class, 'index'])->name('sso.connected-systems');
+    Route::post('/connected-systems/{clientId}/bind', [ConnectedSystemsController::class, 'bind'])->name('sso.connected-systems.bind');
+    Route::delete('/connected-systems/{clientId}/unbind', [ConnectedSystemsController::class, 'unbind'])->name('sso.connected-systems.unbind');
+
     Route::get('/dashboard', function () {
         $latest = AuditLog::with('admin:id,name,email')
             ->where('action', 'broadcast_announcement')
@@ -86,5 +100,11 @@ Route::middleware([
         Route::get('/announcements', [AdminDashboardController::class, 'announcements'])->name('announcements');
         Route::post('/announcements/broadcast', [AdminDashboardController::class, 'broadcastAnnouncement'])->name('announcements.broadcast');
         Route::get('/audit-logs', [AdminDashboardController::class, 'auditLogs'])->name('audit-logs');
+        Route::get('/sso', [SsoPortalController::class, 'index'])->name('sso.index');
+        Route::post('/sso', [SsoPortalController::class, 'store'])->name('sso.store');
+        Route::put('/sso/{sso}', [SsoPortalController::class, 'update'])->name('sso.update');
+        Route::post('/sso/{sso}/toggle', [SsoPortalController::class, 'toggle'])->name('sso.toggle');
+        Route::post('/sso/{sso}/regenerate-secret', [SsoPortalController::class, 'regenerateSecret'])->name('sso.regenerate-secret');
+        Route::delete('/sso/{sso}', [SsoPortalController::class, 'destroy'])->name('sso.destroy');
     });
 });
