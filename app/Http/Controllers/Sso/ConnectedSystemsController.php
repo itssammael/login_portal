@@ -35,6 +35,7 @@ class ConnectedSystemsController extends Controller
                 'id' => $client->id,
                 'client_id' => $client->client_id,
                 'name' => $client->name,
+                'icon_url' => $client->icon_url,
                 'is_bound' => (bool) $binding,
                 'bound_username' => $binding?->external_username,
                 'bound_at' => $binding?->created_at?->diffForHumans(),

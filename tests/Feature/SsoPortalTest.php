@@ -3,8 +3,11 @@
 namespace Tests\Feature;
 
 use App\Models\Sso;
+use App\Models\SsoUserBinding;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class SsoPortalTest extends TestCase
@@ -238,5 +241,201 @@ class SsoPortalTest extends TestCase
 
         $response->assertStatus(400);
         $response->assertJson(['error' => 'unauthorized_client']);
+    }
+
+    public function test_admin_can_create_sso_client_with_icon(): void
+    {
+        Storage::fake('public');
+
+        $file = UploadedFile::fake()->image('client-icon.png', 100, 100);
+
+        $response = $this->actingAs($this->admin)
+            ->from(route('admin.sso.index'))
+            ->post(route('admin.sso.store'), [
+                'name' => 'LFEWS With Icon',
+                'client_id' => 'lfews-with-icon',
+                'client_secret' => 'secret1234567890',
+                'redirect_uri' => 'http://localhost:8001/sso/callback',
+                'is_active' => true,
+                'icon' => $file,
+            ]);
+
+        $response->assertRedirect(route('admin.sso.index'));
+        $response->assertSessionHas('success');
+
+        $client = Sso::where('client_id', 'lfews-with-icon')->firstOrFail();
+        $this->assertNotNull($client->icon);
+        Storage::disk('public')->assertExists($client->icon);
+        $this->assertStringContainsString('storage/', $client->icon_url);
+    }
+
+    public function test_admin_can_update_and_remove_sso_client_icon(): void
+    {
+        Storage::fake('public');
+
+        $oldFile = UploadedFile::fake()->image('old-icon.png');
+        $oldPath = $oldFile->store('sso-icons', 'public');
+
+        $client = Sso::create([
+            'name' => 'Portal To Update',
+            'client_id' => 'portal-update-icon',
+            'client_secret' => 'secret',
+            'redirect_uri' => 'http://localhost:8001/sso/callback',
+            'icon' => $oldPath,
+            'is_active' => true,
+        ]);
+
+        Storage::disk('public')->assertExists($oldPath);
+
+        // Update with remove_icon = true
+        $response = $this->actingAs($this->admin)
+            ->from(route('admin.sso.index'))
+            ->put(route('admin.sso.update', $client->id), [
+                'name' => 'Portal To Update',
+                'client_id' => 'portal-update-icon',
+                'client_secret' => 'secret',
+                'redirect_uri' => 'http://localhost:8001/sso/callback',
+                'is_active' => true,
+                'remove_icon' => true,
+            ]);
+
+        $response->assertRedirect(route('admin.sso.index'));
+        $this->assertNull($client->fresh()->icon);
+        Storage::disk('public')->assertMissing($oldPath);
+    }
+
+    public function test_dashboard_provides_active_sso_clients_with_icon(): void
+    {
+        $client = Sso::create([
+            'name' => 'Dashboard Visible Client',
+            'client_id' => 'dash-client',
+            'client_secret' => 'secret',
+            'redirect_uri' => 'http://localhost:8001/sso/callback',
+            'icon' => 'sso-icons/sample.png',
+            'is_active' => true,
+        ]);
+
+        SsoUserBinding::create([
+            'user_id' => $this->admin->id,
+            'client_id' => $client->client_id,
+            'external_user_id' => '101',
+            'external_username' => 'admin_external',
+            'is_verified' => true,
+        ]);
+
+        $response = $this->actingAs($this->admin)->get(route('dashboard'));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Dashboard')
+            ->has('ssoClients')
+            ->where('ssoClients', fn ($clients) => collect($clients)->contains('client_id', 'dash-client'))
+        );
+    }
+
+    public function test_dashboard_excludes_unbound_or_inactive_sso_clients(): void
+    {
+        $boundActive = Sso::create([
+            'name' => 'Bound Active Client',
+            'client_id' => 'bound-active',
+            'client_secret' => 'secret',
+            'redirect_uri' => 'http://localhost:8001/sso/callback',
+            'is_active' => true,
+        ]);
+
+        $unboundActive = Sso::create([
+            'name' => 'Unbound Active Client',
+            'client_id' => 'unbound-active',
+            'client_secret' => 'secret',
+            'redirect_uri' => 'http://localhost:8001/sso/callback',
+            'is_active' => true,
+        ]);
+
+        $boundInactive = Sso::create([
+            'name' => 'Bound Inactive Client',
+            'client_id' => 'bound-inactive',
+            'client_secret' => 'secret',
+            'redirect_uri' => 'http://localhost:8001/sso/callback',
+            'is_active' => false,
+        ]);
+
+        // Only bind $boundActive and $boundInactive to $this->user
+        SsoUserBinding::create([
+            'user_id' => $this->user->id,
+            'client_id' => $boundActive->client_id,
+            'external_user_id' => '201',
+            'external_username' => 'user_bound',
+            'is_verified' => true,
+        ]);
+
+        SsoUserBinding::create([
+            'user_id' => $this->user->id,
+            'client_id' => $boundInactive->client_id,
+            'external_user_id' => '202',
+            'external_username' => 'user_inactive',
+            'is_verified' => true,
+        ]);
+
+        $response = $this->actingAs($this->user)->get(route('dashboard'));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Dashboard')
+            ->has('ssoClients', 1)
+            ->where('ssoClients.0.client_id', 'bound-active')
+        );
+    }
+
+    public function test_admin_can_create_sso_client_with_framework(): void
+    {
+        $response = $this->actingAs($this->admin)
+            ->from(route('admin.sso.index'))
+            ->post(route('admin.sso.store'), [
+                'name' => 'Nuxt Web Portal',
+                'client_id' => 'nuxt-portal-client',
+                'client_secret' => 'nuxt-secret-key-1234567890abcdef',
+                'redirect_uri' => 'http://localhost:3000/sso/callback',
+                'framework' => 'nuxt_node',
+                'is_active' => true,
+            ]);
+
+        $response->assertRedirect(route('admin.sso.index'));
+        $response->assertSessionHas('success');
+
+        $this->assertDatabaseHas('sso', [
+            'client_id' => 'nuxt-portal-client',
+            'framework' => 'nuxt_node',
+        ]);
+
+        $client = Sso::where('client_id', 'nuxt-portal-client')->firstOrFail();
+        $this->assertSame('nuxt_node', $client->framework);
+        $this->assertSame('Nuxt.js / Node.js', $client->framework_label);
+    }
+
+    public function test_admin_can_update_sso_client_framework(): void
+    {
+        $client = Sso::create([
+            'name' => 'Framework Test Client',
+            'client_id' => 'fw-test-client',
+            'client_secret' => 'fw-secret-key',
+            'redirect_uri' => 'http://localhost:8001/sso/callback',
+            'framework' => 'laravel_inertia',
+            'is_active' => true,
+        ]);
+
+        $response = $this->actingAs($this->admin)
+            ->from(route('admin.sso.index'))
+            ->put(route('admin.sso.update', $client->id), [
+                'name' => 'Framework Test Client',
+                'client_id' => 'fw-test-client',
+                'client_secret' => 'fw-secret-key',
+                'redirect_uri' => 'http://localhost:8001/sso/callback',
+                'framework' => 'vue_spa',
+                'is_active' => true,
+            ]);
+
+        $response->assertRedirect(route('admin.sso.index'));
+        $this->assertSame('vue_spa', $client->fresh()->framework);
+        $this->assertSame('Vue.js / React (SPA)', $client->fresh()->framework_label);
     }
 }

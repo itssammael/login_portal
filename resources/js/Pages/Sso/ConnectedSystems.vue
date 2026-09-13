@@ -119,7 +119,10 @@ const unbindSystem = (system) => {
                             <!-- Header & Status -->
                             <div class="flex items-center justify-between mb-4">
                                 <div class="flex items-center space-x-3">
-                                    <div class="size-12 rounded-2xl flex items-center justify-center font-black text-xl" :class="system.client_id.includes('lfews') ? 'bg-blue-500/15 text-blue-900' : 'bg-amber-500/15 text-amber-900'">
+                                    <div v-if="system.icon_url" class="size-12 rounded-2xl bg-white p-1.5 border border-cream-400/60 shadow-2xs flex items-center justify-center overflow-hidden">
+                                        <img :src="system.icon_url" :alt="system.name" class="w-full h-full object-contain rounded-xl" />
+                                    </div>
+                                    <div v-else class="size-12 rounded-2xl flex items-center justify-center font-black text-xl" :class="system.client_id.includes('lfews') ? 'bg-blue-500/15 text-blue-900' : 'bg-amber-500/15 text-amber-900'">
                                         {{ system.client_id.includes('lfews') ? '🌊' : '📋' }}
                                     </div>
                                     <div>

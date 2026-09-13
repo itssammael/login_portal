@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
+import { Link } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import axios from 'axios';
 
@@ -8,7 +9,21 @@ const props = defineProps({
         type: Object,
         default: null,
     },
+    ssoClients: {
+        type: Array,
+        default: () => [],
+    },
 });
+
+const getSystemEmoji = (system) => {
+    const id = (system.client_id || '').toLowerCase();
+    const name = (system.name || '').toLowerCase();
+    if (id.includes('lfews') || name.includes('flood') || name.includes('lfews')) return '🌊';
+    if (id.includes('tracker') || name.includes('project') || name.includes('track')) return '📋';
+    if (id.includes('gis') || name.includes('map')) return '🗺️';
+    if (id.includes('health')) return '🏥';
+    return '🔐';
+};
 
 // Dynamic Current Month & Year formatting
 const currentDate = new Date();
@@ -156,31 +171,33 @@ onMounted(() => {
                                 Authenticate once with Login Portal to seamlessly access supported external applications.
                             </p>
 
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 my-auto">
-                                <!-- System Card 1: LFews 2.0 -->
-                                <div class="bg-[#fffef7] rounded-2xl p-5 border border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group">
-                                    <div>
-                                        <div class="flex items-center justify-between mb-3">
-                                            <div class="size-10 rounded-xl bg-blue-500/15 text-blue-800 flex items-center justify-center font-bold text-lg">
-                                                🌊
-                                            </div>
-                                            <span class="text-[10px] font-bold text-blue-900 bg-blue-100 px-2 py-0.5 rounded-full uppercase">
-                                                Flood Warning
-                                            </span>
+                            <div v-if="ssoClients && ssoClients.length > 0" class="grid grid-cols-1 sm:grid-cols-2 gap-4 my-auto">
+                                <div
+                                    v-for="system in ssoClients"
+                                    :key="system.id"
+                                    class="bg-[#fffef7] rounded-2xl p-4 sm:p-5 border border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group"
+                                >
+                                    <div class="flex items-center space-x-3 mb-4 min-w-0">
+                                        <!-- SSO Client Icon -->
+                                        <div v-if="system.icon_url" class="size-11 rounded-xl bg-white p-1.5 border border-cream-400/60 shadow-2xs flex items-center justify-center overflow-hidden shrink-0">
+                                            <img :src="system.icon_url" :alt="system.name" class="w-full h-full object-contain rounded-lg" />
                                         </div>
-                                        <h3 class="font-bold text-base text-gray-950 group-hover:text-blue-700 transition">
-                                            LFews 2.0
+                                        <div v-else class="size-11 rounded-xl bg-forest-900/10 text-forest-900 flex items-center justify-center font-bold text-xl shrink-0">
+                                            {{ getSystemEmoji(system) }}
+                                        </div>
+
+                                        <!-- Client / Portal Name -->
+                                        <h3 class="font-bold text-base text-gray-950 group-hover:text-forest-800 transition leading-snug truncate">
+                                            {{ system.name }}
                                         </h3>
-                                        <p class="text-xs text-gray-600 mt-1 leading-relaxed">
-                                            Local Flood Early Warning System monitoring & sensor analytics.
-                                        </p>
                                     </div>
 
+                                    <!-- Open System Button -->
                                     <a
-                                        href="/sso/launch/lfews"
+                                        :href="system.launch_url"
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        class="mt-4 inline-flex items-center justify-center space-x-2 w-full px-4 py-2.5 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                                        class="inline-flex items-center justify-center space-x-2 w-full px-4 py-2.5 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
                                     >
                                         <span>Open System</span>
                                         <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -188,39 +205,16 @@ onMounted(() => {
                                         </svg>
                                     </a>
                                 </div>
-
-                                <!-- System Card 2: Project Tracker -->
-                                <div class="bg-[#fffef7] rounded-2xl p-5 border border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group">
-                                    <div>
-                                        <div class="flex items-center justify-between mb-3">
-                                            <div class="size-10 rounded-xl bg-amber-500/15 text-amber-800 flex items-center justify-center font-bold text-lg">
-                                                📋
-                                            </div>
-                                            <span class="text-[10px] font-bold text-amber-900 bg-amber-100 px-2 py-0.5 rounded-full uppercase">
-                                                Management
-                                            </span>
-                                        </div>
-                                        <h3 class="font-bold text-base text-gray-950 group-hover:text-amber-800 transition">
-                                            Project Tracker
-                                        </h3>
-                                        <p class="text-xs text-gray-600 mt-1 leading-relaxed">
-                                            Task board, workflow tracking & department activities portal.
-                                        </p>
-                                    </div>
-
-                                    <a
-                                        href="/sso/launch/project_tracker"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        class="mt-4 inline-flex items-center justify-center space-x-2 w-full px-4 py-2.5 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
-                                    >
-
-                                        <span>Open System</span>
-                                        <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                                        </svg>
-                                    </a>
-                                </div>
+                            </div>
+                            <div v-else class="text-center py-8 px-4 my-auto bg-white/40 rounded-2xl border border-cream-500/30">
+                                <svg class="size-8 text-forest-900/50 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 002.25-2.25V6a2.25 2.25 0 00-2.25-2.25H6A2.25 2.25 0 003.75 6v2.25A2.25 2.25 0 006 10.5zm0 9.75h2.25a2.25 2.25 0 002.25-2.25v-2.25a2.25 2.25 0 00-2.25-2.25H6a2.25 2.25 0 00-2.25 2.25v2.25A2.25 2.25 0 006 20.25zM15 10.5h2.25a2.25 2.25 0 002.25-2.25V6a2.25 2.25 0 00-2.25-2.25H15A2.25 2.25 0 0012.75 6v2.25a2.25 2.25 0 002.25 2.25z" />
+                                </svg>
+                                <p class="text-sm font-bold text-gray-800">No connected systems bound</p>
+                                <p class="text-xs text-gray-600 mt-0.5 mb-3">You do not have any external systems linked to your account yet.</p>
+                                <Link :href="route('sso.connected-systems')" class="inline-flex items-center px-3.5 py-2 bg-forest-900 hover:bg-forest-950 text-white rounded-xl text-xs font-bold shadow-xs transition">
+                                    Manage Connected Systems
+                                </Link>
                             </div>
                         </div>
 

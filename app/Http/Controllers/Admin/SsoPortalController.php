@@ -7,6 +7,7 @@ use App\Models\AuditLog;
 use App\Models\Sso;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -48,6 +49,7 @@ class SsoPortalController extends Controller
         return Inertia::render('Admin/SsoPortal', [
             'clients' => $clients,
             'stats' => $stats,
+            'frameworks' => Sso::FRAMEWORKS,
             'filters' => [
                 'search' => $search ?? '',
                 'status' => $status,
@@ -66,13 +68,22 @@ class SsoPortalController extends Controller
             'client_secret' => 'required|string|max:255',
             'redirect_uri' => 'required|string',
             'is_active' => 'boolean',
+            'framework' => 'nullable|string|max:100',
+            'icon' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
         ]);
+
+        $iconPath = null;
+        if ($request->hasFile('icon')) {
+            $iconPath = $request->file('icon')->store('sso-icons', 'public');
+        }
 
         $client = Sso::create([
             'name' => $validated['name'],
             'client_id' => $validated['client_id'],
             'client_secret' => $validated['client_secret'],
             'redirect_uri' => $validated['redirect_uri'],
+            'icon' => $iconPath,
+            'framework' => $validated['framework'] ?? 'laravel_inertia',
             'is_active' => $validated['is_active'] ?? true,
         ]);
 
@@ -84,6 +95,7 @@ class SsoPortalController extends Controller
             'details' => [
                 'name' => $client->name,
                 'client_id' => $client->client_id,
+                'framework' => $client->framework,
             ],
             'ip_address' => $request->ip(),
         ]);
@@ -102,13 +114,31 @@ class SsoPortalController extends Controller
             'client_secret' => 'required|string|max:255',
             'redirect_uri' => 'required|string',
             'is_active' => 'boolean',
+            'framework' => 'nullable|string|max:100',
+            'icon' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'remove_icon' => 'nullable|boolean',
         ]);
+
+        $iconPath = $sso->icon;
+        if ($request->boolean('remove_icon')) {
+            if ($sso->icon && Storage::disk('public')->exists($sso->icon)) {
+                Storage::disk('public')->delete($sso->icon);
+            }
+            $iconPath = null;
+        } elseif ($request->hasFile('icon')) {
+            if ($sso->icon && Storage::disk('public')->exists($sso->icon)) {
+                Storage::disk('public')->delete($sso->icon);
+            }
+            $iconPath = $request->file('icon')->store('sso-icons', 'public');
+        }
 
         $sso->update([
             'name' => $validated['name'],
             'client_id' => $validated['client_id'],
             'client_secret' => $validated['client_secret'],
             'redirect_uri' => $validated['redirect_uri'],
+            'icon' => $iconPath,
+            'framework' => $validated['framework'] ?? $sso->framework,
             'is_active' => $validated['is_active'] ?? true,
         ]);
 
@@ -120,6 +150,7 @@ class SsoPortalController extends Controller
             'details' => [
                 'name' => $sso->name,
                 'client_id' => $sso->client_id,
+                'framework' => $sso->framework,
             ],
             'ip_address' => $request->ip(),
         ]);
@@ -187,6 +218,10 @@ class SsoPortalController extends Controller
         $name = $sso->name;
         $clientId = $sso->client_id;
         $id = $sso->id;
+
+        if ($sso->icon && Storage::disk('public')->exists($sso->icon)) {
+            Storage::disk('public')->delete($sso->icon);
+        }
 
         $sso->delete();
 

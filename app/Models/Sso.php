@@ -12,17 +12,58 @@ class Sso extends Model
 
     protected $table = 'sso';
 
+    public const FRAMEWORKS = [
+        'laravel_inertia' => 'Laravel + Jetstream + Inertia (Vue.js)',
+        'laravel_livewire' => 'Laravel + Jetstream (Livewire/Blade)',
+        'laravel_blade' => 'Laravel (Standard MVC / Blade)',
+        'php_vanilla' => 'PHP + Vanilla JS / jQuery',
+        'nuxt_node' => 'Nuxt.js / Node.js',
+        'vue_spa' => 'Vue.js / React (SPA)',
+        'generic_rest' => 'Generic REST API / Python / Other',
+    ];
+
     protected $fillable = [
         'name',
         'client_id',
         'client_secret',
         'redirect_uri',
+        'icon',
+        'framework',
         'is_active',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
     ];
+
+    protected $appends = [
+        'icon_url',
+        'framework_label',
+    ];
+
+    /**
+     * Get the human-readable framework label.
+     */
+    public function getFrameworkLabelAttribute(): string
+    {
+        return static::FRAMEWORKS[$this->framework] ?? ($this->framework ?: 'Laravel + Jetstream + Inertia (Vue.js)');
+    }
+
+    /**
+     * Get the accessible public URL for the SSO client icon.
+     */
+    public function getIconUrlAttribute(): ?string
+    {
+        if (! $this->icon) {
+            return null;
+        }
+
+        if (filter_var($this->icon, FILTER_VALIDATE_URL)) {
+            return $this->icon;
+        }
+
+        return asset('storage/'.$this->icon);
+    }
 
     /**
      * Find client by ID or name, with fallback auto-provisioning for core system apps.
