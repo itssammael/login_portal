@@ -97,10 +97,10 @@ onMounted(() => {
                     <!-- Left Column (approx 58% width on desktop) -->
                     <div class="lg:col-span-7 flex flex-col gap-6">
                         
-                        <!-- Panel 1: Latest System Announcement (Vibrant Sky Blue from Image 3) -->
-                        <div class="bg-[#60a5fa] rounded-3xl p-6 sm:p-7 shadow-sm border border-blue-400/40 transition hover:shadow-md">
+                        <!-- Panel 1: Latest System Announcement (Green Gradient within #22C55E to #4ADE80) -->
+                        <div class="bg-gradient-to-r from-[#22c55e] to-[#4ade80] rounded-3xl p-6 sm:p-7 shadow-sm border border-[#16a34a]/30 transition hover:shadow-md">
                             <div class="flex items-center justify-between gap-3 mb-2">
-                                <h2 class="text-xl sm:text-2xl font-extrabold text-gray-950 tracking-tight">
+                                <h2 class="text-xl sm:text-2xl font-extrabold text-forest-950 tracking-tight">
                                     Latest System Announcement
                                 </h2>
                                 <span v-if="announcement" class="shrink-0 px-3 py-1 rounded-full text-xs font-extrabold uppercase tracking-wider bg-golden-500 text-amber-950 shadow-xs">
@@ -111,21 +111,21 @@ onMounted(() => {
                             <!-- Announcement Content -->
                             <div class="mt-3">
                                 <template v-if="announcement">
-                                    <h3 class="text-base sm:text-lg font-bold text-gray-950 leading-snug">
+                                    <h3 class="text-base sm:text-lg font-bold text-forest-950 leading-snug">
                                         {{ announcement.title }}
                                     </h3>
-                                    <p class="text-sm text-gray-900 leading-relaxed mt-2 whitespace-pre-line">
+                                    <p class="text-sm text-forest-950/90 font-medium leading-relaxed mt-2 whitespace-pre-line">
                                         {{ announcement.content }}
                                     </p>
-                                    <div class="mt-4 pt-3 border-t border-blue-300/50 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-900/90 font-semibold">
+                                    <div class="mt-4 pt-3 border-t border-forest-700/25 flex flex-wrap items-center justify-between gap-2 text-xs text-forest-950 font-bold">
                                         <div class="flex items-center space-x-1.5">
-                                            <svg class="size-4 text-gray-900" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <svg class="size-4 text-forest-950" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                                             </svg>
                                             <span>From: {{ announcement.author || 'System Administrator' }}</span>
                                         </div>
                                         <div v-if="announcement.formatted_date" class="flex items-center space-x-1">
-                                            <svg class="size-3.5 text-gray-900" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <svg class="size-3.5 text-forest-950" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
                                             </svg>
                                             <span>{{ announcement.formatted_date }}</span>
@@ -135,14 +135,14 @@ onMounted(() => {
 
                                 <template v-else-if="loadingAnnouncement">
                                     <div class="animate-pulse space-y-2 py-2">
-                                        <div class="h-4 bg-blue-300/60 rounded w-2/3"></div>
-                                        <div class="h-3 bg-blue-300/40 rounded w-full"></div>
-                                        <div class="h-3 bg-blue-300/40 rounded w-4/5"></div>
+                                        <div class="h-4 bg-forest-700/20 rounded w-2/3"></div>
+                                        <div class="h-3 bg-forest-700/15 rounded w-full"></div>
+                                        <div class="h-3 bg-forest-700/15 rounded w-4/5"></div>
                                     </div>
                                 </template>
 
                                 <template v-else>
-                                    <p class="text-sm font-medium text-blue-950 italic">
+                                    <p class="text-sm font-semibold text-forest-950 italic">
                                         No recent system announcements. All services are currently operational.
                                     </p>
                                 </template>
@@ -171,23 +171,23 @@ onMounted(() => {
                                 Authenticate once with Login Portal to seamlessly access supported external applications.
                             </p>
 
-                            <div v-if="ssoClients && ssoClients.length > 0" class="grid grid-cols-1 sm:grid-cols-2 gap-4 my-auto">
+                            <div v-if="ssoClients && ssoClients.length > 0" class="grid grid-cols-1 sm:grid-cols-2 justify-items-center gap-auto my-auto">
                                 <div
                                     v-for="system in ssoClients"
                                     :key="system.id"
-                                    class="bg-[#fffef7] rounded-2xl p-4 sm:p-5 border border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group"
+                                    class="w-[200px] rounded-2xl p-4 sm:p-5 hover:border hover:border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group"
                                 >
-                                    <div class="flex items-center space-x-3 mb-4 min-w-0">
+                                    <div class="flex-col space-y-4 mb-4 min-w-0">
                                         <!-- SSO Client Icon -->
-                                        <div v-if="system.icon_url" class="size-11 rounded-xl bg-white p-1.5 border border-cream-400/60 shadow-2xs flex items-center justify-center overflow-hidden shrink-0">
-                                            <img :src="system.icon_url" :alt="system.name" class="w-full h-full object-contain rounded-lg" />
+                                        <div v-if="system.icon_url" class=" rounded-xl bg-transparent p-1.5 shadow-2xs flex items-center justify-center overflow-hidden shrink-0">
+                                            <img :src="system.icon_url" :alt="system.name" class="h-[150px] w-[150px] object-contain rounded-lg" />
                                         </div>
                                         <div v-else class="size-11 rounded-xl bg-forest-900/10 text-forest-900 flex items-center justify-center font-bold text-xl shrink-0">
                                             {{ getSystemEmoji(system) }}
                                         </div>
 
                                         <!-- Client / Portal Name -->
-                                        <h3 class="font-bold text-base text-gray-950 group-hover:text-forest-800 transition leading-snug truncate">
+                                        <h3 class="font-bold text-center text-[20px] text-gray-950 group-hover:text-forest-800 transition leading-snug truncate">
                                             {{ system.name }}
                                         </h3>
                                     </div>
@@ -199,7 +199,7 @@ onMounted(() => {
                                         rel="noopener noreferrer"
                                         class="inline-flex items-center justify-center space-x-2 w-full px-4 py-2.5 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
                                     >
-                                        <span>Open System</span>
+                                        <!-- <span>Open System</span> -->
                                         <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                                         </svg>
@@ -224,19 +224,19 @@ onMounted(() => {
                     <!-- Right Column (approx 42% width on desktop) -->
                     <div class="lg:col-span-5 flex flex-col gap-6">
 
-                        <!-- Panel 3: Weather Widget (Vibrant Blue Gradient with Forest Green & Soft Cream Eclipse Circles) -->
-                        <div class="rounded-3xl p-6 sm:p-7 shadow-md relative overflow-hidden text-white bg-gradient-to-r from-[#38bdf8] via-[#60a5fa] to-[#3b82f6] flex items-center justify-between min-h-[175px]">
+                        <!-- Panel 3: Weather Widget (Green Gradient within #22C55E to #4ADE80) -->
+                        <div class="rounded-3xl p-6 sm:p-7 shadow-md relative overflow-hidden bg-gradient-to-r from-[#22c55e] to-[#4ade80] flex items-center justify-between min-h-[175px] border border-[#16a34a]/30">
                             <!-- Weather Information (Left) -->
                             <div class="z-10 flex flex-col justify-between h-full">
                                 <!-- Temperature -->
-                                <div class="text-5xl sm:text-6xl font-light tracking-tight text-white leading-none">
+                                <div class="text-5xl sm:text-6xl font-light tracking-tight text-forest-950 leading-none">
                                     20°
                                 </div>
 
                                 <!-- Condition -->
-                                <div class="flex items-center space-x-2 mt-3 text-white font-medium text-sm sm:text-base">
-                                    <div class="flex items-center justify-center size-5 bg-white/20 backdrop-blur-xs rounded-full p-0.5">
-                                        <svg class="size-3.5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                                <div class="flex items-center space-x-2 mt-3 text-forest-950 font-bold text-sm sm:text-base">
+                                    <div class="flex items-center justify-center size-5 bg-forest-950/15 backdrop-blur-xs rounded-full p-0.5">
+                                        <svg class="size-3.5 text-forest-950" viewBox="0 0 24 24" fill="currentColor">
                                             <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z" />
                                         </svg>
                                     </div>
@@ -244,23 +244,23 @@ onMounted(() => {
                                 </div>
 
                                 <!-- Precipitation & Wind -->
-                                <div class="mt-3 text-xs text-white/90 font-normal space-y-0.5">
+                                <div class="mt-3 text-xs text-forest-950 font-bold space-y-0.5">
                                     <div>Precipitation: 20%</div>
                                     <div>Wind: 3 mph</div>
                                 </div>
                             </div>
 
-                            <!-- Stylized Graphic (Right): Overlapping Eclipse Circles matching Image 3 -->
+                            <!-- Stylized Graphic (Right): Overlapping Eclipse Circles -->
                             <div class="relative w-36 h-36 sm:w-40 sm:h-40 shrink-0 flex items-center justify-center">
                                 <!-- Subtle background radial ring -->
-                                <div class="absolute inset-0 rounded-full border border-white/10 scale-110"></div>
-                                <div class="absolute inset-0 rounded-full bg-radial from-white/10 to-transparent"></div>
+                                <div class="absolute inset-0 rounded-full border border-forest-950/10 scale-110"></div>
+                                <div class="absolute inset-0 rounded-full bg-radial from-white/20 to-transparent"></div>
 
                                 <!-- Dark Forest Green Circle -->
-                                <div class="absolute size-28 sm:size-32 rounded-full bg-gradient-to-tr from-[#0f2e1e] via-[#1b4332] to-[#2d6a4f] shadow-2xl ring-2 ring-white/10 transform translate-x-2"></div>
+                                <div class="absolute size-28 sm:size-32 rounded-full bg-gradient-to-tr from-[#0f2e1e] via-[#1b4332] to-[#2d6a4f] shadow-2xl ring-2 ring-forest-950/15 transform translate-x-2"></div>
 
                                 <!-- Overlapping Pale Soft Cream Circle -->
-                                <div class="absolute size-18 sm:size-20 rounded-full bg-[#fef9c3] shadow-xl ring-1 ring-white/40 transform -translate-x-4 translate-y-2"></div>
+                                <div class="absolute size-18 sm:size-20 rounded-full bg-[#fef9c3] shadow-xl ring-1 ring-forest-950/10 transform -translate-x-4 translate-y-2"></div>
                             </div>
                         </div>
 
