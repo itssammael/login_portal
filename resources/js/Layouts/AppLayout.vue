@@ -130,21 +130,6 @@ const logout = () => {
                         </div>
                     </Link>
 
-                    <!-- Connected Systems -->
-                    <Link
-                        :href="route('sso.connected-systems')"
-                        class="flex items-center rounded-xl text-sm font-semibold transition-all duration-150"
-                        :class="[
-                            route().current('sso.connected-systems') ? 'bg-forest-500 text-white shadow-sm' : 'text-gray-700 hover:text-gray-950 hover:bg-cream-200/80',
-                            isCollapsed ? 'justify-center p-3' : 'space-x-3 px-3.5 py-2.5'
-                        ]"
-                        :title="isCollapsed ? 'Connected Systems' : ''"
-                    >
-                    <div class="flex items-center" :class="isCollapsed ? '' : 'space-x-3'">
-                            <img src="/assets/imgs/icons/link.png" alt="link_icon" class="size-5 shrink-0">
-                            <span v-if="!isCollapsed" class="truncate">Connected Systems</span>
-                        </div>
-                    </Link>
 
 
                     <!-- Messenger -->
@@ -188,6 +173,21 @@ const logout = () => {
                         <span v-if="!isCollapsed" class="truncate">Announcements</span>
                     </button>
 
+                    <!-- Connected Systems -->
+                    <Link
+                        :href="route('sso.connected-systems')"
+                        class="flex items-center rounded-xl text-sm font-semibold transition-all duration-150"
+                        :class="[
+                            route().current('sso.connected-systems') ? 'bg-forest-500 text-white shadow-sm' : 'text-gray-700 hover:text-gray-950 hover:bg-cream-200/80',
+                            isCollapsed ? 'justify-center p-3' : 'space-x-3 px-3.5 py-2.5'
+                        ]"
+                        :title="isCollapsed ? 'Connected Systems' : ''"
+                    >
+                    <div class="flex items-center" :class="isCollapsed ? '' : 'space-x-3'">
+                            <img src="/assets/imgs/icons/link.png" alt="link_icon" class="size-5 shrink-0">
+                            <span v-if="!isCollapsed" class="truncate">Connected Systems</span>
+                        </div>
+                    </Link>
                     <!-- Admin Panel (Admins & Allowed Roles) -->
                     <Link
                         v-if="$page.props.auth.user?.can_access_admin || $page.props.auth.user?.is_admin"
