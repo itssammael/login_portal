@@ -68,54 +68,114 @@ class ConnectedSystemsController extends Controller
             return back()->with('error', 'Target system not found.');
         }
 
-        // Resolve target application base URL
-        $targetApiUrl = match (true) {
-            str_contains(strtolower($client->client_id), 'lfews') => 'http://127.0.0.1:8001/api/sso/verify-credentials',
-            str_contains(strtolower($client->client_id), 'tracker') || str_contains(strtolower($client->client_id), 'project') => 'http://127.0.0.1:8002/api/sso/verify-credentials',
-            default => rtrim(explode(',', $client->redirect_uri)[0], '/').'/../api/sso/verify-credentials',
-        };
+        $candidateUrls = $this->resolveCandidateApiUrls($client, $request);
 
-        try {
-            $response = Http::asForm()->timeout(8)->post($targetApiUrl, [
-                'username' => $request->input('username'),
-                'password' => $request->input('password'),
-                'client_secret' => $client->client_secret,
-            ]);
+        $response = null;
+        $lastException = null;
 
-            if (! $response->successful() || ! $response->json('success')) {
-                $errorMsg = $response->json('message') ?: 'Invalid credentials for '.$client->name.'.';
+        foreach ($candidateUrls as $url) {
+            try {
+                $res = Http::asForm()->timeout(5)->post($url, [
+                    'username' => $request->input('username'),
+                    'password' => $request->input('password'),
+                    'client_secret' => $client->client_secret,
+                ]);
 
-                return back()->withErrors(['password' => $errorMsg]);
+                $response = $res;
+                break;
+            } catch (\Throwable $e) {
+                $lastException = $e;
             }
+        }
 
-            $externalUser = $response->json('user');
-
-            SsoUserBinding::updateOrCreate(
-                [
-                    'user_id' => $user->id,
-                    'client_id' => $client->client_id,
-                ],
-                [
-                    'external_user_id' => (string) $externalUser['id'],
-                    'external_username' => $externalUser['username'] ?? $externalUser['email'],
-                    'is_verified' => true,
-                ]
-            );
-
-            // If an SSO request was blocked waiting for this binding, resume SSO redirect!
-            if (session('sso_pending_bind_client') === $client->client_id && session()->has('sso_authorize_params')) {
-                session()->forget('sso_pending_bind_client');
-                $params = session()->pull('sso_authorize_params');
-
-                return redirect()->route('sso.authorize', $params);
-            }
-
-            return back()->with('success', 'Successfully bound your '.$client->name.' account!');
-        } catch (\Throwable $e) {
-            Log::error('Failed to verify target system credentials: '.$e->getMessage());
+        if (! $response) {
+            Log::error('Failed to verify target system credentials for '.$client->name.': '.($lastException ? $lastException->getMessage() : 'No response'));
 
             return back()->withErrors(['password' => 'Unable to connect to '.$client->name.' server. Please make sure the system is online.']);
         }
+
+        if (! $response->successful() || ! $response->json('success')) {
+            $errorMsg = $response->json('message') ?: 'Invalid credentials for '.$client->name.'.';
+
+            return back()->withErrors(['password' => $errorMsg]);
+        }
+
+        $externalUser = $response->json('user');
+
+        SsoUserBinding::updateOrCreate(
+            [
+                'user_id' => $user->id,
+                'client_id' => $client->client_id,
+            ],
+            [
+                'external_user_id' => (string) $externalUser['id'],
+                'external_username' => $externalUser['username'] ?? $externalUser['email'],
+                'is_verified' => true,
+            ]
+        );
+
+        // If an SSO request was blocked waiting for this binding, resume SSO redirect!
+        if (session('sso_pending_bind_client') === $client->client_id && session()->has('sso_authorize_params')) {
+            session()->forget('sso_pending_bind_client');
+            $params = session()->pull('sso_authorize_params');
+
+            return redirect()->route('sso.authorize', $params);
+        }
+
+        return back()->with('success', 'Successfully bound your '.$client->name.' account!');
+    }
+
+    /**
+     * Resolve candidate API URLs for target system verification.
+     */
+    protected function resolveCandidateApiUrls(SsoClient $client, Request $request): array
+    {
+        $urls = [];
+        $redirectUris = array_map('trim', explode(',', $client->redirect_uri ?: ''));
+
+        foreach ($redirectUris as $uri) {
+            if (empty($uri)) {
+                continue;
+            }
+
+            $parsed = parse_url($uri);
+            if (! isset($parsed['host'])) {
+                continue;
+            }
+
+            $scheme = $parsed['scheme'] ?? $request->getScheme();
+            $host = $parsed['host'];
+            $port = isset($parsed['port']) ? ':'.$parsed['port'] : '';
+            $path = '/api/sso/verify-credentials';
+
+            $urls[] = "{$scheme}://{$host}{$port}{$path}";
+
+            // If configured host is localhost/127.0.0.1 and request came via network IP/domain, add request host candidate
+            $reqHost = $request->getHost();
+            if (in_array($host, ['127.0.0.1', 'localhost']) && ! in_array($reqHost, ['127.0.0.1', 'localhost'])) {
+                $urls[] = "{$scheme}://{$reqHost}{$port}{$path}";
+            }
+
+            // If configured host is network IP and request came via localhost/127.0.0.1, add 127.0.0.1 candidate
+            if (! in_array($host, ['127.0.0.1', 'localhost']) && in_array($reqHost, ['127.0.0.1', 'localhost'])) {
+                $urls[] = "{$scheme}://127.0.0.1{$port}{$path}";
+            }
+        }
+
+        // Additional fallbacks based on known default client ports
+        $lowerId = strtolower($client->client_id);
+        $reqHost = $request->getHost();
+        $scheme = $request->getScheme();
+
+        if (str_contains($lowerId, 'lfews')) {
+            $urls[] = "{$scheme}://{$reqHost}:8001/api/sso/verify-credentials";
+            $urls[] = 'http://127.0.0.1:8001/api/sso/verify-credentials';
+        } elseif (str_contains($lowerId, 'tracker') || str_contains($lowerId, 'project')) {
+            $urls[] = "{$scheme}://{$reqHost}:8002/api/sso/verify-credentials";
+            $urls[] = 'http://127.0.0.1:8002/api/sso/verify-credentials';
+        }
+
+        return array_values(array_unique($urls));
     }
 
     /**

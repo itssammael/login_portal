@@ -2,6 +2,7 @@
 
 use App\Events\MessageSent;
 use App\Http\Controllers\Admin\AdminDashboardController;
+use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\SsoPortalController;
 use App\Http\Controllers\Admin\SystemRuleController;
@@ -102,9 +103,18 @@ Route::middleware([
     Route::prefix('admin')->middleware('admin')->name('admin.')->group(function () {
         Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
         Route::get('/users', [AdminDashboardController::class, 'users'])->name('users');
+        Route::post('/users', [AdminDashboardController::class, 'storeUser'])->name('users.store');
+        Route::put('/users/{user}', [AdminDashboardController::class, 'updateUser'])->name('users.update');
         Route::post('/users/{user}/toggle-ban', [AdminDashboardController::class, 'toggleBan'])->name('users.toggle-ban');
         Route::post('/users/{user}/toggle-admin', [AdminDashboardController::class, 'toggleAdmin'])->name('users.toggle-admin');
         Route::post('/users/{user}/role', [AdminDashboardController::class, 'updateUserRole'])->name('users.update-role');
+        Route::get('/departments', [DepartmentController::class, 'index'])->name('departments.index');
+        Route::post('/departments', [DepartmentController::class, 'store'])->name('departments.store');
+        Route::put('/departments/{department}', [DepartmentController::class, 'update'])->name('departments.update');
+        Route::delete('/departments/{department}', [DepartmentController::class, 'destroy'])->name('departments.destroy');
+        Route::post('/departments/{department}/sections', [DepartmentController::class, 'storeSection'])->name('departments.sections.store');
+        Route::put('/sections/{section}', [DepartmentController::class, 'updateSection'])->name('sections.update');
+        Route::delete('/sections/{section}', [DepartmentController::class, 'destroySection'])->name('sections.destroy');
         Route::get('/roles', [RoleController::class, 'index'])->name('roles.index');
         Route::post('/roles', [RoleController::class, 'store'])->name('roles.store');
         Route::put('/roles/{role}', [RoleController::class, 'update'])->name('roles.update');

@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Fortify\TwoFactorAuthenticatable;
@@ -36,6 +37,9 @@ class User extends Authenticatable
         'email',
         'password',
         'role_id',
+        'section_id',
+        'position',
+        'employee_number',
         'is_admin',
         'is_banned',
         'banned_at',
@@ -113,6 +117,33 @@ class User extends Authenticatable
     public function role(): BelongsTo
     {
         return $this->belongsTo(Role::class);
+    }
+
+    /**
+     * The section this user belongs to.
+     *
+     * @return BelongsTo<Section, User>
+     */
+    public function section(): BelongsTo
+    {
+        return $this->belongsTo(Section::class);
+    }
+
+    /**
+     * The department this user belongs to via their section.
+     *
+     * @return HasOneThrough<Department>
+     */
+    public function department(): HasOneThrough
+    {
+        return $this->hasOneThrough(
+            Department::class,
+            Section::class,
+            'id', // Foreign key on sections table...
+            'id', // Foreign key on departments table...
+            'section_id', // Local key on users table...
+            'department_id' // Local key on sections table...
+        );
     }
 
     /**

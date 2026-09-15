@@ -28,6 +28,17 @@ import { Link } from '@inertiajs/vue3';
             </Link>
 
             <Link
+                :href="route('admin.departments.index')"
+                class="px-3.5 py-2 text-sm font-semibold rounded-xl transition-all whitespace-nowrap flex items-center space-x-2"
+                :class="route().current('admin.departments.*') ? 'bg-[#2d6a4f] text-white shadow-xs' : 'text-emerald-100/75 hover:text-white hover:bg-forest-800/60'"
+            >
+                <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.75a.75.75 0 01.75-.75h1.5a.75.75 0 01.75.75V21m6 0v-3.75a.75.75 0 01.75-.75h1.5a.75.75 0 01.75.75V21" />
+                </svg>
+                <span>Departments & Sections</span>
+            </Link>
+
+            <Link
                 :href="route('admin.roles.index')"
                 class="px-3.5 py-2 text-sm font-semibold rounded-xl transition-all whitespace-nowrap flex items-center space-x-2"
                 :class="route().current('admin.roles.*') ? 'bg-[#2d6a4f] text-white shadow-xs' : 'text-emerald-100/75 hover:text-white hover:bg-forest-800/60'"

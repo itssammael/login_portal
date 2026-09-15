@@ -17,6 +17,8 @@ const form = useForm({
     _method: 'PUT',
     name: props.user.name,
     email: props.user.email,
+    position: props.user.position || '',
+    employee_number: props.user.employee_number || '',
     photo: null,
 });
 
@@ -172,6 +174,57 @@ const clearPhotoFileInput = () => {
 
                     <div v-show="verificationLinkSent" class="mt-2 font-medium text-sm text-green-600">
                         A new verification link has been sent to your email address.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Employee Number -->
+            <div class="col-span-6 sm:col-span-4">
+                <InputLabel for="employee_number" value="Employee Number" />
+                <TextInput
+                    id="employee_number"
+                    v-model="form.employee_number"
+                    type="text"
+                    class="mt-1 block w-full"
+                    placeholder="e.g. EMP-2026-0042"
+                />
+                <InputError :message="form.errors.employee_number" class="mt-2" />
+            </div>
+
+            <!-- Position -->
+            <div class="col-span-6 sm:col-span-4">
+                <InputLabel for="position" value="Position / Designation" />
+                <TextInput
+                    id="position"
+                    v-model="form.position"
+                    type="text"
+                    class="mt-1 block w-full"
+                    placeholder="e.g. Computer Programmer I"
+                />
+                <InputError :message="form.errors.position" class="mt-2" />
+            </div>
+
+            <!-- Department & Section Info -->
+            <div class="col-span-6 sm:col-span-4">
+                <div class="p-4 bg-cream-100/90 rounded-2xl border border-cream-400">
+                    <div class="flex items-center space-x-2 text-xs font-bold text-forest-900 uppercase tracking-wider mb-2">
+                        <svg class="size-4 text-forest-800" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                        </svg>
+                        <span>Organizational Unit</span>
+                    </div>
+
+                    <div v-if="user.section" class="space-y-1">
+                        <div class="text-sm font-semibold text-gray-900">
+                            {{ user.section.department?.acronym ? `[${user.section.department.acronym}] ` : '' }}
+                            {{ user.section.department?.name || 'Department' }}
+                        </div>
+                        <div class="text-xs text-forest-800 font-medium flex items-center space-x-1">
+                            <span>↳ {{ user.section.name }}</span>
+                        </div>
+                    </div>
+                    <div v-else class="text-xs text-gray-500 italic">
+                        No department or section currently assigned. Contact an administrator to update your department placement.
                     </div>
                 </div>
             </div>

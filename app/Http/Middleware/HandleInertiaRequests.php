@@ -64,6 +64,15 @@ class HandleInertiaRequests extends Middleware
                         'name' => $user->role->name,
                         'slug' => $user->role->slug,
                     ] : null,
+                    'section' => $user->section ? [
+                        'id' => $user->section->id,
+                        'name' => $user->section->name,
+                        'department' => $user->section->department ? [
+                            'id' => $user->section->department->id,
+                            'name' => $user->section->department->name,
+                            'acronym' => $user->section->department->acronym,
+                        ] : null,
+                    ] : null,
                 ]) : null,
             ],
             'unread_messages_count' => $unreadCount,

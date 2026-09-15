@@ -88,7 +88,7 @@ class SsoClient extends Model
         $lower = strtolower($identifier);
         if (str_contains($lower, 'lfews')) {
             return static::create([
-                'name' => 'LFews 2.0',
+                'name' => 'LFEWS 2.0',
                 'client_id' => 'lfews_client_id',
                 'client_secret' => 'lfews_client_secret',
                 'redirect_uri' => 'http://127.0.0.1:8001/sso/callback,http://localhost:8001/sso/callback',

@@ -175,8 +175,15 @@ onMounted(() => {
                                 <div
                                     v-for="system in ssoClients"
                                     :key="system.id"
-                                    class="w-[200px] rounded-2xl p-4 sm:p-5 hover:border hover:border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group"
+                                    class="w-[200px] rounded-2xl p-0.5  hover:border hover:border-cream-500/60 shadow-2xs hover:shadow-md transition duration-200 flex flex-col justify-between group"
                                 >
+                                <!-- Open System Button -->
+                                    <a
+                                        :href="system.launch_url"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="inline-flex items-center justify-center w-full px-4 hover:bg-forest-800/45 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                                    >
                                     <div class="flex-col space-y-4 mb-4 min-w-0">
                                         <!-- SSO Client Icon -->
                                         <div v-if="system.icon_url" class=" rounded-xl bg-transparent p-1.5 shadow-2xs flex items-center justify-center overflow-hidden shrink-0">
@@ -187,22 +194,16 @@ onMounted(() => {
                                         </div>
 
                                         <!-- Client / Portal Name -->
-                                        <h3 class="font-bold text-center text-[20px] text-gray-950 group-hover:text-forest-800 transition leading-snug truncate">
+                                        <h3 class="font-bold text-center text-[16px] text-gray-950 group-hover:text-forest-800 transition leading-snug truncate">
                                             {{ system.name }}
                                         </h3>
                                     </div>
 
-                                    <!-- Open System Button -->
-                                    <a
-                                        :href="system.launch_url"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        class="inline-flex items-center justify-center space-x-2 w-full px-4 py-2.5 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
-                                    >
+                                    
                                         <!-- <span>Open System</span> -->
-                                        <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                        <!-- <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                                        </svg>
+                                        </svg> -->
                                     </a>
                                 </div>
                             </div>

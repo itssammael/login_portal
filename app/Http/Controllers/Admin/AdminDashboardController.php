@@ -6,12 +6,15 @@ use App\Events\MessageSent;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Conversation;
+use App\Models\Department;
 use App\Models\Message;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\MessageEncryptionService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -60,13 +63,16 @@ class AdminDashboardController extends Controller
     public function users(Request $request): Response
     {
         $query = User::query()
+            ->with(['role:id,name,slug,color', 'section.department:id,name,acronym'])
             ->withCount(['messages', 'conversations']);
 
         if ($request->filled('search')) {
             $search = $request->input('search');
             $query->where(function ($q) use ($search): void {
                 $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%");
+                    ->orWhere('email', 'like', "%{$search}%")
+                    ->orWhere('employee_number', 'like', "%{$search}%")
+                    ->orWhere('position', 'like', "%{$search}%");
             });
         }
 
@@ -82,14 +88,141 @@ class AdminDashboardController extends Controller
             $query->where('is_admin', false);
         }
 
+        if ($request->filled('department_id')) {
+            $departmentId = $request->input('department_id');
+            $query->whereHas('section', function ($q) use ($departmentId): void {
+                $q->where('department_id', $departmentId);
+            });
+        }
+
         $users = $query->orderByDesc('created_at')
             ->paginate(15)
             ->withQueryString();
 
         return Inertia::render('Admin/Users', [
             'users' => $users,
-            'filters' => $request->only(['search', 'status', 'role']),
+            'filters' => $request->only(['search', 'status', 'role', 'department_id']),
+            'roles' => Role::orderBy('name')->get(['id', 'name', 'slug', 'color']),
+            'departments' => Department::with(['sections' => fn ($q) => $q->orderBy('name')])->orderBy('name')->get(['id', 'name', 'acronym']),
         ]);
+    }
+
+    /**
+     * Create a new user account from the admin directory.
+     */
+    public function storeUser(Request $request): RedirectResponse
+    {
+        $admin = $request->user();
+
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'role_id' => ['nullable', 'exists:roles,id'],
+            'section_id' => ['nullable', 'exists:sections,id'],
+            'position' => ['nullable', 'string', 'max:255'],
+            'employee_number' => ['nullable', 'string', 'max:255'],
+            'is_admin' => ['nullable', 'boolean'],
+        ]);
+
+        $role = ! empty($validated['role_id']) ? Role::find($validated['role_id']) : null;
+        $isAdmin = (bool) ($validated['is_admin'] ?? false) || ($role && ($role->slug === 'admin' || $role->hasPermission('access_admin')));
+
+        $newUser = new User([
+            'name' => $validated['name'],
+            'email' => $validated['email'],
+            'password' => Hash::make($validated['password']),
+            'role_id' => $validated['role_id'] ?? null,
+            'section_id' => $validated['section_id'] ?? null,
+            'position' => $validated['position'] ?? null,
+            'employee_number' => $validated['employee_number'] ?? null,
+            'is_admin' => $isAdmin,
+        ]);
+        $newUser->email_verified_at = now();
+        $newUser->save();
+
+        AuditLog::create([
+            'admin_id' => $admin->id,
+            'action' => 'created_user',
+            'target_type' => User::class,
+            'target_id' => $newUser->id,
+            'details' => [
+                'name' => $newUser->name,
+                'email' => $newUser->email,
+                'role' => $role?->name ?? 'User',
+                'is_admin' => $newUser->is_admin,
+                'position' => $newUser->position,
+                'employee_number' => $newUser->employee_number,
+                'section_id' => $newUser->section_id,
+            ],
+        ]);
+
+        return back()->with('success', "User account for {$newUser->name} created successfully.");
+    }
+
+    /**
+     * Update a user account/profile from the admin directory.
+     */
+    public function updateUser(Request $request, User $user): RedirectResponse
+    {
+        $admin = $request->user();
+
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
+            'password' => ['nullable', 'string', 'min:8', 'confirmed'],
+            'role_id' => ['nullable', 'exists:roles,id'],
+            'section_id' => ['nullable', 'exists:sections,id'],
+            'position' => ['nullable', 'string', 'max:255'],
+            'employee_number' => ['nullable', 'string', 'max:255'],
+            'is_admin' => ['nullable', 'boolean'],
+        ]);
+
+        $role = ! empty($validated['role_id']) ? Role::find($validated['role_id']) : null;
+
+        // Determine admin status
+        $isAdmin = isset($validated['is_admin']) ? (bool) $validated['is_admin'] : $user->is_admin;
+        if ($role && ($role->slug === 'admin' || $role->hasPermission('access_admin'))) {
+            $isAdmin = true;
+        }
+
+        // Prevent admin from removing their own admin privilege
+        if ($admin->id === $user->id && ! $isAdmin) {
+            return back()->with('error', 'You cannot remove your own administrator status.');
+        }
+
+        $user->name = $validated['name'];
+        $user->email = $validated['email'];
+        $user->role_id = $validated['role_id'] ?? null;
+        $user->section_id = $validated['section_id'] ?? null;
+        $user->position = $validated['position'] ?? null;
+        $user->employee_number = $validated['employee_number'] ?? null;
+        $user->is_admin = $isAdmin;
+
+        if (! empty($validated['password'])) {
+            $user->password = Hash::make($validated['password']);
+        }
+
+        $user->save();
+
+        AuditLog::create([
+            'admin_id' => $admin->id,
+            'action' => 'updated_user_profile',
+            'target_type' => User::class,
+            'target_id' => $user->id,
+            'details' => [
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $role?->name ?? 'User',
+                'is_admin' => $user->is_admin,
+                'position' => $user->position,
+                'employee_number' => $user->employee_number,
+                'section_id' => $user->section_id,
+                'password_changed' => ! empty($validated['password']),
+            ],
+        ]);
+
+        return back()->with('success', "Profile for {$user->name} updated successfully.");
     }
 
     /**

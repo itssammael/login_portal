@@ -13,21 +13,21 @@ class SsoClientSeeder extends Seeder
     public function run(): void
     {
         SsoClient::updateOrCreate(
-            ['client_id' => env('LFews_SSO_CLIENT_ID', 'lfews_client_id')],
+            ['client_id' => 'lfews_client_id'],
             [
-                'name' => 'LFews 2.0',
-                'client_secret' => env('LFews_SSO_CLIENT_SECRET', 'lfews_client_secret'),
-                'redirect_uri' => env('LFews_SSO_REDIRECT_URI', 'http://127.0.0.1:8001/sso/callback,http://localhost:8001/sso/callback'),
+                'name' => 'LFEWS 2.0',
+                'client_secret' => 'lfews_client_secret',
+                'redirect_uri' => 'http://127.0.0.1:8001/sso/callback,http://localhost:8001/sso/callback',
                 'is_active' => true,
             ]
         );
 
         SsoClient::updateOrCreate(
-            ['client_id' => env('PROJECT_TRACKER_SSO_CLIENT_ID', 'project_tracker_client_id')],
+            ['client_id' => 'project_tracker_client_id'],
             [
                 'name' => 'Project Tracker',
-                'client_secret' => env('PROJECT_TRACKER_SSO_CLIENT_SECRET', 'project_tracker_client_secret'),
-                'redirect_uri' => env('PROJECT_TRACKER_SSO_REDIRECT_URI', 'http://127.0.0.1:8002/sso/callback,http://localhost:8002/sso/callback'),
+                'client_secret' => 'project_tracker_client_secret',
+                'redirect_uri' => 'http://127.0.0.1:8002/sso/callback,http://localhost:8002/sso/callback',
                 'is_active' => true,
             ]
         );
