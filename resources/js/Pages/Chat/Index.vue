@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue';
 import { Head, Link, router, useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
+import DialogModal from '@/Components/DialogModal.vue';
 
 const props = defineProps({
     conversations: {
@@ -221,13 +222,23 @@ const toggleReaction = (messageId, reactionKey) => {
     });
 };
 
-// Delete message
-const deleteMessage = (messageId) => {
-    if (confirm('Delete this message for everyone?')) {
-        router.delete(route('chat.delete-message', messageId), {
-            preserveScroll: true,
-        });
-    }
+// Delete message state & actions
+const deletingMessageId = ref(null);
+
+const promptDeleteMessage = (messageId) => {
+    deletingMessageId.value = messageId;
+};
+
+const closeDeleteModal = () => {
+    deletingMessageId.value = null;
+};
+
+const confirmDeleteMessage = () => {
+    if (!deletingMessageId.value) return;
+    router.delete(route('chat.delete-message', deletingMessageId.value), {
+        preserveScroll: true,
+        onFinish: () => closeDeleteModal(),
+    });
 };
 
 // Auto scroll on initial mount and when active conversation messages change
@@ -544,7 +555,7 @@ watch(() => props.activeConversation?.id, () => {
                                                         <!-- Delete button for sender -->
                                                         <button
                                                             v-if="!activeConversation.is_system && activeConversation.type !== 'system'"
-                                                            @click="deleteMessage(message.id)"
+                                                            @click="promptDeleteMessage(message.id)"
                                                             class="p-1 text-gray-400 hover:text-red-500 transition border-l border-cream-400 pl-1.5 ml-0.5"
                                                             title="Delete message"
                                                         >
@@ -1105,5 +1116,46 @@ watch(() => props.activeConversation?.id, () => {
                 </template>
             </div>
         </div>
+
+        <!-- Delete Message Confirmation Dialog Modal -->
+        <DialogModal :show="deletingMessageId !== null" max-width="sm" @close="closeDeleteModal">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-red-100 text-red-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Delete Message</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to delete this message for everyone? This action cannot be undone.
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="closeDeleteModal"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        @click="confirmDeleteMessage"
+                        class="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        Delete for Everyone
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
     </AppLayout>
 </template>

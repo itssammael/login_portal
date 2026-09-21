@@ -3,6 +3,7 @@ import { ref, computed } from 'vue';
 import { Head, Link, useForm, router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
+import DialogModal from '@/Components/DialogModal.vue';
 
 const props = defineProps({
     users: {
@@ -166,22 +167,41 @@ const submitUpdateUser = () => {
     });
 };
 
-// Toggle user ban
+// Action Confirmation State
+const confirmingActionUser = ref(null);
+const actionType = ref(''); // 'toggleAdmin' or 'toggleBan'
+const isActionProcessing = ref(false);
+
 const toggleBan = (user) => {
-    const action = user.is_banned ? 'reinstate' : 'suspend';
-    if (confirm(`Are you sure you want to ${action} user "${user.name}"?`)) {
-        router.post(route('admin.users.toggle-ban', user.id), {}, {
-            preserveScroll: true,
-        });
-    }
+    confirmingActionUser.value = user;
+    actionType.value = 'toggleBan';
 };
 
-// Toggle user admin
 const toggleAdmin = (user) => {
-    const action = user.is_admin ? 'revoke admin privileges from' : 'grant administrator privileges to';
-    if (confirm(`Are you sure you want to ${action} "${user.name}"?`)) {
+    confirmingActionUser.value = user;
+    actionType.value = 'toggleAdmin';
+};
+
+const closeConfirmModal = () => {
+    confirmingActionUser.value = null;
+    actionType.value = '';
+    isActionProcessing.value = false;
+};
+
+const executeConfirmedAction = () => {
+    if (!confirmingActionUser.value) return;
+    const user = confirmingActionUser.value;
+    isActionProcessing.value = true;
+
+    if (actionType.value === 'toggleAdmin') {
         router.post(route('admin.users.toggle-admin', user.id), {}, {
             preserveScroll: true,
+            onFinish: () => closeConfirmModal(),
+        });
+    } else if (actionType.value === 'toggleBan') {
+        router.post(route('admin.users.toggle-ban', user.id), {}, {
+            preserveScroll: true,
+            onFinish: () => closeConfirmModal(),
         });
     }
 };
@@ -878,5 +898,75 @@ const toggleAdmin = (user) => {
                 </form>
             </div>
         </div>
+
+        <!-- Action Confirmation Dialog Modal -->
+        <DialogModal :show="confirmingActionUser !== null" max-width="md" @close="closeConfirmModal">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div
+                        class="size-10 rounded-xl flex items-center justify-center shrink-0"
+                        :class="actionType === 'toggleAdmin'
+                            ? (confirmingActionUser?.is_admin ? 'bg-amber-100 text-amber-800' : 'bg-forest-100 text-forest-900')
+                            : (confirmingActionUser?.is_banned ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800')"
+                    >
+                        <svg v-if="actionType === 'toggleAdmin'" class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                        </svg>
+                        <svg v-else-if="confirmingActionUser?.is_banned" class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <svg v-else class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">
+                            <template v-if="actionType === 'toggleAdmin'">
+                                {{ confirmingActionUser?.is_admin ? 'Revoke Admin Privileges' : 'Grant Administrator Privileges' }}
+                            </template>
+                            <template v-else>
+                                {{ confirmingActionUser?.is_banned ? 'Reinstate User Account' : 'Suspend User Account' }}
+                            </template>
+                        </h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    <template v-if="actionType === 'toggleAdmin'">
+                        Are you sure you want to {{ confirmingActionUser?.is_admin ? 'revoke admin privileges from' : 'grant administrator privileges to' }}
+                        <span class="font-bold text-gray-900">"{{ confirmingActionUser?.name }}"</span>?
+                    </template>
+                    <template v-else>
+                        Are you sure you want to {{ confirmingActionUser?.is_banned ? 'reinstate' : 'suspend' }} user
+                        <span class="font-bold text-gray-900">"{{ confirmingActionUser?.name }}"</span>?
+                    </template>
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="closeConfirmModal"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        @click="executeConfirmedAction"
+                        :disabled="isActionProcessing"
+                        class="px-4 py-2 rounded-xl text-xs font-bold text-white shadow-xs transition disabled:opacity-50 cursor-pointer"
+                        :class="actionType === 'toggleAdmin'
+                            ? (confirmingActionUser?.is_admin ? 'bg-amber-700 hover:bg-amber-800' : 'bg-forest-900 hover:bg-forest-950')
+                            : (confirmingActionUser?.is_banned ? 'bg-emerald-700 hover:bg-emerald-800' : 'bg-red-700 hover:bg-red-800')"
+                    >
+                        {{ isActionProcessing ? 'Processing...' : 'Confirm' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
     </AppLayout>
 </template>

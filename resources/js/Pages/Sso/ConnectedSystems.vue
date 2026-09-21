@@ -54,12 +54,22 @@ const submitBind = () => {
     });
 };
 
-const unbindSystem = (system) => {
-    if (confirm(`Are you sure you want to unbind your account for ${system.name}?`)) {
-        router.delete(route('sso.connected-systems.unbind', system.client_id), {
-            preserveScroll: true,
-        });
-    }
+const unbindingSystem = ref(null);
+
+const promptUnbind = (system) => {
+    unbindingSystem.value = system;
+};
+
+const closeUnbindModal = () => {
+    unbindingSystem.value = null;
+};
+
+const confirmUnbind = () => {
+    if (!unbindingSystem.value) return;
+    router.delete(route('sso.connected-systems.unbind', unbindingSystem.value.client_id), {
+        preserveScroll: true,
+        onFinish: () => closeUnbindModal(),
+    });
 };
 </script>
 
@@ -189,7 +199,7 @@ const unbindSystem = (system) => {
                                 </a>
 
                                 <button
-                                    @click="unbindSystem(system)"
+                                    @click="promptUnbind(system)"
                                     type="button"
                                     class="px-3 py-2 bg-red-100 hover:bg-red-200 text-red-800 font-bold text-xs rounded-xl transition"
                                 >
@@ -271,6 +281,43 @@ const unbindSystem = (system) => {
                 >
                     {{ form.processing ? 'Verifying & Binding...' : 'Bind Account' }}
                 </PrimaryButton>
+            </template>
+        </DialogModal>
+
+        <!-- Unbind Confirmation Modal -->
+        <DialogModal :show="unbindingSystem !== null" max-width="md" @close="closeUnbindModal">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-red-100 text-red-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Unbind System Account</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to unbind your account for <span class="font-bold text-gray-900">{{ unbindingSystem?.name }}</span>?
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <SecondaryButton @click="closeUnbindModal">
+                        Cancel
+                    </SecondaryButton>
+                    <button
+                        type="button"
+                        @click="confirmUnbind"
+                        class="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        Unbind Account
+                    </button>
+                </div>
             </template>
         </DialogModal>
     </AppLayout>

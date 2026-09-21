@@ -1,7 +1,9 @@
 <script setup>
+import { ref } from 'vue';
 import { useForm } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
+import DialogModal from '@/Components/DialogModal.vue';
 
 defineProps({
     recentAnnouncements: {
@@ -15,14 +17,20 @@ const form = useForm({
     content: '',
 });
 
+const showConfirmModal = ref(false);
+
+const openConfirmModal = () => {
+    if (!form.title.trim() || !form.content.trim()) return;
+    showConfirmModal.value = true;
+};
+
 const sendAnnouncement = () => {
-    if (confirm('Broadcast this system announcement to all active users on the platform?')) {
-        form.post(route('admin.announcements.broadcast'), {
-            onSuccess: () => {
-                form.reset();
-            },
-        });
-    }
+    form.post(route('admin.announcements.broadcast'), {
+        onSuccess: () => {
+            showConfirmModal.value = false;
+            form.reset();
+        },
+    });
 };
 </script>
 
@@ -59,7 +67,7 @@ const sendAnnouncement = () => {
                             <span>📢 Compose Broadcast Message</span>
                         </h3>
 
-                        <form @submit.prevent="sendAnnouncement" class="space-y-4">
+                        <form @submit.prevent="openConfirmModal" class="space-y-4">
                             <div>
                                 <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1.5">
                                     Announcement Title
@@ -133,5 +141,51 @@ const sendAnnouncement = () => {
 
             </div>
         </div>
+
+        <!-- Broadcast Confirmation Dialog Modal -->
+        <DialogModal :show="showConfirmModal" max-width="md" @close="showConfirmModal = false">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 15.84c-.012-.042-.018-.086-.018-.13V8.29c0-.044.006-.088.018-.13l-4.52 2.26a1.125 1.125 0 00-.62 1.008v.144c0 .447.248.854.62 1.008l4.52 2.26zM14.25 6l-3.352 1.676A1.875 1.875 0 009.75 9.352v5.296c0 .696.386 1.332 1.002 1.657L14.25 18v-12zM16.5 7.5v9" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Broadcast Announcement</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to broadcast this system announcement to all active users on the platform?
+                </p>
+                <div class="mt-3 p-3 bg-cream-100/80 rounded-xl border border-cream-400 text-xs">
+                    <p class="font-bold text-gray-900 mb-0.5">{{ form.title }}</p>
+                    <p class="text-gray-600 line-clamp-2">{{ form.content }}</p>
+                </div>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="showConfirmModal = false"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        @click="sendAnnouncement"
+                        :disabled="form.processing"
+                        class="px-4 py-2 bg-forest-900 hover:bg-forest-950 text-white rounded-xl text-xs font-bold shadow-xs transition disabled:opacity-50 cursor-pointer"
+                    >
+                        {{ form.processing ? 'Broadcasting...' : 'Broadcast Now' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
     </AppLayout>
 </template>
