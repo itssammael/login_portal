@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\ConversationParticipant;
+use App\Models\SsoClient;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -76,6 +77,21 @@ class HandleInertiaRequests extends Middleware
                 ]) : null,
             ],
             'unread_messages_count' => $unreadCount,
+            'sso_applications' => fn () => $user ? SsoClient::where('is_active', true)->get()->map(function ($client) use ($user) {
+                $binding = $user->ssoBindings()->where('client_id', $client->client_id)->first();
+
+                return [
+                    'id' => $client->id,
+                    'client_id' => $client->client_id,
+                    'name' => $client->name,
+                    'description' => $client->description,
+                    'icon_url' => $client->icon_url,
+                    'is_bound' => ! is_null($binding),
+                    'bound_username' => $binding?->external_username,
+                    'bound_at' => $binding?->created_at?->diffForHumans(),
+                    'launch_url' => route('sso.launch', $client->client_id),
+                ];
+            }) : [],
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),

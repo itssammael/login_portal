@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Sso;
 use App\Http\Controllers\Controller;
 use App\Models\SsoClient;
 use App\Models\SsoUserBinding;
+use App\Services\SsoService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -14,16 +15,16 @@ use Inertia\Response;
 
 class ConnectedSystemsController extends Controller
 {
+    public function __construct(
+        protected SsoService $ssoService
+    ) {}
+
     /**
      * Display the Connected Systems binding page.
      */
     public function index(Request $request): Response
     {
         $user = $request->user();
-
-        // Ensure default clients exist
-        SsoClient::findClient('lfews_client_id');
-        SsoClient::findClient('project_tracker_client_id');
 
         $clients = SsoClient::where('is_active', true)->get();
         $bindings = SsoUserBinding::where('user_id', $user->id)->get()->keyBy('client_id');
@@ -39,6 +40,7 @@ class ConnectedSystemsController extends Controller
                 'is_bound' => (bool) $binding,
                 'bound_username' => $binding?->external_username,
                 'bound_at' => $binding?->created_at?->diffForHumans(),
+                'launch_url' => route('sso.launch', $client->client_id),
             ];
         });
 
@@ -53,6 +55,8 @@ class ConnectedSystemsController extends Controller
 
     /**
      * Bind target system credentials to current Login Portal user account.
+     * Credentials entered are strictly verified directly with the Registered SSO Client,
+     * with zero checking or referral against the login_portal database.
      */
     public function bind(Request $request, string $clientId): RedirectResponse
     {
@@ -62,6 +66,7 @@ class ConnectedSystemsController extends Controller
         ]);
 
         $user = $request->user();
+
         $client = SsoClient::findClient($clientId);
 
         if (! $client) {
@@ -82,7 +87,10 @@ class ConnectedSystemsController extends Controller
                 ]);
 
                 $response = $res;
-                break;
+
+                if ($res->successful() && $res->json('success')) {
+                    break;
+                }
             } catch (\Throwable $e) {
                 $lastException = $e;
             }
@@ -101,6 +109,17 @@ class ConnectedSystemsController extends Controller
         }
 
         $externalUser = $response->json('user');
+        $externalUserId = (string) $externalUser['id'];
+
+        // Prevent binding the same external account to multiple portal users
+        $existingBinding = SsoUserBinding::where('client_id', $client->client_id)
+            ->where('external_user_id', $externalUserId)
+            ->where('user_id', '!=', $user->id)
+            ->first();
+
+        if ($existingBinding) {
+            return back()->withErrors(['username' => 'This '.$client->name.' account is already bound to another Portal user.']);
+        }
 
         SsoUserBinding::updateOrCreate(
             [
@@ -108,9 +127,20 @@ class ConnectedSystemsController extends Controller
                 'client_id' => $client->client_id,
             ],
             [
-                'external_user_id' => (string) $externalUser['id'],
+                'external_user_id' => $externalUserId,
                 'external_username' => $externalUser['username'] ?? $externalUser['email'],
                 'is_verified' => true,
+            ]
+        );
+
+        $this->ssoService->logEvent(
+            user: $user,
+            action: 'sso_user_binding_created',
+            targetType: 'sso_client',
+            targetId: $client->id,
+            details: [
+                'client_id' => $client->client_id,
+                'external_username' => $externalUser['username'] ?? $externalUser['email'],
             ]
         );
 
@@ -126,53 +156,35 @@ class ConnectedSystemsController extends Controller
     }
 
     /**
-     * Resolve candidate API URLs for target system verification.
+     * Resolve candidate verify-credentials API URLs for the target system.
+     * Strictly derives candidate endpoints from the client's explicit api_url and registered redirect_uri.
+     * Queries the Registered SSO Client directly, with no referral to login_portal database.
      */
     protected function resolveCandidateApiUrls(SsoClient $client, Request $request): array
     {
-        $urls = [];
-        $redirectUris = array_map('trim', explode(',', $client->redirect_uri ?: ''));
+        $bases = [];
+        if (! empty($client->api_url)) {
+            $bases[] = rtrim($client->api_url, '/');
+        }
 
-        foreach ($redirectUris as $uri) {
-            if (empty($uri)) {
-                continue;
-            }
-
-            $parsed = parse_url($uri);
-            if (! isset($parsed['host'])) {
-                continue;
-            }
-
-            $scheme = $parsed['scheme'] ?? $request->getScheme();
-            $host = $parsed['host'];
-            $port = isset($parsed['port']) ? ':'.$parsed['port'] : '';
-            $path = '/api/sso/verify-credentials';
-
-            $urls[] = "{$scheme}://{$host}{$port}{$path}";
-
-            // If configured host is localhost/127.0.0.1 and request came via network IP/domain, add request host candidate
-            $reqHost = $request->getHost();
-            if (in_array($host, ['127.0.0.1', 'localhost']) && ! in_array($reqHost, ['127.0.0.1', 'localhost'])) {
-                $urls[] = "{$scheme}://{$reqHost}{$port}{$path}";
-            }
-
-            // If configured host is network IP and request came via localhost/127.0.0.1, add 127.0.0.1 candidate
-            if (! in_array($host, ['127.0.0.1', 'localhost']) && in_array($reqHost, ['127.0.0.1', 'localhost'])) {
-                $urls[] = "{$scheme}://127.0.0.1{$port}{$path}";
+        if (! empty($client->redirect_uri)) {
+            $redirectUris = array_filter(array_map('trim', explode(',', $client->redirect_uri)));
+            foreach ($redirectUris as $uri) {
+                $parsed = parse_url($uri);
+                if (isset($parsed['host'])) {
+                    $scheme = $parsed['scheme'] ?? 'http';
+                    $host = $parsed['host'];
+                    $port = isset($parsed['port']) ? ':'.$parsed['port'] : '';
+                    $bases[] = "{$scheme}://{$host}{$port}";
+                }
             }
         }
 
-        // Additional fallbacks based on known default client ports
-        $lowerId = strtolower($client->client_id);
-        $reqHost = $request->getHost();
-        $scheme = $request->getScheme();
-
-        if (str_contains($lowerId, 'lfews')) {
-            $urls[] = "{$scheme}://{$reqHost}:8001/api/sso/verify-credentials";
-            $urls[] = 'http://127.0.0.1:8001/api/sso/verify-credentials';
-        } elseif (str_contains($lowerId, 'tracker') || str_contains($lowerId, 'project')) {
-            $urls[] = "{$scheme}://{$reqHost}:8002/api/sso/verify-credentials";
-            $urls[] = 'http://127.0.0.1:8002/api/sso/verify-credentials';
+        $bases = array_values(array_unique($bases));
+        $urls = [];
+        foreach ($bases as $base) {
+            $urls[] = "{$base}/api/sso/verify-credentials";
+            $urls[] = "{$base}/sso/verify-credentials";
         }
 
         return array_values(array_unique($urls));
@@ -187,9 +199,21 @@ class ConnectedSystemsController extends Controller
         $client = SsoClient::findClient($clientId);
 
         if ($client) {
-            SsoUserBinding::where('user_id', $user->id)
+            $deleted = SsoUserBinding::where('user_id', $user->id)
                 ->where('client_id', $client->client_id)
                 ->delete();
+
+            if ($deleted) {
+                $this->ssoService->logEvent(
+                    user: $user,
+                    action: 'sso_user_binding_removed',
+                    targetType: 'sso_client',
+                    targetId: $client->id,
+                    details: [
+                        'client_id' => $client->client_id,
+                    ]
+                );
+            }
         }
 
         return back()->with('success', 'Unbound account successfully.');

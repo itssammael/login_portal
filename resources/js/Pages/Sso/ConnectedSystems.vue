@@ -55,6 +55,7 @@ const submitBind = () => {
 };
 
 const unbindingSystem = ref(null);
+const unbindForm = useForm({});
 
 const promptUnbind = (system) => {
     unbindingSystem.value = system;
@@ -62,12 +63,14 @@ const promptUnbind = (system) => {
 
 const closeUnbindModal = () => {
     unbindingSystem.value = null;
+    unbindForm.reset();
 };
 
 const confirmUnbind = () => {
     if (!unbindingSystem.value) return;
-    router.delete(route('sso.connected-systems.unbind', unbindingSystem.value.client_id), {
+    unbindForm.delete(route('sso.connected-systems.unbind', unbindingSystem.value.client_id), {
         preserveScroll: true,
+        onSuccess: () => closeUnbindModal(),
         onFinish: () => closeUnbindModal(),
     });
 };
@@ -186,7 +189,7 @@ const confirmUnbind = () => {
                         <div class="mt-4 pt-4 border-t border-cream-500/40 flex items-center justify-end space-x-3">
                             <template v-if="system.is_bound">
                                 <a
-                                    :href="`/sso/launch/${system.client_id}`"
+                                    :href="system.launch_url || `/sso/launch/${system.client_id}`"
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     class="px-4 py-2 bg-forest-900 hover:bg-forest-950 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center space-x-1.5"
@@ -235,7 +238,7 @@ const confirmUnbind = () => {
 
             <template #content>
                 <p class="text-xs text-gray-600 mb-4">
-                    Enter your existing credentials for <strong>{{ bindingSystem?.name }}</strong> to link it to your Login Portal account.
+                    Enter your existing credentials for <strong>{{ bindingSystem?.name }}</strong>. These credentials will be verified directly with the connected system to link your account.
                 </p>
 
                 <form @submit.prevent="submitBind" class="space-y-4">
@@ -248,7 +251,6 @@ const confirmUnbind = () => {
                             class="mt-1 block w-full text-sm"
                             placeholder="e.g. john@example.com or john_doe"
                             required
-                            autofocus
                         />
                         <InputError :message="form.errors.username" class="mt-1" />
                     </div>
@@ -313,9 +315,11 @@ const confirmUnbind = () => {
                     <button
                         type="button"
                         @click="confirmUnbind"
+                        :class="{ 'opacity-25': unbindForm.processing }"
+                        :disabled="unbindForm.processing"
                         class="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
                     >
-                        Unbind Account
+                        {{ unbindForm.processing ? 'Unbinding...' : 'Unbind Account' }}
                     </button>
                 </div>
             </template>

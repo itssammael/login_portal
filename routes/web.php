@@ -27,6 +27,7 @@ Route::get('/', function () {
 });
 
 Route::get('/sso/authorize', [SsoProviderController::class, 'authorize'])->name('sso.authorize');
+Route::post('/sso/token', [SsoProviderController::class, 'token'])->middleware('throttle:60,1')->name('sso.token');
 
 Route::middleware([
     'auth:sanctum',
@@ -40,6 +41,11 @@ Route::middleware([
     Route::get('/connected-systems', [ConnectedSystemsController::class, 'index'])->name('sso.connected-systems');
     Route::post('/connected-systems/{clientId}/bind', [ConnectedSystemsController::class, 'bind'])->name('sso.connected-systems.bind');
     Route::delete('/connected-systems/{clientId}/unbind', [ConnectedSystemsController::class, 'unbind'])->name('sso.connected-systems.unbind');
+
+    // Settings SSO Aliases
+    Route::get('/settings/sso', [ConnectedSystemsController::class, 'index'])->name('settings.sso');
+    Route::post('/settings/sso/{clientId}/bind', [ConnectedSystemsController::class, 'bind'])->name('settings.sso.bind');
+    Route::delete('/settings/sso/{clientId}/unbind', [ConnectedSystemsController::class, 'unbind'])->name('settings.sso.unbind');
 
     Route::get('/dashboard', function (Request $request) {
         $latest = AuditLog::with('admin:id,name,email')
@@ -135,5 +141,15 @@ Route::middleware([
         Route::post('/sso/{sso}/toggle', [SsoPortalController::class, 'toggle'])->name('sso.toggle');
         Route::post('/sso/{sso}/regenerate-secret', [SsoPortalController::class, 'regenerateSecret'])->name('sso.regenerate-secret');
         Route::delete('/sso/{sso}', [SsoPortalController::class, 'destroy'])->name('sso.destroy');
+
+        // SSO Client Management Aliases
+        Route::get('/sso-clients', [SsoPortalController::class, 'index'])->name('sso-clients.index');
+        Route::post('/sso-clients', [SsoPortalController::class, 'store'])->name('sso-clients.store');
+        Route::match(['put', 'post'], '/sso-clients/{sso}', [SsoPortalController::class, 'update'])->name('sso-clients.update');
+        Route::post('/sso-clients/{sso}/toggle', [SsoPortalController::class, 'toggle'])->name('sso-clients.toggle');
+        Route::post('/sso-clients/{sso}/rotate-secret', [SsoPortalController::class, 'regenerateSecret'])->name('sso-clients.rotate-secret');
+        Route::post('/sso-clients/{sso}/disable', [SsoPortalController::class, 'disable'])->name('sso-clients.disable');
+        Route::post('/sso-clients/{sso}/enable', [SsoPortalController::class, 'enable'])->name('sso-clients.enable');
+        Route::delete('/sso-clients/{sso}', [SsoPortalController::class, 'destroy'])->name('sso-clients.destroy');
     });
 });

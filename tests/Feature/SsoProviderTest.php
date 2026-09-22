@@ -76,6 +76,10 @@ class SsoProviderTest extends TestCase
 
         $response->assertRedirect(route('sso.connected-systems'));
         $this->assertEquals('test_client_id', session('sso_pending_bind_client'));
+
+        // Follow redirect to connected-systems and ensure it loads (200 OK) without infinite redirect
+        $connectedSystemsResponse = $this->actingAs($this->user)->get(route('sso.connected-systems'));
+        $connectedSystemsResponse->assertStatus(200);
     }
 
     public function test_bound_user_issues_authorization_code(): void
@@ -169,7 +173,7 @@ class SsoProviderTest extends TestCase
             ], 200),
         ]);
 
-        $response = $this->actingAs($this->user)->post(route('sso.connected-systems.bind', 'lfews_client_id'), [
+        $response = $this->actingAs($this->user)->post(route('sso.connected-systems.bind', $this->client->client_id), [
             'username' => 'lfews_user',
             'password' => 'target_password',
         ]);
@@ -177,7 +181,7 @@ class SsoProviderTest extends TestCase
         $response->assertRedirect();
         $this->assertDatabaseHas('sso_user_bindings', [
             'user_id' => $this->user->id,
-            'client_id' => 'lfews_client_id',
+            'client_id' => $this->client->client_id,
             'external_user_id' => 'ext_999',
             'external_username' => 'lfews_user',
         ]);

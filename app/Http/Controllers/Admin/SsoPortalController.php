@@ -22,7 +22,7 @@ class SsoPortalController extends Controller
         $search = $request->query('search');
         $status = $request->query('status', 'all');
 
-        $query = Sso::query()->latest();
+        $query = Sso::query()->with('creator:id,name,email')->latest();
 
         if ($search) {
             $query->where(function ($q) use ($search) {
@@ -54,6 +54,8 @@ class SsoPortalController extends Controller
                 'search' => $search ?? '',
                 'status' => $status,
             ],
+            'flashSecret' => session('new_secret'),
+            'flashSecretClient' => session('new_secret_client_name'),
         ]);
     }
 
@@ -64,13 +66,17 @@ class SsoPortalController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
             'client_id' => 'required|string|max:255|unique:sso,client_id',
-            'client_secret' => 'required|string|max:255',
+            'client_secret' => 'nullable|string|max:255',
             'redirect_uri' => 'required|string',
+            'api_url' => 'nullable|url|max:500',
             'is_active' => 'boolean',
             'framework' => 'nullable|string|max:100',
             'icon' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
         ]);
+
+        $plainSecret = ! empty($validated['client_secret']) ? $validated['client_secret'] : Str::random(64);
 
         $iconPath = null;
         if ($request->hasFile('icon')) {
@@ -79,11 +85,14 @@ class SsoPortalController extends Controller
 
         $client = Sso::create([
             'name' => $validated['name'],
+            'description' => $validated['description'] ?? null,
             'client_id' => $validated['client_id'],
-            'client_secret' => $validated['client_secret'],
+            'client_secret' => $plainSecret,
             'redirect_uri' => $validated['redirect_uri'],
+            'api_url' => $validated['api_url'] ?? null,
             'icon' => $iconPath,
             'framework' => $validated['framework'] ?? 'laravel_inertia',
+            'created_by' => $request->user()?->id,
             'is_active' => $validated['is_active'] ?? true,
         ]);
 
@@ -97,8 +106,10 @@ class SsoPortalController extends Controller
                 'client_id' => $client->client_id,
                 'framework' => $client->framework,
             ],
-            'ip_address' => $request->ip(),
         ]);
+
+        session()->flash('new_secret', $plainSecret);
+        session()->flash('new_secret_client_name', $client->name);
 
         return back()->with('success', "SSO Client \"{$client->name}\" created successfully.");
     }
@@ -110,9 +121,11 @@ class SsoPortalController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
             'client_id' => 'required|string|max:255|unique:sso,client_id,'.$sso->id,
-            'client_secret' => 'required|string|max:255',
+            'client_secret' => 'nullable|string|max:255',
             'redirect_uri' => 'required|string',
+            'api_url' => 'nullable|url|max:500',
             'is_active' => 'boolean',
             'framework' => 'nullable|string|max:100',
             'icon' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
@@ -132,15 +145,22 @@ class SsoPortalController extends Controller
             $iconPath = $request->file('icon')->store('sso-icons', 'public');
         }
 
-        $sso->update([
+        $updateData = [
             'name' => $validated['name'],
+            'description' => $validated['description'] ?? $sso->description,
             'client_id' => $validated['client_id'],
-            'client_secret' => $validated['client_secret'],
             'redirect_uri' => $validated['redirect_uri'],
+            'api_url' => $validated['api_url'] ?? null,
             'icon' => $iconPath,
             'framework' => $validated['framework'] ?? $sso->framework,
-            'is_active' => $validated['is_active'] ?? true,
-        ]);
+            'is_active' => $validated['is_active'] ?? $sso->is_active,
+        ];
+
+        if (! empty($validated['client_secret'])) {
+            $updateData['client_secret'] = $validated['client_secret'];
+        }
+
+        $sso->update($updateData);
 
         AuditLog::create([
             'admin_id' => $request->user()->id,
@@ -152,7 +172,6 @@ class SsoPortalController extends Controller
                 'client_id' => $sso->client_id,
                 'framework' => $sso->framework,
             ],
-            'ip_address' => $request->ip(),
         ]);
 
         return back()->with('success', "SSO Client \"{$sso->name}\" updated successfully.");
@@ -177,12 +196,49 @@ class SsoPortalController extends Controller
                 'client_id' => $sso->client_id,
                 'is_active' => $sso->is_active,
             ],
-            'ip_address' => $request->ip(),
         ]);
 
         $status = $sso->is_active ? 'enabled' : 'disabled';
 
         return back()->with('success', "SSO Client \"{$sso->name}\" has been {$status}.");
+    }
+
+    /**
+     * Explicitly enable an SSO client.
+     */
+    public function enable(Request $request, Sso $sso): RedirectResponse
+    {
+        if (! $sso->is_active) {
+            $sso->update(['is_active' => true]);
+            AuditLog::create([
+                'admin_id' => $request->user()->id,
+                'action' => 'enabled_sso_client',
+                'target_type' => 'sso',
+                'target_id' => (string) $sso->id,
+                'details' => ['client_id' => $sso->client_id],
+            ]);
+        }
+
+        return back()->with('success', "SSO Client \"{$sso->name}\" enabled.");
+    }
+
+    /**
+     * Explicitly disable an SSO client.
+     */
+    public function disable(Request $request, Sso $sso): RedirectResponse
+    {
+        if ($sso->is_active) {
+            $sso->update(['is_active' => false]);
+            AuditLog::create([
+                'admin_id' => $request->user()->id,
+                'action' => 'disabled_sso_client',
+                'target_type' => 'sso',
+                'target_id' => (string) $sso->id,
+                'details' => ['client_id' => $sso->client_id],
+            ]);
+        }
+
+        return back()->with('success', "SSO Client \"{$sso->name}\" disabled.");
     }
 
     /**
@@ -204,8 +260,10 @@ class SsoPortalController extends Controller
                 'name' => $sso->name,
                 'client_id' => $sso->client_id,
             ],
-            'ip_address' => $request->ip(),
         ]);
+
+        session()->flash('new_secret', $newSecret);
+        session()->flash('new_secret_client_name', $sso->name);
 
         return back()->with('success', "New client secret generated for \"{$sso->name}\".");
     }
@@ -234,7 +292,6 @@ class SsoPortalController extends Controller
                 'name' => $name,
                 'client_id' => $clientId,
             ],
-            'ip_address' => $request->ip(),
         ]);
 
         return back()->with('success', "SSO Client \"{$name}\" was permanently deleted.");

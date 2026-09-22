@@ -15,6 +15,7 @@ class SsoAuthorizationCode extends Model
         'client_id',
         'user_id',
         'redirect_uri',
+        'nonce',
         'code_challenge',
         'code_challenge_method',
         'expires_at',
@@ -29,6 +30,11 @@ class SsoAuthorizationCode extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function client(): BelongsTo
+    {
+        return $this->belongsTo(SsoClient::class, 'client_id', 'client_id');
     }
 
     public function isValid(): bool

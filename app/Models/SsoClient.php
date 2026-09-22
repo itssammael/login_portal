@@ -4,6 +4,9 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
 
 class SsoClient extends Model
@@ -24,22 +27,82 @@ class SsoClient extends Model
 
     protected $fillable = [
         'name',
+        'description',
         'client_id',
         'client_secret',
         'redirect_uri',
+        'api_url',
         'icon',
         'framework',
+        'created_by',
         'is_active',
+        'last_used_at',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'last_used_at' => 'datetime',
+    ];
+
+    protected $hidden = [
+        'client_secret',
     ];
 
     protected $appends = [
         'icon_url',
         'framework_label',
+        'sso_client_id',
+        'sso_client_redirect_url',
+        'sso_client_base_url',
     ];
+
+    /**
+     * Alias for client_id.
+     */
+    public function getSsoClientIdAttribute(): string
+    {
+        return (string) $this->client_id;
+    }
+
+    /**
+     * Alias for redirect_uri.
+     */
+    public function getSsoClientRedirectUrlAttribute(): string
+    {
+        return (string) $this->redirect_uri;
+    }
+
+    /**
+     * Alias for api_url / resolveApiBaseUrl().
+     */
+    public function getSsoClientBaseUrlAttribute(): ?string
+    {
+        return $this->resolveApiBaseUrl();
+    }
+
+    /**
+     * The admin user who created this SSO client.
+     */
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * Active user bindings for this client.
+     */
+    public function bindings(): HasMany
+    {
+        return $this->hasMany(SsoUserBinding::class, 'client_id', 'client_id');
+    }
+
+    /**
+     * Authorization codes issued for this client.
+     */
+    public function authorizationCodes(): HasMany
+    {
+        return $this->hasMany(SsoAuthorizationCode::class, 'client_id', 'client_id');
+    }
 
     /**
      * Get the human-readable framework label.
@@ -65,67 +128,102 @@ class SsoClient extends Model
         return asset('storage/'.$this->icon);
     }
 
-    protected $hidden = [
-        'client_secret',
-    ];
+    /**
+     * Resolve the base API URL of the connected system for verify-credentials calls.
+     * Uses the explicit api_url when set; otherwise derives the base URL from redirect_uri.
+     */
+    public function resolveApiBaseUrl(): ?string
+    {
+        if (! empty($this->api_url)) {
+            return rtrim($this->api_url, '/');
+        }
+
+        $firstUri = trim(explode(',', $this->redirect_uri ?? '')[0]);
+        if (empty($firstUri)) {
+            return null;
+        }
+
+        $parsed = parse_url($firstUri);
+        if (! isset($parsed['host'])) {
+            return null;
+        }
+
+        $scheme = $parsed['scheme'] ?? 'http';
+        $host = $parsed['host'];
+        $port = isset($parsed['port']) ? ':'.$parsed['port'] : '';
+
+        return "{$scheme}://{$host}{$port}";
+    }
 
     /**
-     * Find client by ID or name, with fallback auto-provisioning for core system apps.
+     * Find client by ID or name.
      */
     public static function findClient(string $identifier): ?self
     {
-        $client = static::where('client_id', $identifier)
+        return static::where('client_id', $identifier)
             ->orWhere('name', $identifier)
             ->orWhere('client_id', 'LIKE', $identifier.'%')
             ->orWhere('name', 'LIKE', '%'.$identifier.'%')
             ->first();
-
-        if ($client) {
-            return $client;
-        }
-
-        // Auto-provision standard applications if missing from database
-        $lower = strtolower($identifier);
-        if (str_contains($lower, 'lfews')) {
-            return static::create([
-                'name' => 'LFEWS 2.0',
-                'client_id' => 'lfews_client_id',
-                'client_secret' => 'lfews_client_secret',
-                'redirect_uri' => 'http://127.0.0.1:8001/sso/callback,http://localhost:8001/sso/callback',
-                'is_active' => true,
-            ]);
-        }
-
-        if (str_contains($lower, 'tracker') || str_contains($lower, 'project')) {
-            return static::create([
-                'name' => 'Project Tracker',
-                'client_id' => 'project_tracker_client_id',
-                'client_secret' => 'project_tracker_client_secret',
-                'redirect_uri' => 'http://127.0.0.1:8002/sso/callback,http://localhost:8002/sso/callback',
-                'is_active' => true,
-            ]);
-        }
-
-        return null;
     }
 
     /**
-     * Validate that the given redirect URI matches the client's registered redirect URI(s).
+     * Validate that the given redirect URI strictly matches the client's registered redirect URI(s).
+     * Prevents open-redirect vulnerabilities.
      */
     public function validateRedirectUri(string $uri): bool
     {
-        $allowedUris = array_map('trim', explode(',', $this->redirect_uri));
-        $inputPath = parse_url($uri, PHP_URL_PATH) ?: '/sso/callback';
+        if (empty($uri) || empty($this->redirect_uri)) {
+            return false;
+        }
+
+        $inputParts = parse_url($uri);
+        if (! isset($inputParts['host']) || ! isset($inputParts['scheme'])) {
+            return false;
+        }
+
+        $inputScheme = strtolower($inputParts['scheme']);
+        $inputHost = strtolower($inputParts['host']);
+        $inputPort = $inputParts['port'] ?? ($inputScheme === 'https' ? 443 : 80);
+        $inputPath = rtrim($inputParts['path'] ?? '', '/');
+
+        $allowedUris = array_filter(array_map('trim', explode(',', $this->redirect_uri)));
 
         foreach ($allowedUris as $allowedUri) {
             if ($allowedUri === $uri) {
                 return true;
             }
-            if (str_starts_with($uri, rtrim($allowedUri, '/'))) {
-                return true;
+
+            $allowedParts = parse_url($allowedUri);
+            if (! isset($allowedParts['host']) || ! isset($allowedParts['scheme'])) {
+                continue;
             }
-            // Allow domain/port variations in local dev as long as callback path matches /sso/callback
-            $allowedPath = parse_url($allowedUri, PHP_URL_PATH) ?: '/sso/callback';
+
+            $allowedScheme = strtolower($allowedParts['scheme']);
+            $allowedHost = strtolower($allowedParts['host']);
+            $allowedPort = $allowedParts['port'] ?? ($allowedScheme === 'https' ? 443 : 80);
+            $allowedPath = rtrim($allowedParts['path'] ?? '', '/');
+
+            // Schemes must match
+            if ($inputScheme !== $allowedScheme) {
+                continue;
+            }
+
+            // Hosts must match or be loopback equivalents in local dev
+            $isLocalAllowed = in_array($allowedHost, ['127.0.0.1', 'localhost'], true);
+            $isLocalInput = in_array($inputHost, ['127.0.0.1', 'localhost'], true);
+            $hostsMatch = ($inputHost === $allowedHost) || ($isLocalAllowed && $isLocalInput);
+
+            if (! $hostsMatch) {
+                continue;
+            }
+
+            // Port match
+            if (! $isLocalAllowed && $inputPort !== $allowedPort) {
+                continue;
+            }
+
+            // Paths must match
             if ($inputPath === $allowedPath) {
                 return true;
             }
@@ -135,18 +233,35 @@ class SsoClient extends Model
     }
 
     /**
-     * Verify client secret.
+     * Verify client secret using timing-safe comparison, decryption, or hash checking.
      */
     public function verifySecret(string $secret): bool
     {
-        if ($this->client_secret === $secret) {
+        if (empty($secret) || empty($this->client_secret)) {
+            return false;
+        }
+
+        if (hash_equals($this->client_secret, $secret)) {
             return true;
         }
 
-        if (Hash::needsRehash($this->client_secret)) {
-            return Hash::check($secret, $this->client_secret);
+        try {
+            $decrypted = Crypt::decryptString($this->client_secret);
+            if (hash_equals($decrypted, $secret)) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+            // Not encrypted
         }
 
-        return hash_equals($this->client_secret, $secret) || Hash::check($secret, $this->client_secret);
+        try {
+            if (Hash::check($secret, $this->client_secret)) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+            // Not a valid hash string
+        }
+
+        return false;
     }
 }

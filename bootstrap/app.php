@@ -24,6 +24,14 @@ return Application::configure(basePath: dirname(__DIR__))
             CheckBanned::class,
         ]);
 
+        $middleware->validateCsrfTokens(except: [
+            'sso/token',
+            'connected-systems/*/bind',
+            'connected-systems/*/unbind',
+            'settings/sso/*/bind',
+            'settings/sso/*/unbind',
+        ]);
+
         $middleware->alias([
             'admin' => EnsureUserIsAdmin::class,
         ]);

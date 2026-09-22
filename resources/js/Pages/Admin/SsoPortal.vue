@@ -28,6 +28,14 @@ const props = defineProps({
         type: Object,
         default: () => ({ search: '', status: 'all' }),
     },
+    flashSecret: {
+        type: String,
+        default: null,
+    },
+    flashSecretClient: {
+        type: String,
+        default: null,
+    },
 });
 
 const searchQuery = ref(props.filters.search || '');
@@ -42,7 +50,13 @@ const showDeleteConfirm = ref(false);
 const clientToDelete = ref(null);
 const showRegenerateConfirm = ref(false);
 const clientToRegenerate = ref(null);
-const visibleSecrets = ref({});
+const showSecretModal = ref(!!props.flashSecret);
+const flashSecretValue = ref(props.flashSecret);
+const flashClientName = ref(props.flashSecretClient);
+
+if (props.flashSecret) {
+    showSecretModal.value = true;
+}
 
 // Documentation Modal state
 const showDocsModal = ref(false);
@@ -58,6 +72,7 @@ const form = useForm({
     client_id: '',
     client_secret: '',
     redirect_uri: '',
+    api_url: '',
     framework: 'laravel_inertia',
     is_active: true,
     icon: null,
@@ -137,6 +152,7 @@ const openCreateModal = () => {
     form.client_id = 'client_' + generateRandomString(16);
     form.client_secret = generateRandomString(64);
     form.redirect_uri = '';
+    form.api_url = '';
     form.framework = 'laravel_inertia';
     form.is_active = true;
     form.icon = null;
@@ -152,8 +168,9 @@ const openEditModal = (client) => {
     form.clearErrors();
     form.name = client.name;
     form.client_id = client.client_id;
-    form.client_secret = client.client_secret;
+    form.client_secret = '';
     form.redirect_uri = client.redirect_uri;
+    form.api_url = client.api_url || '';
     form.framework = client.framework || 'laravel_inertia';
     form.is_active = !!client.is_active;
     form.icon = null;
@@ -537,33 +554,21 @@ const printDocsPdf = (docData) => {
                                 <div>
                                     <div class="flex items-center justify-between text-xs text-gray-600 font-semibold mb-1">
                                         <span>CLIENT SECRET</span>
-                                        <div class="flex items-center space-x-2">
-                                            <button
-                                                @click="toggleSecretVisibility(client.id)"
-                                                type="button"
-                                                class="text-gray-600 hover:text-gray-900 font-medium text-[11px] flex items-center space-x-1 transition"
-                                            >
-                                                <span>{{ visibleSecrets[client.id] ? 'Hide' : 'Reveal' }}</span>
-                                            </button>
-                                            <span class="text-gray-300">|</span>
-                                            <button
-                                                @click="copyToClipboard(client.client_secret, 'secret_' + client.id)"
-                                                type="button"
-                                                class="text-forest-800 hover:text-forest-950 font-medium text-[11px] flex items-center space-x-1 transition"
-                                            >
-                                                <svg v-if="copiedField === 'secret_' + client.id" class="size-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                                                </svg>
-                                                <svg v-else class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
-                                                </svg>
-                                                <span>{{ copiedField === 'secret_' + client.id ? 'Copied!' : 'Copy' }}</span>
-                                            </button>
-                                        </div>
+                                        <button
+                                            @click="confirmRegenerate(client)"
+                                            type="button"
+                                            class="text-forest-800 hover:text-forest-950 font-medium text-[11px] flex items-center space-x-1 transition cursor-pointer"
+                                            title="Generate a new secret key"
+                                        >
+                                            <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                                            </svg>
+                                            <span>Rotate Secret</span>
+                                        </button>
                                     </div>
-                                    <div class="font-mono text-xs text-gray-900 bg-cream-200/80 px-3 py-1.5 rounded-lg border border-cream-400/50 break-all select-all flex items-center justify-between">
-                                        <span v-if="visibleSecrets[client.id]">{{ client.client_secret }}</span>
-                                        <span v-else class="text-gray-500 tracking-wider">••••••••••••••••••••••••••••••••</span>
+                                    <div class="font-mono text-xs text-gray-700 bg-cream-200/80 px-3 py-1.5 rounded-lg border border-cream-400/50 flex items-center justify-between">
+                                        <span class="tracking-widest text-gray-500 font-sans select-none">••••••••••••••••••••••••••••••••</span>
+                                        <span class="text-[10px] text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded font-medium">Secured</span>
                                     </div>
                                 </div>
 
@@ -829,6 +834,25 @@ const printDocsPdf = (docData) => {
                         <p class="text-[11px] text-gray-500 mt-1">Must be an authorized endpoint on the client application receiving SSO tokens.</p>
                     </div>
 
+                    <!-- API Base URL (optional, for account binding verification) -->
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">
+                            System Base URL
+                            <span class="ml-1 text-gray-400 font-normal">(optional)</span>
+                        </label>
+                        <input
+                            v-model="form.api_url"
+                            type="url"
+                            placeholder="e.g. http://projecttracker or http://192.168.50.30:8002"
+                            class="w-full font-mono bg-cream-100 border border-cream-400 rounded-xl px-3.5 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-forest-800"
+                        />
+                        <div v-if="form.errors.api_url" class="text-red-600 text-xs mt-1">{{ form.errors.api_url }}</div>
+                        <p class="text-[11px] text-gray-500 mt-1">
+                            Explicit base URL of the connected system used for account binding credential verification.
+                            If left blank, it is automatically derived from the Redirect URI host.
+                        </p>
+                    </div>
+
                     <!-- Collapsible Step-by-Step Integration Guide Preview -->
                     <div class="bg-cream-100/90 rounded-xl border border-cream-400/80 p-3.5">
                         <div class="flex items-center justify-between">
@@ -1016,6 +1040,53 @@ const printDocsPdf = (docData) => {
                         class="px-4 py-2 text-xs font-semibold text-white bg-amber-700 hover:bg-amber-800 rounded-xl shadow-xs transition"
                     >
                         Yes, Regenerate Secret
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- New Secret Display Modal (One-time Display) -->
+        <div v-if="showSecretModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <div class="bg-cream-200 rounded-2xl shadow-xl border border-emerald-400/80 w-full max-w-lg p-6">
+                <div class="flex items-center space-x-3 text-emerald-800 mb-4">
+                    <div class="p-2 bg-emerald-100 rounded-xl">
+                        <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">New Client Secret Generated</h3>
+                        <span class="text-xs text-gray-600">{{ flashClientName || 'SSO Client' }}</span>
+                    </div>
+                </div>
+
+                <div class="p-3 bg-amber-100 border border-amber-300 rounded-xl text-xs text-amber-950 font-medium mb-4 leading-relaxed">
+                    <strong>⚠️ Important Security Notice:</strong> This secret is stored securely and will <strong>never be shown again</strong>. Please copy it immediately and store it in your application's secure configuration.
+                </div>
+
+                <div class="mb-5">
+                    <div class="flex items-center justify-between text-xs font-bold text-gray-600 mb-1">
+                        <span>CLIENT SECRET KEY</span>
+                        <button
+                            @click="copyToClipboard(flashSecretValue, 'one_time_secret')"
+                            type="button"
+                            class="text-forest-800 hover:text-forest-950 font-bold text-xs flex items-center space-x-1 cursor-pointer"
+                        >
+                            <span>{{ copiedField === 'one_time_secret' ? 'Copied!' : 'Copy to Clipboard' }}</span>
+                        </button>
+                    </div>
+                    <div class="font-mono text-xs text-emerald-950 bg-white p-3 rounded-xl border border-cream-400 break-all select-all font-semibold">
+                        {{ flashSecretValue }}
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end">
+                    <button
+                        @click="showSecretModal = false; flashSecretValue = null;"
+                        type="button"
+                        class="px-4 py-2 text-xs font-semibold text-white bg-forest-900 hover:bg-forest-950 rounded-xl shadow-xs transition cursor-pointer"
+                    >
+                        I Have Copied & Saved This Secret
                     </button>
                 </div>
             </div>

@@ -3,10 +3,9 @@
 namespace App\Http\Controllers\Sso;
 
 use App\Http\Controllers\Controller;
-use App\Models\SsoAuthorizationCode;
 use App\Models\SsoClient;
 use App\Models\SsoUserBinding;
-use App\Models\User;
+use App\Services\SsoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -15,8 +14,12 @@ use Illuminate\Support\Str;
 
 class SsoProviderController extends Controller
 {
+    public function __construct(
+        protected SsoService $ssoService
+    ) {}
+
     /**
-     * Handle OAuth / OIDC SSO Authorization Request.
+     * Handle OAuth2 / OIDC SSO Authorization Request.
      */
     public function authorize(Request $request): RedirectResponse|JsonResponse
     {
@@ -24,6 +27,7 @@ class SsoProviderController extends Controller
         $redirectUri = $request->query('redirect_uri');
         $responseType = $request->query('response_type', 'code');
         $state = $request->query('state');
+        $nonce = $request->query('nonce');
         $codeChallenge = $request->query('code_challenge');
         $codeChallengeMethod = $request->query('code_challenge_method', 'S256');
 
@@ -56,7 +60,7 @@ class SsoProviderController extends Controller
             ], 400);
         }
 
-        // If user is not authenticated, redirect to login page while preserving SSO parameters in session
+        // If user is not authenticated, preserve SSO parameters and redirect to existing Jetstream login
         if (! Auth::check()) {
             session(['sso_authorize_params' => $request->all()]);
 
@@ -64,6 +68,14 @@ class SsoProviderController extends Controller
         }
 
         $user = Auth::user();
+
+        // Check if user account is banned or suspended
+        if (method_exists($user, 'isBanned') && $user->isBanned()) {
+            return response()->json([
+                'error' => 'access_denied',
+                'error_description' => 'Your LGUNET Portal account is suspended.',
+            ], 403);
+        }
 
         // Check if user has bound their account for this target system
         $binding = SsoUserBinding::where('user_id', $user->id)
@@ -77,27 +89,26 @@ class SsoProviderController extends Controller
             ]);
 
             return redirect()->route('sso.connected-systems')
-                ->with('error', 'Please bind your '.$client->name.' credentials to your Login Portal account before using Single Sign-On.');
+                ->with('error', 'This application is not linked to your LGUNET Portal account. Please bind your account first.');
         }
 
         // Issue single-use short-lived authorization code
+        $code = $this->ssoService->issueAuthorizationCode(
+            client: $client,
+            user: $user,
+            redirectUri: $redirectUri,
+            state: $state,
+            nonce: $nonce,
+            codeChallenge: $codeChallenge,
+            codeChallengeMethod: $codeChallengeMethod ?: 'S256'
+        );
 
-        $code = Str::random(40);
-        SsoAuthorizationCode::create([
-            'code' => hash('sha256', $code), // Stored as hash for additional security
-            'client_id' => $clientId,
-            'user_id' => $user->id,
-            'redirect_uri' => $redirectUri,
-            'code_challenge' => $codeChallenge,
-            'code_challenge_method' => $codeChallengeMethod,
-            'expires_at' => now()->addMinutes(2),
-        ]);
+        $params = ['code' => $code];
+        if (! empty($state)) {
+            $params['state'] = $state;
+        }
 
-        $query = http_build_query([
-            'code' => $code,
-            'state' => $state,
-        ]);
-
+        $query = http_build_query($params);
         $delimiter = str_contains($redirectUri, '?') ? '&' : '?';
 
         return redirect()->away($redirectUri.$delimiter.$query);
@@ -116,6 +127,24 @@ class SsoProviderController extends Controller
 
         if (! $client) {
             return redirect()->route('dashboard')->with('error', 'SSO Client not found.');
+        }
+
+        if (! $client->is_active) {
+            return redirect()->route('dashboard')->with('error', 'This SSO Client is currently disabled.');
+        }
+
+        $user = $request->user();
+        if ($user) {
+            $isBound = SsoUserBinding::where('user_id', $user->id)
+                ->where('client_id', $client->client_id)
+                ->exists();
+
+            if (! $isBound) {
+                session(['sso_pending_bind_client' => $client->client_id]);
+
+                return redirect()->route('sso.connected-systems')
+                    ->with('error', "This application is not linked to your LGUNET Portal account. Please bind your {$client->name} account first.");
+            }
         }
 
         $state = Str::random(40);
@@ -158,80 +187,22 @@ class SsoProviderController extends Controller
             ], 400);
         }
 
-        $client = SsoClient::findClient($clientId);
-        if (! $client || ! $client->is_active || ! $client->verifySecret($clientSecret)) {
+        $result = $this->ssoService->exchangeToken(
+            clientId: $clientId,
+            clientSecret: $clientSecret,
+            rawCode: $rawCode,
+            redirectUri: $redirectUri,
+            codeVerifier: $codeVerifier
+        );
+
+        if (! $result['success']) {
             return response()->json([
-                'error' => 'invalid_client',
-                'error_description' => 'Client authentication failed.',
-            ], 401);
+                'error' => $result['error'],
+                'error_description' => $result['error_description'],
+            ], $result['status']);
         }
 
-        $hashedCode = hash('sha256', $rawCode);
-        $authCode = SsoAuthorizationCode::where('code', $hashedCode)
-            ->where('client_id', $clientId)
-            ->first();
-
-        if (! $authCode) {
-            return response()->json([
-                'error' => 'invalid_grant',
-                'error_description' => 'Invalid authorization code.',
-            ], 400);
-        }
-
-        if (! $authCode->isValid()) {
-            return response()->json([
-                'error' => 'invalid_grant',
-                'error_description' => $authCode->used_at ? 'Authorization code has already been used.' : 'Authorization code has expired.',
-            ], 400);
-        }
-
-        if ($redirectUri && ! $client->validateRedirectUri($redirectUri)) {
-            return response()->json([
-                'error' => 'invalid_grant',
-                'error_description' => 'Redirect URI mismatch.',
-            ], 400);
-        }
-
-        if (! $authCode->verifyPkce($codeVerifier)) {
-            return response()->json([
-                'error' => 'invalid_grant',
-                'error_description' => 'PKCE code verifier verification failed.',
-            ], 400);
-        }
-
-        // Mark authorization code as used immediately (replay protection)
-        $authCode->update(['used_at' => now()]);
-
-        $user = $authCode->user;
-        if (! $user || $user->isBanned()) {
-            return response()->json([
-                'error' => 'access_denied',
-                'error_description' => 'User account is invalid or banned.',
-            ], 403);
-        }
-
-        $binding = SsoUserBinding::where('user_id', $user->id)
-            ->where('client_id', $clientId)
-            ->first();
-
-        // Generate short-lived access token / user assertion
-        $token = Str::random(80);
-
-        return response()->json([
-            'token_type' => 'Bearer',
-            'access_token' => $token,
-            'expires_in' => 3600,
-            'user' => [
-                'id' => (string) $user->id,
-                'bound_user_id' => $binding?->external_user_id,
-                'bound_username' => $binding?->external_username,
-                'name' => $user->name,
-                'email' => $user->email,
-                'email_verified_at' => $user->email_verified_at ? $user->email_verified_at->toIso8601String() : null,
-                'profile_photo_url' => $user->profile_photo_url,
-            ],
-        ]);
-
+        return response()->json($result['data'], 200);
     }
 
     /**
@@ -239,13 +210,11 @@ class SsoProviderController extends Controller
      */
     public function userinfo(Request $request): JsonResponse
     {
-        // Require client authentication or bearer token
         $authHeader = $request->header('Authorization');
         if (! $authHeader || ! str_starts_with($authHeader, 'Bearer ')) {
             return response()->json(['error' => 'unauthorized'], 401);
         }
 
-        // Return current user if logged in via Sanctum or session
         $user = $request->user();
         if (! $user) {
             return response()->json(['error' => 'unauthorized'], 401);

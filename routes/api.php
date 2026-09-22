@@ -10,7 +10,7 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
-Route::post('/sso/token', [SsoProviderController::class, 'token'])->name('api.sso.token');
+Route::post('/sso/token', [SsoProviderController::class, 'token'])->middleware('throttle:60,1')->name('api.sso.token');
 Route::get('/sso/userinfo', [SsoProviderController::class, 'userinfo'])->name('api.sso.userinfo');
 
 Route::get('/lgu-activities', [LguActivityController::class, 'index'])->name('api.lgu-activities');

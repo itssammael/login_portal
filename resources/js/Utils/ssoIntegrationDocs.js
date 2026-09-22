@@ -235,6 +235,45 @@ class SsoClientController extends Controller
     </div>
 </div>`,
                     },
+                    {
+                        stepNumber: 7,
+                        title: 'Account Binding Verification Endpoint (Optional)',
+                        description: 'To allow users who already have an account in this app to bind it in LGUNET Portal, add this endpoint in routes/api.php:',
+                        filename: 'routes/api.php',
+                        language: 'php',
+                        code: `Route::post('/sso/verify-credentials', function (\\Illuminate\\Http\\Request $request) {
+    if ($request->input('client_secret') !== config('services.login_portal.client_secret')) {
+        return response()->json(['success' => false, 'message' => 'Unauthorized client secret.'], 401);
+    }
+
+    $username = $request->input('username');
+    $password = $request->input('password');
+
+    $userQuery = \\App\\Models\\User::query();
+    if (\\Illuminate\\Support\\Facades\\Schema::hasColumn('users', 'username')) {
+        $userQuery->where(function ($q) use ($username) {
+            $q->where('email', $username)->orWhere('username', $username);
+        });
+    } else {
+        $userQuery->where('email', $username);
+    }
+    $user = $userQuery->first();
+
+    if (! $user || ! \\Illuminate\\Support\\Facades\\Hash::check($password, $user->password)) {
+        return response()->json(['success' => false, 'message' => 'Invalid username or password.'], 400);
+    }
+
+    return response()->json([
+        'success' => true,
+        'user' => [
+            'id' => (string) $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'username' => \\Illuminate\\Support\\Facades\\Schema::hasColumn('users', 'username') ? ($user->username ?? $user->email) : $user->email,
+        ],
+    ]);
+});`,
+                    },
                 ],
             };
 
