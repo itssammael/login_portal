@@ -1,5 +1,5 @@
 import { ref, watch } from 'vue';
-import { usePage } from '@inertiajs/vue3';
+import { usePage, router } from '@inertiajs/vue3';
 import axios from 'axios';
 import { useToast } from '@/Composables/useToast';
 
@@ -11,6 +11,47 @@ let activeUserId = null;
 
 const NOTIFICATION_SOUND_URL = '/assets/audio/notification/740422__anthonyrox__message-notification-3.wav';
 let notificationAudio = null;
+
+/**
+ * Display native browser desktop notification if permission is granted.
+ */
+function pushNativeNotification({ title, message, conversationId }) {
+    try {
+        if (!('Notification' in window)) return;
+
+        const show = () => {
+            const notification = new Notification(title, {
+                body: message,
+                icon: '/assets/imgs/icons/chat.png',
+                badge: '/assets/imgs/icons/chat.png',
+                tag: `msg-${conversationId || 'general'}`,
+                silent: true, // We already handle custom audio playback via playNotificationSound()
+            });
+
+            notification.onclick = () => {
+                window.focus();
+                if (conversationId && typeof route === 'function') {
+                    router.visit(route('chat.index', { conversation: conversationId }));
+                } else if (typeof route === 'function') {
+                    router.visit(route('chat.index'));
+                }
+                notification.close();
+            };
+        };
+
+        if (Notification.permission === 'granted') {
+            show();
+        } else if (Notification.permission === 'default') {
+            Notification.requestPermission().then((permission) => {
+                if (permission === 'granted') {
+                    show();
+                }
+            });
+        }
+    } catch (err) {
+        console.warn('[Desktop Notification Error]', err);
+    }
+}
 
 /**
  * Play the custom message notification sound from public/assets/audio/notification/...
@@ -164,6 +205,13 @@ export function useMessageCounter() {
 
                 // Play notification audio sound
                 playNotificationSound();
+
+                // Push native browser desktop notification at the same time
+                pushNativeNotification({
+                    title: toastTitle,
+                    message: toastMessage,
+                    conversationId: e.conversation_id,
+                });
             }
 
             // Sync with backend to guarantee database-level accuracy
@@ -179,6 +227,11 @@ export function useMessageCounter() {
     const initListeners = () => {
         const currentUserId = Number(page.props.auth?.user?.id);
         if (!currentUserId || !window.Echo) return;
+
+        // Prompt for desktop notification permission if not yet decided
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission().catch(() => {});
+        }
 
         // If already listening for this same user, do not duplicate subscriptions
         if (isListening.value && activeUserId === currentUserId) {
