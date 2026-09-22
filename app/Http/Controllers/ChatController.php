@@ -9,6 +9,7 @@ use App\Models\Message;
 use App\Models\MessageReaction;
 use App\Models\User;
 use App\Services\MessageEncryptionService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -418,6 +419,16 @@ class ChatController extends Controller
             ->update(['last_read_at' => now()]);
 
         return back();
+    }
+
+    /**
+     * Get the current unread messages count for the authenticated user.
+     */
+    public function unreadCount(Request $request): JsonResponse
+    {
+        return response()->json([
+            'count' => $request->user()->unreadMessagesCount(),
+        ]);
     }
 
     /**

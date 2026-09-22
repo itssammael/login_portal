@@ -254,4 +254,21 @@ class User extends Authenticatable
     {
         return $this->hasMany(SsoUserBinding::class);
     }
+
+    /**
+     * Get the total unread messages count for this user across all conversations.
+     */
+    public function unreadMessagesCount(): int
+    {
+        return ConversationParticipant::query()
+            ->where('user_id', $this->id)
+            ->join('messages', 'messages.conversation_id', '=', 'conversation_participants.conversation_id')
+            ->where('messages.sender_id', '!=', $this->id)
+            ->where('messages.is_deleted', false)
+            ->where(function ($query) {
+                $query->whereNull('conversation_participants.last_read_at')
+                    ->orWhereColumn('messages.created_at', '>', 'conversation_participants.last_read_at');
+            })
+            ->count();
+    }
 }

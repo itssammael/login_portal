@@ -78,8 +78,8 @@ onMounted(() => {
 
     // Listen for broadcast announcement if Echo is active
     if (window.Echo) {
-        window.Echo.channel('chat')
-            .listen('MessageSent', (e) => {
+        window.Echo.channel('public-chat')
+            .listen('.message.sent', (e) => {
                 if (e.message && e.message.includes('Announcement:')) {
                     fetchLatestAnnouncement();
                 }

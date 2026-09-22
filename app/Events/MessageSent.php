@@ -2,6 +2,7 @@
 
 namespace App\Events;
 
+use App\Models\ConversationParticipant;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
@@ -36,6 +37,14 @@ class MessageSent implements ShouldBroadcastNow
 
         if ($this->conversationId) {
             $channels[] = new PrivateChannel('chat.conversation.'.$this->conversationId);
+
+            $participantIds = ConversationParticipant::query()
+                ->where('conversation_id', $this->conversationId)
+                ->pluck('user_id');
+
+            foreach ($participantIds as $participantId) {
+                $channels[] = new PrivateChannel('App.Models.User.'.$participantId);
+            }
         }
 
         return $channels;
@@ -56,9 +65,20 @@ class MessageSent implements ShouldBroadcastNow
      */
     public function broadcastWith(): array
     {
+        $participantIds = [];
+        if ($this->conversationId) {
+            $participantIds = ConversationParticipant::query()
+                ->where('conversation_id', $this->conversationId)
+                ->pluck('user_id')
+                ->map(fn ($id) => (int) $id)
+                ->values()
+                ->toArray();
+        }
+
         return [
             'message' => $this->message,
             'conversation_id' => $this->conversationId,
+            'participant_ids' => $participantIds,
             'data' => $this->messageData,
             'action' => $this->action,
         ];

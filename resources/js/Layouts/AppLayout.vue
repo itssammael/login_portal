@@ -1,6 +1,7 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import { Head, Link, router, useForm } from '@inertiajs/vue3';
+import { useMessageCounter } from '@/Composables/useMessageCounter';
 import ApplicationMark from '@/Components/ApplicationMark.vue';
 import Banner from '@/Components/Banner.vue';
 import DialogModal from '@/Components/DialogModal.vue';
@@ -19,6 +20,12 @@ defineProps({
 const isCollapsed = ref(localStorage.getItem('sidebar_collapsed') === 'false');
 const showingMobileSidebar = ref(false);
 const showingAnnouncementModal = ref(false);
+
+const { unreadCount, initListeners } = useMessageCounter();
+
+onMounted(() => {
+    initListeners();
+});
 
 const announcementForm = useForm({
     title: '',
@@ -81,8 +88,11 @@ const logout = () => {
                     class="p-4 border-b border-cream-500/40 flex items-center justify-between shrink-0"
                     :class="isCollapsed ? 'px-2 flex-col space-y-3' : 'px-5'"
                 >
-                    <Link :href="route('dashboard')" class="flex items-center space-x-3 shrink-0">
-                        <ApplicationMark class="block h-9 w-auto" />
+                    <Link :href="route('dashboard')" class="flex items-center space-x-2.5 shrink-0 min-w-0 max-w-[200px]">
+                        <ApplicationMark class="block h-9 w-auto shrink-0" />
+                        <span v-if="!isCollapsed" class="font-bold text-gray-900 text-sm tracking-tight truncate">
+                            {{ $page.props.system_appearance?.name || 'LGUNET Portal' }}
+                        </span>
                     </Link>
 
                     <!-- Collapse / Expand Toggle Button -->
@@ -149,13 +159,13 @@ const logout = () => {
 
                         <!-- Unread Badge -->
                         <span
-                            v-if="$page.props.unread_messages_count > 0"
-                            class="px-2 py-0.5 text-xs font-bold rounded-full animate-pulse"
+                            v-if="unreadCount > 0"
+                            class="px-2 py-0.5 text-xs font-bold rounded-full animate-pulse transition-all duration-300"
                             :class="[
                                 isCollapsed ? 'absolute -top-1 -right-1 size-4 p-0 flex items-center justify-center text-[10px] bg-red-500 text-white ring-2 ring-white' : (route().current('chat.*') ? 'bg-white text-forest-700' : 'bg-forest-700 text-white')
                             ]"
                         >
-                            {{ isCollapsed ? ($page.props.unread_messages_count > 9 ? '9+' : $page.props.unread_messages_count) : $page.props.unread_messages_count }}
+                            {{ isCollapsed ? (unreadCount > 9 ? '9+' : unreadCount) : unreadCount }}
                         </span>
                     </Link>
                      <!-- Broadcast Announcements Modal Trigger (Admins & Support Roles) -->
@@ -310,8 +320,11 @@ const logout = () => {
 
             <!-- Mobile Top Header Bar (Only visible on small screens < md) -->
             <div class="md:hidden fixed top-0 inset-x-0 z-40 bg-cream-100 border-b border-cream-500/60 px-4 py-3 flex items-center justify-between">
-                <Link :href="route('dashboard')" class="flex items-center space-x-2">
-                    <ApplicationMark class="h-8 w-auto" />
+                <Link :href="route('dashboard')" class="flex items-center space-x-2.5 min-w-0">
+                    <ApplicationMark class="h-8 w-auto shrink-0" />
+                    <span class="font-bold text-gray-900 text-sm tracking-tight truncate">
+                        {{ $page.props.system_appearance?.name || 'LGUNET Portal' }}
+                    </span>
                 </Link>
 
                 <button
@@ -331,7 +344,12 @@ const logout = () => {
 
                 <aside class="relative bg-cream-100 w-72 h-full shadow-2xl flex flex-col justify-between z-10 border-r border-cream-500/60">
                     <div class="p-5 border-b border-cream-500/40 flex items-center justify-between">
-                        <ApplicationMark class="h-8 w-auto" />
+                        <div class="flex items-center space-x-2.5 min-w-0">
+                            <ApplicationMark class="h-8 w-auto shrink-0" />
+                            <span class="font-bold text-gray-900 text-sm tracking-tight truncate">
+                                {{ $page.props.system_appearance?.name || 'LGUNET Portal' }}
+                            </span>
+                        </div>
                         <button @click="showingMobileSidebar = false" class="text-gray-400 hover:text-gray-600">
                             <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -356,8 +374,8 @@ const logout = () => {
                             :class="route().current('chat.*') ? 'bg-forest-500 text-white' : 'text-gray-700 hover:bg-cream-200'"
                         >
                             <span>Messenger</span>
-                            <span v-if="$page.props.unread_messages_count > 0" class="px-2 py-0.5 text-xs font-bold bg-forest-600 text-white rounded-full">
-                                {{ $page.props.unread_messages_count }}
+                            <span v-if="unreadCount > 0" class="px-2 py-0.5 text-xs font-bold bg-forest-600 text-white rounded-full">
+                                {{ unreadCount }}
                             </span>
                         </Link>
 

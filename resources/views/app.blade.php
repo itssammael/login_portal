@@ -5,7 +5,8 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="csrf-token" content="{{ csrf_token() }}">
 
-        <title inertia>{{ config('app.name', 'Laravel') }}</title>
+        <title inertia>{{ \App\Models\SystemSetting::get('system_name', config('app.name', 'LGUNET Portal')) }}</title>
+        <link rel="icon" id="dynamic-favicon" href="{{ \App\Models\SystemSetting::getFaviconUrl() ?? asset('favicon.ico') }}">
 
         <!-- Fonts -->
         <link rel="preconnect" href="https://fonts.bunny.net">

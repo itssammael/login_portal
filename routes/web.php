@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\SsoPortalController;
+use App\Http\Controllers\Admin\SystemAppearanceController;
 use App\Http\Controllers\Admin\SystemRuleController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\Sso\ConnectedSystemsController;
@@ -97,6 +98,7 @@ Route::middleware([
 
     // Chat / Messenger Routes
     Route::get('/chat', [ChatController::class, 'index'])->name('chat.index');
+    Route::get('/chat/unread-count', [ChatController::class, 'unreadCount'])->name('chat.unread-count');
     Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])->name('chat.download-attachment');
     Route::post('/chat/direct', [ChatController::class, 'startDirect'])->name('chat.start-direct');
     Route::post('/chat/group', [ChatController::class, 'createGroup'])->name('chat.create-group');
@@ -141,6 +143,8 @@ Route::middleware([
         Route::post('/sso/{sso}/toggle', [SsoPortalController::class, 'toggle'])->name('sso.toggle');
         Route::post('/sso/{sso}/regenerate-secret', [SsoPortalController::class, 'regenerateSecret'])->name('sso.regenerate-secret');
         Route::delete('/sso/{sso}', [SsoPortalController::class, 'destroy'])->name('sso.destroy');
+        Route::get('/appearance', [SystemAppearanceController::class, 'index'])->name('appearance.index');
+        Route::post('/appearance', [SystemAppearanceController::class, 'update'])->name('appearance.update');
 
         // SSO Client Management Aliases
         Route::get('/sso-clients', [SsoPortalController::class, 'index'])->name('sso-clients.index');

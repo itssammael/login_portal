@@ -2,8 +2,8 @@
 
 namespace App\Http\Middleware;
 
-use App\Models\ConversationParticipant;
 use App\Models\SsoClient;
+use App\Models\SystemSetting;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -39,19 +39,7 @@ class HandleInertiaRequests extends Middleware
     {
         $user = $request->user();
 
-        $unreadCount = 0;
-        if ($user) {
-            $unreadCount = ConversationParticipant::query()
-                ->where('user_id', $user->id)
-                ->join('messages', 'messages.conversation_id', '=', 'conversation_participants.conversation_id')
-                ->where('messages.sender_id', '!=', $user->id)
-                ->where('messages.is_deleted', false)
-                ->where(function ($query) {
-                    $query->whereNull('conversation_participants.last_read_at')
-                        ->orWhereColumn('messages.created_at', '>', 'conversation_participants.last_read_at');
-                })
-                ->count();
-        }
+        $unreadCount = $user ? $user->unreadMessagesCount() : 0;
 
         return [
             ...parent::share($request),
@@ -95,6 +83,11 @@ class HandleInertiaRequests extends Middleware
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),
+            ],
+            'system_appearance' => [
+                'name' => SystemSetting::get('system_name', config('app.name', 'LGUNET Portal')),
+                'logo_url' => SystemSetting::getLogoUrl(),
+                'favicon_url' => SystemSetting::getFaviconUrl(),
             ],
         ];
     }

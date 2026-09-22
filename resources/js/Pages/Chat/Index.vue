@@ -360,7 +360,7 @@ onMounted(() => {
         window.Echo.channel('public-chat')
             .listen('.message.sent', (e) => {
                 console.log('[Reverb Echo] Broadcast message received:', e);
-                router.reload({ only: ['conversations', 'activeConversation'] });
+                router.reload({ only: ['conversations', 'activeConversation', 'unread_messages_count'] });
             });
     }
 });
