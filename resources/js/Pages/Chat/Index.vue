@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted } from 'vue';
-import { Head, Link, router, useForm } from '@inertiajs/vue3';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import DialogModal from '@/Components/DialogModal.vue';
 
@@ -19,6 +19,7 @@ const props = defineProps({
     },
 });
 
+const page = usePage();
 const searchQuery = ref('');
 const showNewChatModal = ref(false);
 const newChatSearch = ref('');
@@ -30,6 +31,8 @@ const showEmojiPicker = ref(false);
 const soundEnabled = ref(true);
 const activeReactionMessageId = ref(null);
 const showInfoPanel = ref(false);
+
+const pendingMessages = ref([]);
 
 const emojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👏', '🙏', '💯', '✨', '🚀'];
 const reactionMap = {
@@ -46,13 +49,25 @@ const messageForm = useForm({
     attachment: null,
 });
 
+// All messages combined (server messages + local pending messages)
+const allMessages = computed(() => {
+    if (!props.activeConversation) return [];
+    const serverMsgs = props.activeConversation.messages || [];
+    const activePending = pendingMessages.value.filter(
+        p => p.conversation_id === props.activeConversation.id
+    );
+    if (activePending.length === 0) return serverMsgs;
+    return [...serverMsgs, ...activePending];
+});
+
 // Filter conversations based on search
 const filteredConversations = computed(() => {
     if (!searchQuery.value.trim()) return props.conversations;
     const q = searchQuery.value.toLowerCase();
     return props.conversations.filter(c => 
         (c.title && c.title.toLowerCase().includes(q)) ||
-        (c.other_user && c.other_user.name.toLowerCase().includes(q))
+        (c.other_user && c.other_user.name.toLowerCase().includes(q)) ||
+        (c.participants && c.participants.some(p => p.name && p.name.toLowerCase().includes(q)))
     );
 });
 
@@ -157,19 +172,106 @@ const insertEmoji = (emoji) => {
     showEmojiPicker.value = false;
 };
 
-// Send message
+// Helper to format date matching server format (e.g. Sep 23, 1:50 am)
+const formatCurrentTime = () => {
+    const now = new Date();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[now.getMonth()];
+    const day = now.getDate();
+    let hours = now.getHours();
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    const ampm = hours >= 12 ? 'pm' : 'am';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${month} ${day}, ${hours}:${minutes} ${ampm}`;
+};
+
+// Send a single pending message via Inertia post
+const sendPendingMessage = (pendingMsg) => {
+    pendingMsg.status = 'sending';
+    let isSuccess = false;
+
+    router.post(
+        route('chat.send-message', pendingMsg.conversation_id),
+        {
+            body: pendingMsg.body || '',
+            attachment: pendingMsg.attachment_file || null,
+        },
+        {
+            preserveScroll: true,
+            onSuccess: () => {
+                isSuccess = true;
+                pendingMsg.status = 'sent';
+                nextTick(() => {
+                    const idx = pendingMessages.value.findIndex(p => p.id === pendingMsg.id);
+                    if (idx !== -1) {
+                        pendingMessages.value.splice(idx, 1);
+                    }
+                    scrollToBottom(true);
+                });
+            },
+            onError: (err) => {
+                console.error('Send message error:', err);
+                pendingMsg.status = 'failed';
+                scrollToBottom(true);
+            },
+            onFinish: () => {
+                if (!isSuccess && pendingMsg.status === 'sending') {
+                    pendingMsg.status = 'failed';
+                    scrollToBottom(true);
+                }
+            },
+        }
+    );
+};
+
+// Resend a failed message
+const resendMessage = (pendingMsg) => {
+    sendPendingMessage(pendingMsg);
+};
+
+// Send message (optimistic update)
 const sendMessage = () => {
     if (!props.activeConversation) return;
     if (!messageForm.body.trim() && !messageForm.attachment) return;
 
-    messageForm.post(route('chat.send-message', props.activeConversation.id), {
-        preserveScroll: true,
-        onSuccess: () => {
-            messageForm.reset('body');
-            clearSelectedFile();
-            scrollToBottom(true);
+    const bodyText = messageForm.body;
+    const fileObj = selectedFile.value;
+    const previewUrl = selectedFilePreview.value;
+    const conversationId = props.activeConversation.id;
+
+    const tempId = 'pending-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+    const currentUser = page.props.auth?.user || {};
+
+    const pendingMsg = ref({
+        id: tempId,
+        conversation_id: conversationId,
+        sender_id: currentUser.id,
+        sender: {
+            id: currentUser.id,
+            name: currentUser.name,
+            email: currentUser.email,
+            profile_photo_url: currentUser.profile_photo_url,
         },
+        body: bodyText,
+        type: fileObj ? (fileObj.type.startsWith('image/') ? 'image' : 'file') : 'text',
+        attachment_url: previewUrl,
+        attachment_name: fileObj ? fileObj.name : null,
+        attachment_type: fileObj ? fileObj.type : null,
+        attachment_file: fileObj,
+        is_deleted: false,
+        is_sender: true,
+        created_at: formatCurrentTime(),
+        status: 'sending',
     });
+
+    pendingMessages.value.push(pendingMsg.value);
+
+    messageForm.reset('body');
+    clearSelectedFile();
+    scrollToBottom(true);
+
+    sendPendingMessage(pendingMsg.value);
 };
 
 // Start or select direct conversation
@@ -214,6 +316,7 @@ const createGroupChat = () => {
 
 // Toggle emoji reaction on message
 const toggleReaction = (messageId, reactionKey) => {
+    if (typeof messageId === 'string' && messageId.startsWith('pending-')) return;
     activeReactionMessageId.value = null;
     router.post(route('chat.reaction', messageId), {
         reaction: reactionKey,
@@ -235,6 +338,14 @@ const closeDeleteModal = () => {
 
 const confirmDeleteMessage = () => {
     if (!deletingMessageId.value) return;
+    if (typeof deletingMessageId.value === 'string' && deletingMessageId.value.startsWith('pending-')) {
+        const idx = pendingMessages.value.findIndex(p => p.id === deletingMessageId.value);
+        if (idx !== -1) {
+            pendingMessages.value.splice(idx, 1);
+        }
+        closeDeleteModal();
+        return;
+    }
     router.delete(route('chat.delete-message', deletingMessageId.value), {
         preserveScroll: true,
         onFinish: () => closeDeleteModal(),
@@ -254,7 +365,7 @@ onMounted(() => {
     }
 });
 
-watch(() => props.activeConversation?.messages?.length, () => {
+watch(() => allMessages.value.length, () => {
     scrollToBottom(true);
 });
 
@@ -351,7 +462,16 @@ watch(() => props.activeConversation?.id, () => {
                                             class="size-12 rounded-full object-cover ring-2 ring-cream-300"
                                         />
                                         <span
-                                            v-if="conv.other_user?.is_online && !conv.is_system && conv.type !== 'system'"
+                                            v-if="conv.type === 'group'"
+                                            class="absolute bottom-0 right-0 size-4 bg-forest-700 text-white rounded-full flex items-center justify-center shadow-xs ring-1 ring-white"
+                                            title="Group chat"
+                                        >
+                                            <svg class="size-2.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.199l-.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                                            </svg>
+                                        </span>
+                                        <span
+                                            v-else-if="conv.other_user?.is_online && !conv.is_system && conv.type !== 'system'"
                                             class="absolute bottom-0 right-0 size-3.5 bg-forest-500 border-2 border-white rounded-full shadow-xs"
                                             title="Active now"
                                         ></span>
@@ -360,8 +480,9 @@ watch(() => props.activeConversation?.id, () => {
                                     <!-- Conversation Details -->
                                     <div class="min-w-0 flex-1">
                                         <div class="flex items-center justify-between mb-1">
-                                            <h4 class="text-sm font-semibold text-gray-900 truncate group-hover:text-forest-900 transition">
-                                                {{ (conv.is_system || conv.type === 'system') ? 'System Notifications' : conv.title }}
+                                            <h4 class="text-sm font-semibold text-gray-900 truncate group-hover:text-forest-900 transition flex items-center gap-1.5">
+                                                <span>{{ (conv.is_system || conv.type === 'system') ? 'System Notifications' : conv.title }}</span>
+                                                <span v-if="conv.type === 'group'" class="text-[10px] font-semibold px-1.5 py-0.5 bg-lime-200 text-forest-900 rounded-md shrink-0">Group</span>
                                             </h4>
                                             <span class="text-xs text-gray-500 shrink-0 ms-2">
                                                 {{ conv.latest_message?.created_at || conv.last_message_at }}
@@ -460,7 +581,16 @@ watch(() => props.activeConversation?.id, () => {
                                             class="size-10 rounded-full object-cover ring-2 ring-cream-300"
                                         />
                                         <span
-                                            v-if="activeConversation.other_user?.is_online && !activeConversation.is_system && activeConversation.type !== 'system'"
+                                            v-if="activeConversation.type === 'group'"
+                                            class="absolute bottom-0 right-0 size-3.5 bg-forest-700 text-white rounded-full flex items-center justify-center shadow-xs ring-1 ring-white"
+                                            title="Group chat"
+                                        >
+                                            <svg class="size-2" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.199l-.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                                            </svg>
+                                        </span>
+                                        <span
+                                            v-else-if="activeConversation.other_user?.is_online && !activeConversation.is_system && activeConversation.type !== 'system'"
                                             class="absolute bottom-0 right-0 size-3 bg-forest-500 border-2 border-white rounded-full"
                                         ></span>
                                     </div>
@@ -472,6 +602,9 @@ watch(() => props.activeConversation?.id, () => {
                                         <p class="text-xs text-gray-500 flex items-center">
                                             <span v-if="activeConversation.is_system || activeConversation.type === 'system'" class="text-amber-700 font-semibold">
                                                 Official System Notifications
+                                            </span>
+                                            <span v-else-if="activeConversation.type === 'group'" class="text-forest-700 font-medium">
+                                                Group Chat &bull; {{ activeConversation.participants?.length || 0 }} members
                                             </span>
                                             <span v-else-if="activeConversation.other_user?.is_online" class="text-forest-700 font-medium">
                                                 Active now
@@ -520,9 +653,9 @@ watch(() => props.activeConversation?.id, () => {
                                         ref="messagesContainer"
                                         class="flex-1 overflow-y-auto p-6 space-y-4 bg-cream-300"
                                     >
-                                        <template v-if="activeConversation.messages.length > 0">
+                                        <template v-if="allMessages.length > 0">
                                             <div
-                                                v-for="message in activeConversation.messages"
+                                                v-for="message in allMessages"
                                                 :key="message.id"
                                                 class="flex flex-col"
                                                 :class="message.is_sender ? 'items-end' : 'items-start'"
@@ -539,7 +672,7 @@ watch(() => props.activeConversation?.id, () => {
                                                 <div class="group flex items-center space-x-2.5 max-w-[90%] md:max-w-[80%]">
                                                     <!-- FOR SENDER: Reaction Popup Bar (Left side of bubble) -->
                                                     <div
-                                                        v-if="message.is_sender && !message.is_deleted"
+                                                        v-if="message.is_sender && !message.is_deleted && message.status !== 'sending' && message.status !== 'failed'"
                                                         class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150 flex items-center bg-cream-100 shadow-md border border-cream-500/40 rounded-full px-2.5 py-1 space-x-1 shrink-0 z-10"
                                                     >
                                                         <button
@@ -574,7 +707,9 @@ watch(() => props.activeConversation?.id, () => {
                                                                 message.is_sender
                                                                     ? 'bg-golden-500 text-gray-950 font-medium rounded-2xl rounded-tr-xs border border-golden-600/30'
                                                                     : 'bg-golden-400 text-gray-900 font-medium rounded-2xl rounded-tl-xs border border-golden-500/30',
-                                                                message.is_deleted ? 'italic opacity-60 text-xs' : ''
+                                                                message.is_deleted ? 'italic opacity-60 text-xs' : '',
+                                                                message.status === 'sending' ? 'opacity-90' : '',
+                                                                message.status === 'failed' ? 'border-red-400 bg-amber-100' : ''
                                                             ]"
                                                         >
                                                             <!-- Image Attachment -->
@@ -589,11 +724,11 @@ watch(() => props.activeConversation?.id, () => {
                                                             </div>
 
                                                             <!-- Document / File Attachment (Matches Reference Image 1 Attachment Card) -->
-                                                            <div v-else-if="message.attachment_url && message.type === 'file'" class="mb-1">
+                                                            <div v-else-if="(message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1">
                                                                 <a
-                                                                    :href="message.attachment_url"
-                                                                    target="_blank"
-                                                                    download
+                                                                    :href="message.attachment_url || '#'"
+                                                                    :target="message.attachment_url ? '_blank' : '_self'"
+                                                                    :download="!!message.attachment_url"
                                                                     class="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold shadow-xs"
                                                                     :class="message.is_sender ? 'bg-golden-600/20 text-gray-950 hover:bg-golden-600/30' : 'bg-golden-500/80 text-gray-950 hover:bg-golden-500'"
                                                                 >
@@ -646,12 +781,42 @@ watch(() => props.activeConversation?.id, () => {
                                                     </div>
                                                 </div>
 
-                                                <!-- Message Timestamp (Under Bubble) -->
+                                                <!-- Message Timestamp & Status (Under Bubble) -->
                                                 <div 
-                                                    class="text-[10px] text-gray-500 mt-1 px-1 flex items-center space-x-1"
+                                                    class="text-[10px] text-gray-500 mt-1 px-1 flex items-center space-x-1.5"
                                                     :class="message.is_sender ? 'justify-end' : 'justify-start'"
                                                 >
                                                     <span>{{ message.created_at }}</span>
+                                                    <template v-if="message.is_sender">
+                                                        <span class="text-gray-400">•</span>
+                                                        <!-- Sending Status -->
+                                                        <span v-if="message.status === 'sending'" class="text-amber-700 font-semibold inline-flex items-center space-x-1">
+                                                            <svg class="size-3 animate-spin text-amber-700" fill="none" viewBox="0 0 24 24">
+                                                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                            </svg>
+                                                            <span>Sending</span>
+                                                        </span>
+                                                        <!-- Failed to Send Status + Resend Button -->
+                                                        <span v-else-if="message.status === 'failed'" class="text-red-600 font-semibold inline-flex items-center space-x-1">
+                                                            <span>Failed to Send</span>
+                                                            <button
+                                                                type="button"
+                                                                @click="resendMessage(message)"
+                                                                class="ms-1 px-1.5 py-0.5 text-[10px] font-bold bg-red-100 hover:bg-red-200 text-red-700 rounded transition inline-flex items-center space-x-1 border border-red-300 cursor-pointer"
+                                                                title="Resend message"
+                                                            >
+                                                                <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                                                                </svg>
+                                                                <span>Resend</span>
+                                                            </button>
+                                                        </span>
+                                                        <!-- Sent Status -->
+                                                        <span v-else class="text-gray-500 font-medium">
+                                                            Sent
+                                                        </span>
+                                                    </template>
                                                 </div>
                                             </div>
                                         </template>

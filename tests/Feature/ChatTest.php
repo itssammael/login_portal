@@ -296,4 +296,54 @@ class ChatTest extends TestCase
         $deleteResponse = $this->actingAs($user)->delete(route('chat.delete-message', $message));
         $deleteResponse->assertForbidden();
     }
+
+    public function test_group_chat_without_messages_is_displayed_in_conversation_list_for_members(): void
+    {
+        $creator = User::factory()->create(['name' => 'Creator User']);
+        $member = User::factory()->create(['name' => 'Member User']);
+        $nonMember = User::factory()->create(['name' => 'Non Member User']);
+
+        // Create group chat without sending any message
+        $this->actingAs($creator)->post(route('chat.create-group'), [
+            'title' => 'Alpha Team Chat',
+            'user_ids' => [$member->id],
+        ]);
+
+        $group = Conversation::where('title', 'Alpha Team Chat')->first();
+        $this->assertNotNull($group);
+        $this->assertEquals(0, $group->messages()->count());
+
+        // Creator should see the group in conversations list
+        $creatorResponse = $this->actingAs($creator)->get(route('chat.index'));
+        $creatorResponse->assertOk();
+        $creatorResponse->assertInertia(fn ($page) => $page
+            ->where('conversations', function ($convs): bool {
+                $groupConv = collect($convs)->firstWhere('title', 'Alpha Team Chat');
+
+                return $groupConv !== null
+                    && $groupConv['type'] === 'group'
+                    && ! empty($groupConv['participants']);
+            })
+        );
+
+        // Member should also see the group in conversations list
+        $memberResponse = $this->actingAs($member)->get(route('chat.index'));
+        $memberResponse->assertOk();
+        $memberResponse->assertInertia(fn ($page) => $page
+            ->where('conversations', function ($convs): bool {
+                $groupConv = collect($convs)->firstWhere('title', 'Alpha Team Chat');
+
+                return $groupConv !== null
+                    && $groupConv['type'] === 'group';
+            })
+        );
+
+        // Non-member should NOT see the group in conversations list
+        $nonMemberResponse = $this->actingAs($nonMember)->get(route('chat.index'));
+        $nonMemberResponse->assertOk();
+        $nonMemberResponse->assertInertia(fn ($page) => $page
+            ->where('conversations', fn ($convs): bool => ! collect($convs)->contains('title', 'Alpha Team Chat')
+            )
+        );
+    }
 }

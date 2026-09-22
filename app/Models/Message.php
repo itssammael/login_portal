@@ -28,6 +28,14 @@ class Message extends Model
         });
     }
 
+    public const STATUS_FAILED = -1;
+
+    public const STATUS_SENT = 0;
+
+    public const STATUS_DELIVERED = 1;
+
+    public const STATUS_READ = 2;
+
     /**
      * The attributes that are mass assignable.
      *
@@ -41,6 +49,7 @@ class Message extends Model
         'attachment_path',
         'attachment_name',
         'attachment_type',
+        'status',
         'is_deleted',
     ];
 
@@ -61,6 +70,7 @@ class Message extends Model
     protected function casts(): array
     {
         return [
+            'status' => 'integer',
             'is_deleted' => 'boolean',
         ];
     }

@@ -88,6 +88,10 @@ class ChatController extends Controller
                         'is_online' => $otherUser->is_online,
                         'last_seen_at' => $otherUser->last_seen_at?->diffForHumans(),
                     ] : null,
+                    'participants' => $conversation->type === 'group' ? $conversation->users->map(fn (User $user): array => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                    ])->values()->all() : [],
                     'latest_message' => $latestMessage ? [
                         'id' => $latestMessage->id,
                         'body' => $latestMessageBody,
@@ -98,11 +102,11 @@ class ChatController extends Controller
                         'is_deleted' => $latestMessage->is_deleted,
                     ] : null,
                     'unread_count' => $conversation->unreadCountForUser($currentUser->id),
-                    'last_message_at' => $latestMessage ? $latestMessage->created_at->diffForHumans() : $conversation->last_message_at?->diffForHumans(),
+                    'last_message_at' => $latestMessage ? $latestMessage->created_at->diffForHumans() : ($conversation->last_message_at?->diffForHumans() ?? $conversation->created_at?->diffForHumans()),
                     'is_system' => $conversation->type === 'system',
                 ];
             })
-            ->filter(fn (array $conv) => $conv['type'] === 'system' || $conv['latest_message'] !== null)
+            ->filter(fn (array $conv) => $conv['type'] === 'system' || $conv['type'] === 'group' || $conv['latest_message'] !== null)
             ->values();
 
         // Determine active conversation
@@ -161,6 +165,7 @@ class ChatController extends Controller
                             'attachment_url' => $message->is_deleted ? null : $message->attachment_url,
                             'attachment_name' => $message->is_deleted ? null : $message->attachment_name,
                             'attachment_type' => $message->is_deleted ? null : $message->attachment_type,
+                            'status' => $message->status ?? Message::STATUS_SENT,
                             'is_deleted' => $message->is_deleted,
                             'is_sender' => $message->sender_id === $currentUser->id,
                             'created_at' => $message->created_at->format('M j, g:i a'),
@@ -395,6 +400,7 @@ class ChatController extends Controller
             'attachment_path' => $attachmentPath,
             'attachment_name' => $attachmentName,
             'attachment_type' => $attachmentType,
+            'status' => Message::STATUS_SENT,
         ]);
 
         $conversation->update(['last_message_at' => now()]);
