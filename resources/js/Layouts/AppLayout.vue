@@ -17,7 +17,7 @@ defineProps({
     title: String,
 });
 
-const isCollapsed = ref(localStorage.getItem('sidebar_collapsed') === 'false');
+const isCollapsed = ref(localStorage.getItem('sidebar_collapsed') === 'true');
 const showingMobileSidebar = ref(false);
 const showingAnnouncementModal = ref(false);
 
