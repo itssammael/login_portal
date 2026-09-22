@@ -255,17 +255,59 @@ const toggleSecretVisibility = (clientId) => {
     visibleSecrets.value[clientId] = !visibleSecrets.value[clientId];
 };
 
-const copyToClipboard = async (text, fieldKey) => {
+const copyTextUniversal = async (text) => {
+    if (text === undefined || text === null) return false;
+    const str = String(text);
+
+    // 1. Try modern navigator.clipboard API if available and in secure context
+    if (navigator?.clipboard?.writeText && window.isSecureContext) {
+        try {
+            await navigator.clipboard.writeText(str);
+            return true;
+        } catch (err) {
+            console.warn('navigator.clipboard.writeText failed, using execCommand fallback:', err);
+        }
+    }
+
+    // 2. Reliable fallback for non-secure HTTP / intranet / restricted clipboard contexts
     try {
-        await navigator.clipboard.writeText(text);
+        const textArea = document.createElement('textarea');
+        textArea.value = str;
+        textArea.style.position = 'fixed';
+        textArea.style.top = '0';
+        textArea.style.left = '-9999px';
+        textArea.style.width = '2em';
+        textArea.style.height = '2em';
+        textArea.style.padding = '0';
+        textArea.style.border = 'none';
+        textArea.style.outline = 'none';
+        textArea.style.boxShadow = 'none';
+        textArea.style.background = 'transparent';
+        textArea.setAttribute('readonly', '');
+        document.body.appendChild(textArea);
+
+        textArea.focus();
+        textArea.select();
+        textArea.setSelectionRange(0, textArea.value.length);
+
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        return successful;
+    } catch (fallbackErr) {
+        console.error('execCommand copy fallback failed: ', fallbackErr);
+        return false;
+    }
+};
+
+const copyToClipboard = async (text, fieldKey) => {
+    const success = await copyTextUniversal(text);
+    if (success) {
         copiedField.value = fieldKey;
         setTimeout(() => {
             if (copiedField.value === fieldKey) {
                 copiedField.value = null;
             }
         }, 2000);
-    } catch (err) {
-        console.error('Failed to copy text: ', err);
     }
 };
 
@@ -283,16 +325,15 @@ const closeDocsModal = () => {
 };
 
 const copyAiPromptToClipboard = async (promptText, key) => {
-    try {
-        await navigator.clipboard.writeText(promptText);
+    const textToCopy = promptText || activeClientDocData.value?.aiPrompt || activeModalDocData.value?.aiPrompt || '';
+    const success = await copyTextUniversal(textToCopy);
+    if (success) {
         copiedAiPromptKey.value = key;
         setTimeout(() => {
             if (copiedAiPromptKey.value === key) {
                 copiedAiPromptKey.value = null;
             }
         }, 2000);
-    } catch (err) {
-        console.error('Failed to copy AI prompt: ', err);
     }
 };
 
@@ -320,16 +361,15 @@ const activeModalDocData = computed(() => {
 });
 
 const copyCodeToClipboard = async (code, key) => {
-    try {
-        await navigator.clipboard.writeText(code);
+    if (!code) return;
+    const success = await copyTextUniversal(code);
+    if (success) {
         copiedCodeKey.value = key;
         setTimeout(() => {
             if (copiedCodeKey.value === key) {
                 copiedCodeKey.value = null;
             }
         }, 2000);
-    } catch (err) {
-        console.error('Failed to copy code: ', err);
     }
 };
 
@@ -1264,7 +1304,7 @@ const printDocsPdf = (docData) => {
                             </div>
                         </div>
                         <div class="text-[11px] text-gray-600 bg-white/60 p-2 rounded-lg border border-cream-200">
-                            <strong>OAuth 2.0 Base URL:</strong> <code class="font-mono text-forest-900">{{ activeClientDocData.portalUrl }}</code> | <strong>Authorize Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/oauth/authorize</code> | <strong>Token Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/oauth/token</code> | <strong>User Info Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/api/user</code>
+                            <strong>OAuth 2.0 Base URL:</strong> <code class="font-mono text-forest-900">{{ activeClientDocData.portalUrl }}</code> | <strong>Authorize Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/sso/authorize</code> | <strong>Token Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/api/sso/token</code> | <strong>User Info Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/api/user</code>
                         </div>
                     </div>
 
