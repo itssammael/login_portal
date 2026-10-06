@@ -6,6 +6,7 @@
 .envrc
 .phpactor.json
 .phpunit.result.cache
+/.agents
 /.codex
 /.cursor/
 /.idea
