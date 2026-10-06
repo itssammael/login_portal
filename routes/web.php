@@ -3,6 +3,7 @@
 use App\Events\MessageSent;
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\DepartmentController;
+use App\Http\Controllers\Admin\FeedbackController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\SsoPortalController;
 use App\Http\Controllers\Admin\SystemAppearanceController;
@@ -145,6 +146,34 @@ Route::middleware([
         Route::delete('/sso/{sso}', [SsoPortalController::class, 'destroy'])->name('sso.destroy');
         Route::get('/appearance', [SystemAppearanceController::class, 'index'])->name('appearance.index');
         Route::post('/appearance', [SystemAppearanceController::class, 'update'])->name('appearance.update');
+
+        // Feedback Module Admin Routes
+        Route::prefix('feedback')->name('feedback.')->group(function () {
+            Route::get('/setup', [FeedbackController::class, 'setup'])->name('setup');
+            Route::get('/submissions', [FeedbackController::class, 'submissions'])->name('submissions');
+
+            // Events CRUD & API Key
+            Route::post('/events', [FeedbackController::class, 'storeEvent'])->name('events.store');
+            Route::put('/events/{event}', [FeedbackController::class, 'updateEvent'])->name('events.update');
+            Route::post('/events/{event}/regenerate-key', [FeedbackController::class, 'regenerateApiKey'])->name('events.regenerate-key');
+            Route::delete('/events/{event}', [FeedbackController::class, 'destroyEvent'])->name('events.destroy');
+
+            // Functions CRUD
+            Route::post('/functions', [FeedbackController::class, 'storeFunction'])->name('functions.store');
+            Route::put('/functions/{function}', [FeedbackController::class, 'updateFunction'])->name('functions.update');
+            Route::delete('/functions/{function}', [FeedbackController::class, 'destroyFunction'])->name('functions.destroy');
+
+            // Agencies CRUD
+            Route::post('/agencies', [FeedbackController::class, 'storeAgency'])->name('agencies.store');
+            Route::delete('/agencies/{agency}', [FeedbackController::class, 'destroyAgency'])->name('agencies.destroy');
+
+            // Designations CRUD
+            Route::post('/designations', [FeedbackController::class, 'storeDesignation'])->name('designations.store');
+            Route::delete('/designations/{designation}', [FeedbackController::class, 'destroyDesignation'])->name('designations.destroy');
+
+            // Feedback Form Configuration
+            Route::post('/forms', [FeedbackController::class, 'saveForm'])->name('forms.save');
+        });
 
         // SSO Client Management Aliases
         Route::get('/sso-clients', [SsoPortalController::class, 'index'])->name('sso-clients.index');

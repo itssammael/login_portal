@@ -1,7 +1,9 @@
 <?php
 
+use App\Http\Controllers\Api\FeedbackApiController;
 use App\Http\Controllers\Api\LguActivityController;
 use App\Http\Controllers\Sso\SsoProviderController;
+use App\Http\Middleware\AuthenticateFeedbackApiKey;
 use App\Models\AuditLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -14,6 +16,13 @@ Route::post('/sso/token', [SsoProviderController::class, 'token'])->middleware('
 Route::get('/sso/userinfo', [SsoProviderController::class, 'userinfo'])->name('api.sso.userinfo');
 
 Route::get('/lgu-activities', [LguActivityController::class, 'index'])->name('api.lgu-activities');
+
+// Public Feedback API Routes (Protected by Event API Key and rate-limiting)
+Route::middleware(['throttle:60,1', AuthenticateFeedbackApiKey::class])->prefix('feedback')->name('api.feedback.')->group(function () {
+    Route::get('/form', [FeedbackApiController::class, 'form'])->name('form');
+    Route::get('/lookups', [FeedbackApiController::class, 'lookups'])->name('lookups');
+    Route::post('/submissions', [FeedbackApiController::class, 'submit'])->name('submissions');
+});
 
 Route::get('/announcements/latest', function () {
     $latest = AuditLog::with('admin:id,name,email')

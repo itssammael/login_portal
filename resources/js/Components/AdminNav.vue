@@ -4,9 +4,11 @@ import { Link, router } from '@inertiajs/vue3';
 
 const accountsOpen = ref(false);
 const systemOpen = ref(false);
+const feedbackOpen = ref(false);
 
 const accountsRef = ref(null);
 const systemRef = ref(null);
+const feedbackRef = ref(null);
 
 const isAccountsActive = computed(() => {
     return route().current('admin.users*') ||
@@ -22,10 +24,15 @@ const isSystemActive = computed(() => {
         route().current('admin.audit-logs');
 });
 
+const isFeedbackActive = computed(() => {
+    return route().current('admin.feedback.*');
+});
+
 const toggleAccounts = () => {
     accountsOpen.value = !accountsOpen.value;
     if (accountsOpen.value) {
         systemOpen.value = false;
+        feedbackOpen.value = false;
     }
 };
 
@@ -33,19 +40,30 @@ const toggleSystem = () => {
     systemOpen.value = !systemOpen.value;
     if (systemOpen.value) {
         accountsOpen.value = false;
+        feedbackOpen.value = false;
+    }
+};
+
+const toggleFeedback = () => {
+    feedbackOpen.value = !feedbackOpen.value;
+    if (feedbackOpen.value) {
+        accountsOpen.value = false;
+        systemOpen.value = false;
     }
 };
 
 const closeAll = () => {
     accountsOpen.value = false;
     systemOpen.value = false;
+    feedbackOpen.value = false;
 };
 
 const handleClickOutside = (event) => {
     const isInsideAccounts = accountsRef.value && accountsRef.value.contains(event.target);
     const isInsideSystem = systemRef.value && systemRef.value.contains(event.target);
+    const isInsideFeedback = feedbackRef.value && feedbackRef.value.contains(event.target);
 
-    if (!isInsideAccounts && !isInsideSystem) {
+    if (!isInsideAccounts && !isInsideSystem && !isInsideFeedback) {
         closeAll();
     }
 };
@@ -281,7 +299,72 @@ onUnmounted(() => {
                 </transition>
             </div>
 
-          
+            <!-- Feedback Floating Dropdown -->
+            <div ref="feedbackRef" class="relative">
+                <button
+                    type="button"
+                    @click="toggleFeedback"
+                    class="px-3.5 py-2 text-sm font-semibold rounded-xl transition-all whitespace-nowrap flex items-center space-x-2 focus:outline-none focus:ring-2 focus:ring-emerald-400/30"
+                    :class="isFeedbackActive ? 'bg-[#2d6a4f] text-white shadow-xs' : (feedbackOpen ? 'bg-forest-800/80 text-white' : 'text-emerald-100/75 hover:text-white hover:bg-forest-800/60')"
+                    aria-haspopup="true"
+                    :aria-expanded="feedbackOpen"
+                >
+                    <svg class="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
+                    </svg>
+                    <span>Feedback</span>
+                    <svg class="size-3.5 transition-transform duration-200" :class="{ 'rotate-180': feedbackOpen }" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                    </svg>
+                </button>
+
+                <!-- Floating Dropdown Menu -->
+                <transition
+                    enter-active-class="transition ease-out duration-150 transform"
+                    enter-from-class="opacity-0 scale-95 -translate-y-2"
+                    enter-to-class="opacity-100 scale-100 translate-y-0"
+                    leave-active-class="transition ease-in duration-100 transform"
+                    leave-from-class="opacity-100 scale-100 translate-y-0"
+                    leave-to-class="opacity-0 scale-95 -translate-y-2"
+                >
+                    <div
+                        v-show="feedbackOpen"
+                        class="absolute start-0 top-full mt-2 w-64 rounded-2xl bg-forest-900 border border-forest-700/80 shadow-2xl p-1.5 z-50 ring-1 ring-black/20 focus:outline-none backdrop-blur-md"
+                    >
+                        <div class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300/60">
+                            Feedback Module
+                        </div>
+
+                        <!-- Setup -->
+                        <Link
+                            :href="route('admin.feedback.setup')"
+                            @click="closeAll"
+                            class="flex items-center space-x-2.5 px-3 py-2 text-sm rounded-xl transition-all font-medium"
+                            :class="route().current('admin.feedback.setup*') ? 'bg-[#2d6a4f] text-white shadow-xs' : 'text-emerald-100/80 hover:text-white hover:bg-forest-800/70'"
+                        >
+                            <svg class="size-4 shrink-0 text-emerald-300" :class="{ 'text-white': route().current('admin.feedback.setup*') }" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.07a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091.455.088.928-.01 1.378" />
+                            </svg>
+                            <span class="flex-1">Setup</span>
+                            <span v-if="route().current('admin.feedback.setup*')" class="size-1.5 rounded-full bg-emerald-300"></span>
+                        </Link>
+
+                        <!-- Submissions -->
+                        <Link
+                            :href="route('admin.feedback.submissions')"
+                            @click="closeAll"
+                            class="flex items-center space-x-2.5 px-3 py-2 text-sm rounded-xl transition-all font-medium"
+                            :class="route().current('admin.feedback.submissions*') ? 'bg-[#2d6a4f] text-white shadow-xs' : 'text-emerald-100/80 hover:text-white hover:bg-forest-800/70'"
+                        >
+                            <svg class="size-4 shrink-0 text-emerald-300" :class="{ 'text-white': route().current('admin.feedback.submissions*') }" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+                            </svg>
+                            <span class="flex-1">Submissions</span>
+                            <span v-if="route().current('admin.feedback.submissions*')" class="size-1.5 rounded-full bg-emerald-300"></span>
+                        </Link>
+                    </div>
+                </transition>
+            </div>
 
             <!-- Announcements Tab -->
             <Link
