@@ -1,8 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue';
-import { Head, useForm, router } from '@inertiajs/vue3';
+import { ref, computed, watch } from 'vue';
+import { Head, useForm, router, usePage } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
+
+const page = usePage();
 
 const props = defineProps({
     events: {
@@ -33,24 +35,175 @@ const props = defineProps({
 
 const activeTab = ref('events'); // 'events' | 'functions' | 'lookups' | 'forms'
 const copiedKeyId = ref(null);
+const copiedRef = ref(null);
 const visibleKeys = ref({});
 
 const toggleKeyVisibility = (eventId) => {
     visibleKeys.value[eventId] = !visibleKeys.value[eventId];
 };
 
+const copyTextUniversal = async (text) => {
+    if (text === undefined || text === null) return false;
+    const str = String(text);
+
+    // 1. Try modern navigator.clipboard API if available and in secure context
+    if (typeof navigator !== 'undefined' && navigator?.clipboard?.writeText && window.isSecureContext) {
+        try {
+            await navigator.clipboard.writeText(str);
+            return true;
+        } catch (err) {
+            console.warn('navigator.clipboard.writeText failed, using execCommand fallback:', err);
+        }
+    }
+
+    // 2. Reliable fallback for non-secure HTTP / intranet / restricted clipboard contexts
+    try {
+        const textArea = document.createElement('textarea');
+        textArea.value = str;
+        textArea.style.position = 'fixed';
+        textArea.style.top = '0';
+        textArea.style.left = '-9999px';
+        textArea.style.width = '2em';
+        textArea.style.height = '2em';
+        textArea.style.padding = '0';
+        textArea.style.border = 'none';
+        textArea.style.outline = 'none';
+        textArea.style.boxShadow = 'none';
+        textArea.style.background = 'transparent';
+        textArea.setAttribute('readonly', '');
+        document.body.appendChild(textArea);
+
+        textArea.focus();
+        textArea.select();
+        textArea.setSelectionRange(0, textArea.value.length);
+
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        return successful;
+    } catch (fallbackErr) {
+        console.error('execCommand copy fallback failed: ', fallbackErr);
+        return false;
+    }
+};
+
 const copyApiKey = async (event) => {
     if (!event?.api_key) return;
-    try {
-        await navigator.clipboard.writeText(event.api_key);
+    const success = await copyTextUniversal(event.api_key);
+    if (success) {
         copiedKeyId.value = event.id;
         setTimeout(() => {
             if (copiedKeyId.value === event.id) copiedKeyId.value = null;
         }, 2500);
-    } catch (e) {
-        console.error('Failed to copy API key', e);
     }
 };
+
+const copyText = async (text, refKey) => {
+    if (!text) return;
+    const success = await copyTextUniversal(text);
+    if (success) {
+        copiedRef.value = refKey;
+        setTimeout(() => {
+            if (copiedRef.value === refKey) copiedRef.value = null;
+        }, 2500);
+    }
+};
+
+const getIframeSnippet = (event) => {
+    if (!event?.embed?.public_id) return '';
+    const url = route('feedback.embed.show', event.embed.public_id);
+    return `<iframe src="${url}?token=SESSION_TOKEN" title="Feedback form" style="width: 100%; min-height: 700px; border: 0;"></iframe>`;
+};
+
+// --- Embed Modal State & Handlers ---
+const showEmbedSettingsModal = ref(false);
+const eventForEmbedSettings = ref(null);
+const embedSettingsForm = useForm({
+    allowed_origins_text: '',
+    is_active: true,
+});
+
+const openEmbedOriginsModal = (event) => {
+    eventForEmbedSettings.value = event;
+    embedSettingsForm.clearErrors();
+    embedSettingsForm.allowed_origins_text = event.embed?.allowed_origins ? event.embed.allowed_origins.join('\n') : '';
+    embedSettingsForm.is_active = event.embed?.is_active ?? true;
+    showEmbedSettingsModal.value = true;
+};
+
+const closeEmbedSettingsModal = () => {
+    showEmbedSettingsModal.value = false;
+    eventForEmbedSettings.value = null;
+    embedSettingsForm.reset();
+};
+
+const saveEmbedSettings = () => {
+    if (!eventForEmbedSettings.value) return;
+
+    const origins = embedSettingsForm.allowed_origins_text
+        .split('\n')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+
+    embedSettingsForm.transform(() => ({
+        allowed_origins: origins,
+        is_active: embedSettingsForm.is_active,
+    })).put(route('admin.feedback.events.update-embed-origins', eventForEmbedSettings.value.id), {
+        preserveScroll: true,
+        onSuccess: () => closeEmbedSettingsModal(),
+    });
+};
+
+// Modal for Regenerate Public ID
+const showRegenerateEmbedIdModal = ref(false);
+const eventForRegenerateId = ref(null);
+
+const promptRegenerateEmbedId = (event) => {
+    eventForRegenerateId.value = event;
+    showRegenerateEmbedIdModal.value = true;
+};
+
+const confirmRegenerateEmbedId = () => {
+    if (!eventForRegenerateId.value) return;
+    router.post(route('admin.feedback.events.regenerate-embed-id', eventForRegenerateId.value.id), {}, {
+        preserveScroll: true,
+        onSuccess: () => {
+            showRegenerateEmbedIdModal.value = false;
+            eventForRegenerateId.value = null;
+        },
+    });
+};
+
+// Modal for Regenerate Client Secret
+const showRegenerateSecretModal = ref(false);
+const eventForRegenerateSecret = ref(null);
+
+const promptRegenerateSecret = (event) => {
+    eventForRegenerateSecret.value = event;
+    showRegenerateSecretModal.value = true;
+};
+
+const confirmRegenerateSecret = () => {
+    if (!eventForRegenerateSecret.value) return;
+    router.post(route('admin.feedback.events.regenerate-embed-secret', eventForRegenerateSecret.value.id), {}, {
+        preserveScroll: true,
+        onSuccess: () => {
+            showRegenerateSecretModal.value = false;
+            eventForRegenerateSecret.value = null;
+        },
+    });
+};
+
+// Modal for newly revealed secret (from flash session)
+const showRevealedSecretModal = ref(false);
+const revealedSecret = computed(() => {
+    return page.props.flash?.revealed_secret || null;
+});
+
+watch(() => page.props.flash?.revealed_secret, (val) => {
+    if (val) {
+        showRevealedSecretModal.value = true;
+    }
+}, { immediate: true });
 
 // --- Event Modal State & Form ---
 const showEventModal = ref(false);
@@ -761,6 +914,137 @@ const performDelete = () => {
                                         >
                                             Regenerate Key
                                         </button>
+                                    </div>
+                                </div>
+
+                                <!-- Secure Public Iframe Embed Card -->
+                                <div class="mt-3.5 bg-[#fffef9] p-3.5 rounded-xl border border-cream-500/60 shadow-xs space-y-3">
+                                    <div class="flex items-center justify-between text-[11px] font-bold text-forest-900">
+                                        <span class="flex items-center space-x-1.5">
+                                            <svg class="size-3.5 text-forest-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                            </svg>
+                                            <span>Public Iframe Integration</span>
+                                        </span>
+                                        <span
+                                            class="px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                                            :class="event.embed?.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'"
+                                        >
+                                            {{ event.embed?.is_active ? 'Embed Active' : 'Embed Disabled' }}
+                                        </span>
+                                    </div>
+
+                                    <!-- Public ID & Client ID Rows -->
+                                    <div class="space-y-2 text-xs">
+                                        <div>
+                                            <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Embed Public ID</div>
+                                            <div class="flex items-center space-x-2 min-w-0">
+                                                <input
+                                                    type="text"
+                                                    readonly
+                                                    :value="event.embed?.public_id || 'Not generated'"
+                                                    class="flex-1 min-w-0 px-2.5 py-1 bg-cream-100/70 border border-cream-400 rounded-lg text-[11px] font-mono select-all text-gray-800"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    @click="copyText(event.embed?.public_id, `pub_${event.id}`)"
+                                                    class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-[11px] font-semibold shrink-0 transition cursor-pointer"
+                                                >
+                                                    {{ copiedRef === `pub_${event.id}` ? '✓ Copied' : 'Copy' }}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-0.5">Client ID</div>
+                                            <div class="flex items-center space-x-2 min-w-0">
+                                                <input
+                                                    type="text"
+                                                    readonly
+                                                    :value="event.embed?.client_id || 'Not generated'"
+                                                    class="flex-1 min-w-0 px-2.5 py-1 bg-cream-100/70 border border-cream-400 rounded-lg text-[11px] font-mono select-all text-gray-800"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    @click="copyText(event.embed?.client_id, `client_${event.id}`)"
+                                                    class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-[11px] font-semibold shrink-0 transition cursor-pointer"
+                                                >
+                                                    {{ copiedRef === `client_${event.id}` ? '✓ Copied' : 'Copy' }}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Allowed Origins & Iframe Tag -->
+                                    <div class="space-y-1.5 pt-1">
+                                        <div class="flex items-center justify-between text-[10px]">
+                                            <span class="font-bold text-gray-600 uppercase tracking-wider">
+                                                Allowed Origins (CSP frame-ancestors)
+                                            </span>
+                                            <button
+                                                type="button"
+                                                @click="openEmbedOriginsModal(event)"
+                                                class="text-forest-800 hover:text-forest-950 font-semibold underline cursor-pointer"
+                                            >
+                                                Configure Origins
+                                            </button>
+                                        </div>
+
+                                        <div class="flex flex-wrap gap-1">
+                                            <template v-if="event.embed?.allowed_origins && event.embed.allowed_origins.length > 0">
+                                                <span
+                                                    v-for="orig in event.embed.allowed_origins"
+                                                    :key="orig"
+                                                    class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono bg-cream-200 text-gray-800 border border-cream-400"
+                                                >
+                                                    {{ orig }}
+                                                </span>
+                                            </template>
+                                            <span v-else class="text-[10px] text-gray-500 italic">
+                                                Allowing 'self' only. Configure parent origins to allow external framing.
+                                            </span>
+                                        </div>
+
+                                        <!-- Iframe snippet -->
+                                        <div class="mt-2">
+                                            <div class="flex items-center justify-between text-[10px] font-bold text-gray-600 mb-1">
+                                                <span>Iframe Embed Tag</span>
+                                                <button
+                                                    type="button"
+                                                    @click="copyText(getIframeSnippet(event), `snippet_${event.id}`)"
+                                                    class="text-forest-800 hover:text-forest-950 font-semibold underline cursor-pointer"
+                                                >
+                                                    {{ copiedRef === `snippet_${event.id}` ? '✓ Copied Tag' : 'Copy Iframe Tag' }}
+                                                </button>
+                                            </div>
+                                            <textarea
+                                                readonly
+                                                rows="2"
+                                                :value="getIframeSnippet(event)"
+                                                class="w-full px-2 py-1 bg-cream-100/70 border border-cream-400 rounded-lg text-[10px] font-mono select-all text-gray-700"
+                                            ></textarea>
+                                            <p class="text-[10px] text-gray-500 mt-1 leading-normal">
+                                                Your backend requests a 5-minute single-use session token via <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[9px]">POST /api/feedback/embed/sessions</code> and injects the resulting <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[9px]">iframe_url</code> into your template.
+                                            </p>
+                                        </div>
+
+                                        <!-- Action Links for Regeneration -->
+                                        <div class="mt-2 pt-2 border-t border-cream-300 flex items-center justify-between text-[10px]">
+                                            <button
+                                                type="button"
+                                                @click="promptRegenerateEmbedId(event)"
+                                                class="text-amber-800 hover:text-amber-950 font-medium cursor-pointer"
+                                            >
+                                                Regenerate Public ID
+                                            </button>
+                                            <button
+                                                type="button"
+                                                @click="promptRegenerateSecret(event)"
+                                                class="text-amber-800 hover:text-amber-950 font-medium cursor-pointer"
+                                            >
+                                                Regenerate Client Secret
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1691,6 +1975,206 @@ const performDelete = () => {
                         class="px-5 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl shadow-xs transition cursor-pointer"
                     >
                         Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Embed Settings Modal -->
+        <div v-if="showEmbedSettingsModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div class="bg-cream-100 rounded-3xl max-w-lg w-full shadow-2xl p-6 border border-cream-500/70 space-y-4">
+                <div class="flex items-start justify-between border-b border-cream-400 pb-3">
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">
+                            Configure Allowed Origins
+                        </h3>
+                        <p class="text-xs text-gray-500 mt-0.5">
+                            {{ eventForEmbedSettings?.name }}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        @click="closeEmbedSettingsModal"
+                        class="text-gray-400 hover:text-gray-700 p-1 rounded-lg"
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                <form @submit.prevent="saveEmbedSettings" class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1.5">
+                            Trusted Parent Domains (Content Security Policy)
+                        </label>
+                        <p class="text-[11px] text-gray-500 mb-2">
+                            Enter the exact origins of external sites permitted to embed this form in an iframe (e.g. <code>https://portal.lgu.gov.ph</code>), one per line.
+                        </p>
+                        <textarea
+                            v-model="embedSettingsForm.allowed_origins_text"
+                            rows="4"
+                            placeholder="https://example.gov.ph&#10;https://dashboard.lgu.gov.ph"
+                            class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs font-mono"
+                        ></textarea>
+                    </div>
+
+                    <div class="p-3 bg-cream-200/70 rounded-xl border border-cream-400 flex items-center justify-between">
+                        <div>
+                            <span class="text-xs font-bold text-gray-800 block">Enable Iframe Embedding</span>
+                            <span class="text-[11px] text-gray-500 block">Allow external sessions to load and submit feedback</span>
+                        </div>
+                        <input
+                            type="checkbox"
+                            v-model="embedSettingsForm.is_active"
+                            class="rounded text-forest-900 focus:ring-forest-500 size-4.5"
+                        />
+                    </div>
+
+                    <div class="pt-3 border-t border-cream-400 flex items-center justify-end space-x-2.5">
+                        <button
+                            type="button"
+                            @click="closeEmbedSettingsModal"
+                            class="px-4 py-2 bg-cream-200 hover:bg-cream-300 text-gray-800 text-xs font-semibold rounded-xl transition"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            :disabled="embedSettingsForm.processing"
+                            class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-semibold rounded-xl shadow-xs transition disabled:opacity-50"
+                        >
+                            {{ embedSettingsForm.processing ? 'Saving...' : 'Save Configuration' }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Regenerate Embed Public ID Modal -->
+        <div v-if="showRegenerateEmbedIdModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div class="bg-cream-200 rounded-3xl max-w-md w-full shadow-2xl p-6 text-center border border-cream-500/60 space-y-4">
+                <div class="size-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-inner">
+                    <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                </div>
+
+                <h3 class="text-base font-bold text-gray-900">
+                    Regenerate Public Embed ID?
+                </h3>
+
+                <p class="text-xs text-gray-600 leading-relaxed">
+                    Are you sure you want to regenerate the Public Embed ID for <strong>{{ eventForRegenerateId?.name }}</strong>?
+                    <span class="block mt-1 text-red-600 font-semibold">
+                        Existing websites embedding this form with the old ID will stop loading immediately, and all active iframe sessions will be invalidated.
+                    </span>
+                </p>
+
+                <div class="pt-2 flex items-center justify-center space-x-3">
+                    <button
+                        type="button"
+                        @click="showRegenerateEmbedIdModal = false; eventForRegenerateId = null;"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-xs font-semibold rounded-xl transition"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        @click="confirmRegenerateEmbedId"
+                        class="px-5 py-2 bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold rounded-xl shadow-xs transition"
+                    >
+                        Regenerate Public ID
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Regenerate Client Secret Modal -->
+        <div v-if="showRegenerateSecretModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div class="bg-cream-200 rounded-3xl max-w-md w-full shadow-2xl p-6 text-center border border-cream-500/60 space-y-4">
+                <div class="size-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-inner">
+                    <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                    </svg>
+                </div>
+
+                <h3 class="text-base font-bold text-gray-900">
+                    Regenerate Client Secret?
+                </h3>
+
+                <p class="text-xs text-gray-600 leading-relaxed">
+                    Regenerating the integration secret for <strong>{{ eventForRegenerateSecret?.name }}</strong> will invalidate external backend sessions.
+                    The new secret will be displayed <strong>once</strong> for you to copy.
+                </p>
+
+                <div class="pt-2 flex items-center justify-center space-x-3">
+                    <button
+                        type="button"
+                        @click="showRegenerateSecretModal = false; eventForRegenerateSecret = null;"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-xs font-semibold rounded-xl transition"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        @click="confirmRegenerateSecret"
+                        class="px-5 py-2 bg-amber-700 hover:bg-amber-800 text-white text-xs font-semibold rounded-xl shadow-xs transition"
+                    >
+                        Regenerate Secret
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- One-Time Revealed Client Secret Modal -->
+        <div v-if="showRevealedSecretModal && revealedSecret" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div class="bg-[#fffef9] rounded-3xl max-w-lg w-full shadow-2xl p-6 border border-amber-300 space-y-4">
+                <div class="flex items-center space-x-3 text-amber-900">
+                    <div class="size-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                        <svg class="size-5 text-amber-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.008v.008H12v-.008z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">New Client Secret Generated</h3>
+                        <p class="text-xs text-amber-800">Copy and store this secret securely now. It will not be shown again.</p>
+                    </div>
+                </div>
+
+                <div class="p-3 bg-amber-50 rounded-2xl border border-amber-200 space-y-3">
+                    <div>
+                        <div class="text-[10px] font-bold text-amber-900 uppercase tracking-wider mb-0.5">Client ID</div>
+                        <div class="text-xs font-mono text-gray-800 bg-white p-2 rounded-lg border border-amber-300 select-all">
+                            {{ revealedSecret.client_id }}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="text-[10px] font-bold text-amber-900 uppercase tracking-wider mb-0.5">Client Secret (Store Securely)</div>
+                        <div class="flex items-center space-x-1.5">
+                            <input
+                                type="text"
+                                readonly
+                                :value="revealedSecret.client_secret"
+                                class="flex-1 px-3 py-2 bg-white border border-amber-400 rounded-lg text-xs font-mono font-bold select-all text-gray-900"
+                            />
+                            <button
+                                type="button"
+                                @click="copyText(revealedSecret.client_secret, 'revealed_secret')"
+                                class="px-3 py-2 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-xs font-semibold shrink-0 transition"
+                            >
+                                {{ copiedRef === 'revealed_secret' ? '✓ Copied' : 'Copy Secret' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-2 flex items-center justify-end">
+                    <button
+                        type="button"
+                        @click="showRevealedSecretModal = false;"
+                        class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition"
+                    >
+                        I Have Saved the Secret
                     </button>
                 </div>
             </div>

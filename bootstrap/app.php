@@ -25,6 +25,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         $middleware->validateCsrfTokens(except: [
+            'embed/feedback/*',
             'sso/token',
             'connected-systems/*/bind',
             'connected-systems/*/unbind',

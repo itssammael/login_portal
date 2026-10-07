@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\SsoPortalController;
 use App\Http\Controllers\Admin\SystemAppearanceController;
 use App\Http\Controllers\Admin\SystemRuleController;
 use App\Http\Controllers\ChatController;
+use App\Http\Controllers\FeedbackEmbedController;
 use App\Http\Controllers\FeedbackFormController;
 use App\Http\Controllers\Sso\ConnectedSystemsController;
 use App\Http\Controllers\Sso\SsoProviderController;
@@ -28,6 +29,10 @@ Route::get('/', function () {
         'phpVersion' => PHP_VERSION,
     ]);
 });
+
+// Public Embedded Feedback Form Routes (Session-authenticated & frame-protected)
+Route::get('/embed/feedback/{publicId}', [FeedbackEmbedController::class, 'show'])->name('feedback.embed.show');
+Route::post('/embed/feedback/{publicId}', [FeedbackEmbedController::class, 'submit'])->middleware('throttle:30,1')->name('feedback.embed.submit');
 
 Route::get('/sso/authorize', [SsoProviderController::class, 'authorize'])->name('sso.authorize');
 Route::post('/sso/token', [SsoProviderController::class, 'token'])->middleware('throttle:60,1')->name('sso.token');
@@ -157,10 +162,13 @@ Route::middleware([
             Route::get('/setup', [FeedbackController::class, 'setup'])->name('setup');
             Route::get('/submissions', [FeedbackController::class, 'submissions'])->name('submissions');
 
-            // Events CRUD & API Key
+            // Events CRUD, API Key & Embed
             Route::post('/events', [FeedbackController::class, 'storeEvent'])->name('events.store');
             Route::put('/events/{event}', [FeedbackController::class, 'updateEvent'])->name('events.update');
             Route::post('/events/{event}/regenerate-key', [FeedbackController::class, 'regenerateApiKey'])->name('events.regenerate-key');
+            Route::post('/events/{event}/regenerate-embed-id', [FeedbackController::class, 'regenerateEmbedId'])->name('events.regenerate-embed-id');
+            Route::post('/events/{event}/regenerate-embed-secret', [FeedbackController::class, 'regenerateEmbedSecret'])->name('events.regenerate-embed-secret');
+            Route::put('/events/{event}/update-embed-origins', [FeedbackController::class, 'updateEmbedOrigins'])->name('events.update-embed-origins');
             Route::delete('/events/{event}', [FeedbackController::class, 'destroyEvent'])->name('events.destroy');
 
             // Functions CRUD

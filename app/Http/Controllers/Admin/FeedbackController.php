@@ -30,10 +30,17 @@ class FeedbackController extends Controller
     public function setup(Request $request): Response
     {
         $events = FbEvent::query()
-            ->with(['creator:id,name,email', 'feedback', 'functions:id,function,details'])
+            ->with(['creator:id,name,email', 'feedback', 'functions:id,function,details', 'embed'])
             ->withCount(['feedback', 'functions'])
             ->latest()
             ->get();
+
+        foreach ($events as $event) {
+            if (! $event->embed) {
+                $event->embed()->create();
+                $event->load('embed');
+            }
+        }
 
         $functions = FbFunction::query()
             ->with(['events:id,name', 'creator:id,name,email'])
@@ -201,6 +208,92 @@ class FeedbackController extends Controller
         ]);
 
         return back()->with('success', "API Key for '{$event->name}' has been regenerated successfully.");
+    }
+
+    /**
+     * Regenerate public embed UUID for an event.
+     */
+    public function regenerateEmbedId(Request $request, FbEvent $event): RedirectResponse
+    {
+        $admin = $request->user();
+        $embed = $event->embed ?: $event->embed()->create();
+        $newPublicId = $embed->regeneratePublicId();
+
+        AuditLog::create([
+            'admin_id' => $admin->id,
+            'action' => 'regenerated_feedback_embed_id',
+            'target_type' => FbEvent::class,
+            'target_id' => $event->id,
+            'details' => [
+                'event_name' => $event->name,
+                'public_id' => $newPublicId,
+            ],
+        ]);
+
+        return back()->with('success', "Public embed ID for '{$event->name}' has been regenerated. Previous iframe embeds have been invalidated.");
+    }
+
+    /**
+     * Regenerate client secret for an event embed integration.
+     */
+    public function regenerateEmbedSecret(Request $request, FbEvent $event): RedirectResponse
+    {
+        $admin = $request->user();
+        $embed = $event->embed ?: $event->embed()->create();
+        $newSecret = $embed->regenerateSecret();
+
+        AuditLog::create([
+            'admin_id' => $admin->id,
+            'action' => 'regenerated_feedback_embed_secret',
+            'target_type' => FbEvent::class,
+            'target_id' => $event->id,
+            'details' => [
+                'event_name' => $event->name,
+                'client_id' => $embed->client_id,
+            ],
+        ]);
+
+        return back()->with([
+            'success' => "Client secret for '{$event->name}' has been regenerated. Please store it securely.",
+            'revealed_secret' => [
+                'event_id' => $event->id,
+                'client_id' => $embed->client_id,
+                'client_secret' => $newSecret,
+            ],
+        ]);
+    }
+
+    /**
+     * Update embed allowed origins and status for an event.
+     */
+    public function updateEmbedOrigins(Request $request, FbEvent $event): RedirectResponse
+    {
+        $admin = $request->user();
+        $request->validate([
+            'allowed_origins' => ['nullable', 'array'],
+            'allowed_origins.*' => ['string', 'max:255'],
+            'is_active' => ['nullable', 'boolean'],
+        ]);
+
+        $embed = $event->embed ?: $event->embed()->create();
+        $embed->update([
+            'allowed_origins' => $request->input('allowed_origins'),
+            'is_active' => $request->boolean('is_active', true),
+        ]);
+
+        AuditLog::create([
+            'admin_id' => $admin->id,
+            'action' => 'updated_feedback_embed_origins',
+            'target_type' => FbEvent::class,
+            'target_id' => $event->id,
+            'details' => [
+                'event_name' => $event->name,
+                'allowed_origins' => $embed->allowed_origins,
+                'is_active' => $embed->is_active,
+            ],
+        ]);
+
+        return back()->with('success', "Embed settings for '{$event->name}' updated successfully.");
     }
 
     /**

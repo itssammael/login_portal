@@ -26,6 +26,9 @@ class FbSubmission extends Model
     protected $fillable = [
         'feedback_id',
         'participant_id',
+        'embed_id',
+        'embed_session_id',
+        'respondent_hash',
         'data',
     ];
 
@@ -52,6 +55,22 @@ class FbSubmission extends Model
     public function participant(): BelongsTo
     {
         return $this->belongsTo(FbParticipant::class, 'participant_id');
+    }
+
+    /**
+     * Get the embed configuration associated with this submission if submitted via iframe.
+     */
+    public function embed(): BelongsTo
+    {
+        return $this->belongsTo(FeedbackEmbed::class, 'embed_id');
+    }
+
+    /**
+     * Get the embed session associated with this submission.
+     */
+    public function embedSession(): BelongsTo
+    {
+        return $this->belongsTo(FeedbackEmbedSession::class, 'embed_session_id');
     }
 
     /**

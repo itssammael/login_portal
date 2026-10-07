@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\FeedbackApiController;
+use App\Http\Controllers\Api\FeedbackEmbedSessionApiController;
 use App\Http\Controllers\Api\LguActivityController;
 use App\Http\Controllers\Sso\SsoProviderController;
 use App\Http\Middleware\AuthenticateFeedbackApiKey;
@@ -16,6 +17,11 @@ Route::post('/sso/token', [SsoProviderController::class, 'token'])->middleware('
 Route::get('/sso/userinfo', [SsoProviderController::class, 'userinfo'])->name('api.sso.userinfo');
 
 Route::get('/lgu-activities', [LguActivityController::class, 'index'])->name('api.lgu-activities');
+
+// External Backend Embed Session Generation (Authenticated via Client ID and Client Secret)
+Route::post('/feedback/embed/sessions', [FeedbackEmbedSessionApiController::class, 'store'])
+    ->middleware('throttle:60,1')
+    ->name('api.feedback.embed.sessions');
 
 // Public Feedback API Routes (Protected by Event API Key and rate-limiting)
 Route::middleware(['throttle:60,1', AuthenticateFeedbackApiKey::class])->prefix('feedback')->name('api.feedback.')->group(function () {

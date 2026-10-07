@@ -30,6 +30,12 @@ class FbEvent extends Model
                 $event->api_key = self::generateUniqueApiKey();
             }
         });
+
+        static::created(function (FbEvent $event): void {
+            if (! $event->embed()->exists()) {
+                $event->embed()->create();
+            }
+        });
     }
 
     /**
@@ -62,6 +68,16 @@ class FbEvent extends Model
     public function feedback(): HasOne
     {
         return $this->hasOne(Feedback::class, 'event_id');
+    }
+
+    /**
+     * The public embed configuration for this event.
+     *
+     * @return HasOne<FeedbackEmbed, FbEvent>
+     */
+    public function embed(): HasOne
+    {
+        return $this->hasOne(FeedbackEmbed::class, 'event_id');
     }
 
     /**
