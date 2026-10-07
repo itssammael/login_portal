@@ -60,6 +60,102 @@ const serverErrors = ref({});
 const submissionSuccess = ref(false);
 const submittedRecord = ref(null);
 
+// Temporary quick go-to error navigation & highlighting state
+const highlightedFieldId = ref(null);
+let highlightTimer = null;
+const showQuickErrorToast = ref(false);
+let quickErrorToastTimer = null;
+let currentErrorIndex = 0;
+
+// Extract list of fields with validation errors
+const errorFieldsList = computed(() => {
+    const list = [];
+    const seenFieldIds = new Set();
+    const errorKeys = Object.keys(serverErrors.value).filter((k) => k !== 'general');
+
+    errorKeys.forEach((key) => {
+        let fieldId = key;
+        if (fieldId.startsWith('answers.')) {
+            fieldId = fieldId.substring(8);
+        } else if (fieldId.startsWith('data.')) {
+            fieldId = fieldId.substring(5);
+        }
+        const isOther = fieldId.endsWith('_other');
+        if (isOther) {
+            fieldId = fieldId.substring(0, fieldId.length - 6);
+        }
+
+        if (!seenFieldIds.has(fieldId)) {
+            seenFieldIds.add(fieldId);
+            const field = sortedFields.value.find((f) => String(f.id) === String(fieldId));
+            const errorMsg = serverErrors.value[key]?.[0]
+                || getFieldError(fieldId)
+                || getOtherFieldError(fieldId)
+                || 'This field requires your attention.';
+
+            list.push({
+                id: fieldId,
+                particular: field?.particular || `Question (${fieldId})`,
+                weight: field?.weight || null,
+                message: errorMsg,
+                isOther,
+            });
+        }
+    });
+
+    return list;
+});
+
+// Temporarily highlight a field and clear after 3.5 seconds
+const highlightField = (fieldId) => {
+    highlightedFieldId.value = fieldId;
+    if (highlightTimer) {
+        clearTimeout(highlightTimer);
+    }
+    highlightTimer = setTimeout(() => {
+        highlightedFieldId.value = null;
+    }, 3500);
+};
+
+// Scroll to error field, focus input, and apply temporary highlight
+const goToErrorField = (fieldId) => {
+    if (!fieldId) return;
+
+    highlightField(fieldId);
+
+    const containerEl = document.getElementById(`field_container_${fieldId}`);
+    if (containerEl) {
+        containerEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    const inputEl = document.getElementById(`input_${fieldId}`)
+        || containerEl?.querySelector('input:not([type=hidden]), textarea, select, [tabindex="0"]');
+
+    if (inputEl) {
+        setTimeout(() => {
+            try {
+                inputEl.focus();
+            } catch (e) {
+                // Ignore focus errors
+            }
+        }, 350);
+    }
+};
+
+const goToFirstError = () => {
+    if (errorFieldsList.value.length > 0) {
+        currentErrorIndex = 0;
+        goToErrorField(errorFieldsList.value[0].id);
+    }
+};
+
+const goToNextError = () => {
+    if (errorFieldsList.value.length === 0) return;
+    const item = errorFieldsList.value[currentErrorIndex % errorFieldsList.value.length];
+    currentErrorIndex++;
+    goToErrorField(item.id);
+};
+
 // Determine if the currently selected value for a field is marked as an "other" option
 const isOtherSelected = (field) => {
     if (!field.allow_other) return false;
@@ -95,6 +191,7 @@ const handleCheckboxToggle = (fieldId, optionValue) => {
 const submitForm = async () => {
     isSubmitting.value = true;
     serverErrors.value = {};
+    showQuickErrorToast.value = false;
 
     const payload = {
         event_id: props.event?.id || null,
@@ -107,10 +204,24 @@ const submitForm = async () => {
         if (response.status === 201 || response.status === 200) {
             submissionSuccess.value = true;
             submittedRecord.value = response.data?.data || null;
+            serverErrors.value = {};
+            showQuickErrorToast.value = false;
         }
     } catch (error) {
         if (error.response && error.response.status === 422) {
             serverErrors.value = error.response.data.errors || {};
+            showQuickErrorToast.value = true;
+
+            // Automatically jump to and temporarily highlight the first error field
+            setTimeout(() => {
+                goToFirstError();
+            }, 150);
+
+            // Keep toast visible for 15s or until dismissed
+            if (quickErrorToastTimer) clearTimeout(quickErrorToastTimer);
+            quickErrorToastTimer = setTimeout(() => {
+                showQuickErrorToast.value = false;
+            }, 15000);
         } else {
             serverErrors.value = {
                 general: [error.response?.data?.message || 'An unexpected error occurred while submitting feedback. Please try again.'],
@@ -125,6 +236,8 @@ const resetForAnotherSubmission = () => {
     submissionSuccess.value = false;
     submittedRecord.value = null;
     serverErrors.value = {};
+    showQuickErrorToast.value = false;
+    highlightedFieldId.value = null;
     initAnswers();
 };
 
@@ -234,7 +347,14 @@ const getOtherFieldError = (fieldId) => {
                                 v-for="(field, index) in sortedFields"
                                 :key="field.id"
                                 :id="`field_container_${field.id}`"
-                                class="p-5 rounded-2xl bg-cream-100/50 border border-cream-400/60 space-y-3 transition hover:border-forest-600/40"
+                                class="p-5 rounded-2xl border space-y-3 transition-all duration-300"
+                                :class="[
+                                    highlightedFieldId === field.id
+                                        ? 'ring-4 ring-red-500/80 ring-offset-2 border-red-500 bg-red-50/90 shadow-xl scale-[1.01] animate-pulse'
+                                        : (getFieldError(field.id) || getOtherFieldError(field.id)
+                                            ? 'border-red-400 bg-red-50/30'
+                                            : 'bg-cream-100/50 border-cream-400/60 hover:border-forest-600/40')
+                                ]"
                             >
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="flex items-center space-x-2">
@@ -426,6 +546,60 @@ const getOtherFieldError = (fieldId) => {
                         </div>
                     </div>
 
+                    <!-- Submission Validation Errors Bar with Quick Go-To Links -->
+                    <div
+                        v-if="errorFieldsList.length > 0"
+                        id="submission_errors_banner"
+                        class="p-5 bg-red-50/95 border-2 border-red-300 rounded-3xl shadow-sm space-y-3.5 transition-all"
+                    >
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div class="flex items-center space-x-2.5 text-red-950 font-bold text-xs sm:text-sm">
+                                <span class="size-7 rounded-xl bg-red-200 text-red-900 flex items-center justify-center text-xs shrink-0 font-black shadow-2xs">
+                                    !
+                                </span>
+                                <div>
+                                    <span class="block font-black text-red-900">
+                                        Submission Incomplete
+                                    </span>
+                                    <span class="text-xs text-red-700 font-medium">
+                                        Please review {{ errorFieldsList.length }} field{{ errorFieldsList.length > 1 ? 's' : '' }} with missing or invalid input.
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Primary Quick Go-To Action Link -->
+                            <button
+                                type="button"
+                                @click="goToFirstError"
+                                class="inline-flex items-center justify-center space-x-1.5 px-4 py-2 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer shrink-0"
+                            >
+                                <span>⚡ Quick Go To First Error</span>
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- Individual Question Error Quick Jump Chips -->
+                        <div class="pt-2.5 border-t border-red-200/80 flex flex-wrap items-center gap-1.5">
+                            <span class="text-[11px] font-bold text-red-800 me-1">Jump to field:</span>
+                            <button
+                                v-for="item in errorFieldsList"
+                                :key="item.id"
+                                type="button"
+                                @click="goToErrorField(item.id)"
+                                class="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-white hover:bg-red-100/90 active:bg-red-200 text-red-900 border border-red-300 hover:border-red-400 rounded-lg text-xs font-semibold shadow-2xs transition cursor-pointer"
+                                :title="item.message"
+                            >
+                                <span class="size-4 rounded-full bg-red-100 text-red-800 text-[10px] font-black flex items-center justify-center shrink-0">
+                                    {{ item.weight || '!' }}
+                                </span>
+                                <span class="truncate max-w-[160px]">{{ item.particular }}</span>
+                                <span class="text-red-500 text-[10px]">↗</span>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Submission Action Bar -->
                     <div class="bg-[#fffef9] rounded-3xl p-6 border border-cream-500/70 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
                         <div class="text-xs text-gray-500 text-center sm:text-left">
@@ -495,5 +669,47 @@ const getOtherFieldError = (fieldId) => {
                 </div>
             </div>
         </div>
+        <!-- Floating Quick Go-To Link Toast for Submission Errors -->
+        <transition
+            enter-active-class="transition duration-300 ease-out"
+            enter-from-class="transform translate-y-6 opacity-0"
+            enter-to-class="transform translate-y-0 opacity-100"
+            leave-active-class="transition duration-200 ease-in"
+            leave-from-class="transform translate-y-0 opacity-100"
+            leave-to-class="transform translate-y-6 opacity-0"
+        >
+            <div
+                v-if="showQuickErrorToast && errorFieldsList.length > 0"
+                class="fixed bottom-6 right-6 z-50 max-w-sm sm:max-w-md bg-white border-2 border-red-400 rounded-2xl shadow-2xl p-3.5 flex items-center space-x-3 text-xs"
+            >
+                <div class="size-9 rounded-xl bg-red-100 text-red-700 flex items-center justify-center shrink-0 text-base font-bold shadow-2xs">
+                    ⚠️
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="font-bold text-gray-900 leading-tight">
+                        {{ errorFieldsList.length }} field{{ errorFieldsList.length > 1 ? 's have' : ' has' }} submission error{{ errorFieldsList.length > 1 ? 's' : '' }}
+                    </p>
+                    <p class="text-[11px] text-gray-500 truncate">
+                        Click to jump and highlight error field
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    @click="goToNextError"
+                    class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-xs transition shrink-0 cursor-pointer flex items-center space-x-1"
+                >
+                    <span>Go to error</span>
+                    <span>→</span>
+                </button>
+                <button
+                    type="button"
+                    @click="showQuickErrorToast = false"
+                    class="text-gray-400 hover:text-gray-600 font-bold p-1 cursor-pointer shrink-0"
+                    title="Dismiss"
+                >
+                    ✕
+                </button>
+            </div>
+        </transition>
     </AppLayout>
 </template>

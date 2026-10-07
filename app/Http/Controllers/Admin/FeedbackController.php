@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\ImportFeedbackFormRequest;
 use App\Http\Requests\Admin\SaveFeedbackFormRequest;
 use App\Http\Requests\Admin\StoreFbEventRequest;
 use App\Http\Requests\Admin\StoreFbFunctionRequest;
@@ -16,6 +17,9 @@ use App\Models\FbFunction;
 use App\Models\FbSubmission;
 use App\Models\Feedback;
 use App\Services\FeedbackSchemaValidator;
+use App\Services\FormImport\FormImportService;
+use Exception;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -560,5 +564,30 @@ class FeedbackController extends Controller
         ]);
 
         return back()->with('success', 'Feedback form schema configured successfully.');
+    }
+
+    /**
+     * Import and analyze an evaluation questionnaire document into schema candidates.
+     */
+    public function importForm(ImportFeedbackFormRequest $request, FormImportService $importService): JsonResponse
+    {
+        $file = $request->file('file');
+        if (! $file) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No file was uploaded.',
+            ], 422);
+        }
+
+        try {
+            $result = $importService->analyzeDocument($file);
+
+            return response()->json($result);
+        } catch (Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 }

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue';
 import { Head, useForm, router, usePage } from '@inertiajs/vue3';
+import axios from 'axios';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
 
@@ -355,6 +356,224 @@ const configMode = ref('interactive'); // 'interactive' | 'json'
 const jsonSchemaString = ref('');
 const jsonParseError = ref('');
 
+// --- Import Form State ---
+const importFile = ref(null);
+const fileInput = ref(null);
+const isDragging = ref(false);
+const isAnalyzing = ref(false);
+const analyzeStepText = ref('');
+const importError = ref('');
+const importResult = ref(null);
+const showMergeModal = ref(false);
+const importSuccessToast = ref('');
+
+const selectedCandidatesCount = computed(() => {
+    if (!importResult.value?.candidates) return 0;
+    return importResult.value.candidates.filter((c) => c.include).length;
+});
+
+const formatFileSize = (bytes) => {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+};
+
+const onDropFile = (e) => {
+    isDragging.value = false;
+    if (e.dataTransfer?.files?.length > 0) {
+        importFile.value = e.dataTransfer.files[0];
+        importError.value = '';
+        importResult.value = null;
+    }
+};
+
+const onFileSelected = (e) => {
+    if (e.target?.files?.length > 0) {
+        importFile.value = e.target.files[0];
+        importError.value = '';
+        importResult.value = null;
+    }
+};
+
+const startDocumentAnalysis = async () => {
+    if (!importFile.value) return;
+
+    isAnalyzing.value = true;
+    importError.value = '';
+    analyzeStepText.value = 'Uploading document...';
+
+    const formData = new FormData();
+    formData.append('file', importFile.value);
+    if (formConfig.event_id) {
+        formData.append('event_id', formConfig.event_id);
+    }
+
+    const t1 = setTimeout(() => {
+        if (isAnalyzing.value) analyzeStepText.value = 'Reading document structure & tables...';
+    }, 1000);
+    const t2 = setTimeout(() => {
+        if (isAnalyzing.value) analyzeStepText.value = 'Detecting questions, rating scales, and answer choices...';
+    }, 2500);
+    const t3 = setTimeout(() => {
+        if (isAnalyzing.value) analyzeStepText.value = 'Computing confidence scores and preparing review fields...';
+    }, 4500);
+
+    try {
+        const response = await axios.post(route('admin.feedback.forms.import'), formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data',
+            },
+        });
+
+        if (response.data?.status === 'success') {
+            importResult.value = response.data;
+        } else {
+            importError.value = response.data?.message || 'Failed to extract questions from document.';
+        }
+    } catch (err) {
+        const msg = err.response?.data?.message || err.response?.data?.errors?.file?.[0] || 'An error occurred while analyzing the document.';
+        importError.value = msg;
+    } finally {
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
+        isAnalyzing.value = false;
+    }
+};
+
+const resetImportState = () => {
+    importFile.value = null;
+    importResult.value = null;
+    importError.value = '';
+    isAnalyzing.value = false;
+    showMergeModal.value = false;
+};
+
+const selectAllCandidates = (selected) => {
+    if (!importResult.value?.candidates) return;
+    importResult.value.candidates.forEach((c) => {
+        c.include = selected;
+    });
+};
+
+const selectHighConfidenceOnly = () => {
+    if (!importResult.value?.candidates) return;
+    importResult.value.candidates.forEach((c) => {
+        c.include = (c.confidence?.level === 'high');
+    });
+};
+
+const removeCandidate = (index) => {
+    if (!importResult.value?.candidates) return;
+    importResult.value.candidates.splice(index, 1);
+    if (importResult.value.summary) {
+        importResult.value.summary.total_detected = importResult.value.candidates.length;
+    }
+};
+
+const duplicateCandidate = (index) => {
+    if (!importResult.value?.candidates) return;
+    const original = importResult.value.candidates[index];
+    const copy = JSON.parse(JSON.stringify(original));
+    copy.id = `${original.id}_copy`;
+    copy.particular = `${original.particular} (Copy)`;
+    importResult.value.candidates.splice(index + 1, 0, copy);
+    if (importResult.value.summary) {
+        importResult.value.summary.total_detected = importResult.value.candidates.length;
+    }
+};
+
+const moveCandidate = (index, direction) => {
+    if (!importResult.value?.candidates) return;
+    const targetIdx = index + direction;
+    if (targetIdx < 0 || targetIdx >= importResult.value.candidates.length) return;
+
+    const current = importResult.value.candidates[index];
+    importResult.value.candidates.splice(index, 1);
+    importResult.value.candidates.splice(targetIdx, 0, current);
+};
+
+const addOptionToCandidate = (candidate) => {
+    if (!candidate.options) candidate.options = [];
+    const optNum = candidate.options.length + 1;
+    candidate.options.push({
+        value: `option_${optNum}`,
+        label: `Option ${optNum}`,
+        is_other: false,
+    });
+};
+
+const removeOptionFromCandidate = (candidate, optIndex) => {
+    candidate.options.splice(optIndex, 1);
+};
+
+const onCandidateTypeChange = (candidate) => {
+    if (['radio', 'select', 'checkbox'].includes(candidate.type)) {
+        if (!candidate.options || candidate.options.length === 0) {
+            candidate.options = [
+                { value: 'yes', label: '👍 Yes / Agree', is_other: false },
+                { value: 'no', label: '👎 No / Disagree', is_other: false },
+            ];
+        }
+    }
+};
+
+const promptMergeStrategy = () => {
+    if (!importResult.value?.candidates) return;
+    const selected = importResult.value.candidates.filter((c) => c.include);
+    if (selected.length === 0) return;
+
+    if (formConfig.schema?.fields?.length > 0) {
+        showMergeModal.value = true;
+    } else {
+        applyImportedFields('replace');
+    }
+};
+
+const applyImportedFields = (strategy) => {
+    if (!importResult.value?.candidates) return;
+    const selected = importResult.value.candidates.filter((c) => c.include);
+    if (selected.length === 0) return;
+
+    const formattedFields = selected.map((cand) => {
+        return {
+            id: cand.id,
+            particular: cand.particular,
+            type: cand.type,
+            weight: 1,
+            required: Boolean(cand.required),
+            placeholder: cand.placeholder || null,
+            min: cand.min !== null && cand.min !== undefined ? cand.min : null,
+            max: cand.max !== null && cand.max !== undefined ? cand.max : null,
+            allow_other: Boolean(cand.allow_other),
+            allow_custom_value: false,
+            option_source: cand.option_source || 'static',
+            function_ids: cand.function_ids || [],
+            options: cand.options || [],
+            manualId: true,
+        };
+    });
+
+    if (strategy === 'replace') {
+        formConfig.schema.fields = formattedFields;
+    } else {
+        formattedFields.forEach((f) => {
+            formConfig.schema.fields.push(f);
+        });
+    }
+
+    reindexWeights();
+    showMergeModal.value = false;
+    configMode.value = 'interactive';
+
+    importSuccessToast.value = `Successfully imported ${selected.length} field(s) into the questionnaire builder!`;
+    setTimeout(() => {
+        importSuccessToast.value = '';
+    }, 5000);
+};
+
 const defaultSchemaTemplate = {
     fields: [
         {
@@ -376,6 +595,34 @@ const formConfig = useForm({
     event_id: '',
     schema: JSON.parse(JSON.stringify(defaultSchemaTemplate)),
 });
+
+function reindexWeights() {
+    if (!Array.isArray(formConfig.schema?.fields)) return;
+    formConfig.schema.fields.forEach((field, index) => {
+        field.weight = index + 1;
+    });
+    jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+}
+
+watch(
+    () => formConfig.schema?.fields,
+    (fields) => {
+        if (Array.isArray(fields)) {
+            let changed = false;
+            fields.forEach((field, index) => {
+                const targetWeight = index + 1;
+                if (field.weight !== targetWeight) {
+                    field.weight = targetWeight;
+                    changed = true;
+                }
+            });
+            if (changed && configMode.value === 'interactive') {
+                jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+            }
+        }
+    },
+    { deep: true }
+);
 
 const unconfiguredEvents = computed(() => {
     return props.events.filter((ev) => !props.feedbackForms.some((f) => f.event_id === ev.id));
@@ -419,7 +666,7 @@ const openFormConfigModal = (formRecord = null, eventId = null) => {
         formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
     }
 
-    jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+    reindexWeights();
     configMode.value = 'interactive';
     showConfigModal.value = true;
 };
@@ -431,12 +678,12 @@ const onEventSelectionChange = () => {
     } else {
         formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
     }
-    jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+    reindexWeights();
 };
 
 const resetToDefaultSchema = () => {
     formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
-    jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+    reindexWeights();
     jsonParseError.value = '';
 };
 
@@ -454,9 +701,7 @@ const onParticularInput = (field) => {
 };
 
 const addField = () => {
-    const nextWeight = (formConfig.schema.fields.length > 0
-        ? Math.max(...formConfig.schema.fields.map(f => f.weight || 0)) + 1
-        : 1);
+    const nextWeight = (formConfig.schema.fields?.length || 0) + 1;
 
     formConfig.schema.fields.push({
         id: `question_${nextWeight}`,
@@ -468,12 +713,12 @@ const addField = () => {
         options: [],
         manualId: false,
     });
-    jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+    reindexWeights();
 };
 
 const removeField = (index) => {
     formConfig.schema.fields.splice(index, 1);
-    jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+    reindexWeights();
 };
 
 const moveField = (index, direction) => {
@@ -481,15 +726,9 @@ const moveField = (index, direction) => {
     if (targetIdx < 0 || targetIdx >= formConfig.schema.fields.length) return;
 
     const current = formConfig.schema.fields[index];
-    const target = formConfig.schema.fields[targetIdx];
-
-    const tempWeight = current.weight;
-    current.weight = target.weight;
-    target.weight = tempWeight;
-
     formConfig.schema.fields.splice(index, 1);
     formConfig.schema.fields.splice(targetIdx, 0, current);
-    jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+    reindexWeights();
 };
 
 const addOptionToField = (field) => {
@@ -549,6 +788,7 @@ const syncJsonToInteractive = () => {
             return false;
         }
         formConfig.schema = parsed;
+        reindexWeights();
         jsonParseError.value = '';
         return true;
     } catch (err) {
@@ -559,21 +799,94 @@ const syncJsonToInteractive = () => {
 
 const switchConfigMode = (mode) => {
     if (mode === 'json') {
-        jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+        if (configMode.value === 'interactive') {
+            jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
+        }
         jsonParseError.value = '';
         configMode.value = 'json';
-    } else {
-        if (syncJsonToInteractive()) {
-            configMode.value = 'interactive';
+    } else if (mode === 'interactive') {
+        if (configMode.value === 'json') {
+            if (!syncJsonToInteractive()) return;
         }
+        configMode.value = 'interactive';
+    } else if (mode === 'import') {
+        if (configMode.value === 'json') {
+            if (!syncJsonToInteractive()) return;
+        }
+        configMode.value = 'import';
     }
 };
+
+// Temporary quick go-to error navigation for schema configuration modal
+const highlightedSchemaFieldIdx = ref(null);
+let schemaHighlightTimer = null;
+
+const highlightSchemaField = (idx) => {
+    highlightedSchemaFieldIdx.value = idx;
+    if (schemaHighlightTimer) clearTimeout(schemaHighlightTimer);
+    schemaHighlightTimer = setTimeout(() => {
+        highlightedSchemaFieldIdx.value = null;
+    }, 3500);
+};
+
+const goToSchemaErrorField = (idx) => {
+    if (configMode.value !== 'interactive') {
+        switchConfigMode('interactive');
+    }
+    highlightSchemaField(idx);
+    setTimeout(() => {
+        const el = document.getElementById(`schema_field_${idx}`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const input = el.querySelector('input:not([type=hidden]), select, textarea');
+            if (input) {
+                try {
+                    input.focus();
+                } catch (e) {
+                    // Ignore focus errors
+                }
+            }
+        }
+    }, 150);
+};
+
+const getSchemaFieldError = (idx) => {
+    const errors = formConfig.errors;
+    for (const key of Object.keys(errors)) {
+        if (key.startsWith(`schema.fields.${idx}.`) || key === `schema.fields.${idx}`) {
+            return errors[key];
+        }
+    }
+    return null;
+};
+
+const schemaErrorsList = computed(() => {
+    const list = [];
+    const errors = formConfig.errors;
+    Object.keys(errors).forEach((key) => {
+        const match = key.match(/^schema\.fields\.(\d+)/);
+        if (match) {
+            const idx = parseInt(match[1], 10);
+            const field = formConfig.schema.fields?.[idx];
+            if (!list.some((item) => item.idx === idx)) {
+                list.push({
+                    idx,
+                    particular: field?.particular || `Question #${idx + 1}`,
+                    message: errors[key],
+                });
+            }
+        }
+    });
+    return list;
+});
 
 const closeConfigModal = () => {
     showConfigModal.value = false;
     formConfig.reset();
     formConfig.clearErrors();
     jsonParseError.value = '';
+    highlightedSchemaFieldIdx.value = null;
+    resetImportState();
 };
 
 const saveFeedbackForm = () => {
@@ -584,6 +897,11 @@ const saveFeedbackForm = () => {
     formConfig.post(route('admin.feedback.forms.save'), {
         preserveScroll: true,
         onSuccess: () => closeConfigModal(),
+        onError: () => {
+            if (schemaErrorsList.value.length > 0) {
+                goToSchemaErrorField(schemaErrorsList.value[0].idx);
+            }
+        },
     });
 };
 
@@ -616,6 +934,229 @@ const performDelete = () => {
         },
     });
 };
+
+// --- Sample Preview Modal State & Handlers ---
+const showSamplePreviewModal = ref(false);
+const previewSelectedEventId = ref(null);
+const previewCustomSchema = ref(null);
+const previewMode = ref('deployed'); // 'deployed' | 'embedded'
+const previewDevice = ref('desktop'); // 'desktop' | 'tablet' | 'mobile'
+const previewFillState = ref('completed'); // 'completed' | 'blank'
+const previewAnswers = ref({});
+
+const previewEvent = computed(() => {
+    if (previewSelectedEventId.value) {
+        const found = props.events.find((e) => e.id === Number(previewSelectedEventId.value));
+        if (found) return found;
+    }
+    return props.events[0] || null;
+});
+
+const previewForm = computed(() => {
+    if (previewCustomSchema.value) {
+        return {
+            id: previewEvent.value?.feedback?.id || 1,
+            event_id: previewEvent.value?.id,
+            schema: previewCustomSchema.value,
+        };
+    }
+    if (!previewEvent.value) {
+        return {
+            id: 0,
+            event_id: null,
+            schema: defaultSchemaTemplate,
+        };
+    }
+    const found = props.feedbackForms.find((f) => f.event_id === previewEvent.value.id);
+    if (found && found.schema?.fields?.length) {
+        return found;
+    }
+    if (previewEvent.value.feedback?.schema?.fields?.length) {
+        return previewEvent.value.feedback;
+    }
+    return {
+        id: previewEvent.value.feedback?.id || 0,
+        event_id: previewEvent.value.id,
+        schema: defaultSchemaTemplate,
+    };
+});
+
+const previewFields = computed(() => {
+    if (!previewForm.value?.schema?.fields || !Array.isArray(previewForm.value.schema.fields)) {
+        return [];
+    }
+    return [...previewForm.value.schema.fields].sort((a, b) => (Number(a.weight) || 0) - (Number(b.weight) || 0));
+});
+
+const getPreviewFieldOptions = (field) => {
+    if (!field) return [];
+    if (field.option_source === 'fb_functions') {
+        const eventFuncs = previewEvent.value?.functions || [];
+        let sourceList = eventFuncs.length > 0 ? eventFuncs : props.functions;
+        if (Array.isArray(field.function_ids) && field.function_ids.length > 0) {
+            sourceList = sourceList.filter((f) => field.function_ids.includes(f.id));
+        }
+        if (sourceList.length === 0) {
+            return [
+                { value: 'Registration & Onboarding', label: 'Registration & Onboarding' },
+                { value: 'Plenary Lecture & Presentation', label: 'Plenary Lecture & Presentation' },
+                { value: 'Interactive Hands-on Workshop', label: 'Interactive Hands-on Workshop' },
+                { value: 'Open Forum & Evaluation Synthesis', label: 'Open Forum & Evaluation Synthesis' },
+            ];
+        }
+        return sourceList.map((f) => ({
+            value: f.name,
+            label: f.name + (f.code ? ` (${f.code})` : ''),
+        }));
+    }
+    return Array.isArray(field.options) ? field.options : [];
+};
+
+const generateSampleAnswers = (fields = []) => {
+    const sample = {};
+    fields.forEach((field) => {
+        const id = String(field.id || '');
+        const p = String(field.particular || '').toLowerCase();
+
+        if (field.type === 'text') {
+            if (p.includes('name') || id.includes('name')) {
+                sample[id] = 'Juan Dela Cruz';
+            } else if (p.includes('email') || id.includes('email')) {
+                sample[id] = 'juan.delacruz@agency.gov.ph';
+            } else if (p.includes('agency') || p.includes('office') || id.includes('agency')) {
+                sample[id] = 'Department of Budget and Management';
+            } else if (p.includes('designation') || p.includes('position') || id.includes('designation')) {
+                sample[id] = 'Senior Budget & Management Specialist';
+            } else if (p.includes('contact') || p.includes('mobile') || p.includes('phone')) {
+                sample[id] = '0917-123-4567';
+            } else {
+                sample[id] = 'All technical and operational procedures were thoroughly covered.';
+            }
+        } else if (field.type === 'textarea') {
+            if (p.includes('comment') || p.includes('feedback') || p.includes('suggestion') || p.includes('recommendation')) {
+                sample[id] = 'The orientation session was highly structured, clear, and engaging. The resource speakers provided comprehensive insights and practical examples that are directly applicable to our department\'s daily operational workflows. Recommend conducting similar refresher sessions quarterly.';
+            } else {
+                sample[id] = 'All scheduled activities and discussions were executed punctually with clear facilitation and responsive support throughout.';
+            }
+        } else if (field.type === 'number') {
+            sample[id] = field.max !== null && field.max !== undefined ? Math.min(5, Number(field.max)) : 5;
+        } else if (field.type === 'radio') {
+            const opts = getPreviewFieldOptions(field);
+            if (opts.length > 0) {
+                const bestOpt = opts.find((o) => {
+                    const str = (String(o.value) + ' ' + String(o.label)).toLowerCase();
+                    return str.includes('excellent') || str.includes('outstanding') || str.includes('5') || str.includes('agree') || str.includes('yes');
+                }) || opts[0];
+                sample[id] = bestOpt.value;
+            }
+        } else if (field.type === 'select') {
+            const opts = getPreviewFieldOptions(field);
+            if (opts.length > 0) {
+                sample[id] = opts[0].value;
+            }
+        } else if (field.type === 'checkbox') {
+            const opts = getPreviewFieldOptions(field);
+            if (opts.length > 1) {
+                sample[id] = [opts[0].value, opts[1].value];
+            } else if (opts.length === 1) {
+                sample[id] = [opts[0].value];
+            } else {
+                sample[id] = [];
+            }
+        } else {
+            sample[id] = 'Satisfactory';
+        }
+
+        if (field.allow_other) {
+            sample[`${id}_other`] = 'Specific requirements discussed during plenary consultation.';
+        }
+    });
+    return sample;
+};
+
+const resetPreviewAnswers = (state = 'completed') => {
+    previewFillState.value = state;
+    if (state === 'completed') {
+        previewAnswers.value = generateSampleAnswers(previewFields.value);
+    } else {
+        const blank = {};
+        previewFields.value.forEach((f) => {
+            if (f.type === 'checkbox') {
+                blank[f.id] = [];
+            } else {
+                blank[f.id] = '';
+            }
+            if (f.allow_other) {
+                blank[`${f.id}_other`] = '';
+            }
+        });
+        previewAnswers.value = blank;
+    }
+};
+
+const handlePreviewCheckboxToggle = (fieldId, optionValue) => {
+    if (!Array.isArray(previewAnswers.value[fieldId])) {
+        previewAnswers.value[fieldId] = [];
+    }
+    const idx = previewAnswers.value[fieldId].indexOf(optionValue);
+    if (idx > -1) {
+        previewAnswers.value[fieldId].splice(idx, 1);
+    } else {
+        previewAnswers.value[fieldId].push(optionValue);
+    }
+};
+
+const isPreviewOtherSelected = (field) => {
+    if (!field?.allow_other) return false;
+    const val = previewAnswers.value[field.id];
+    if (val === undefined || val === null || val === '') return false;
+    if (field.type === 'checkbox') {
+        if (!Array.isArray(val)) return false;
+        return val.some((selectedVal) => {
+            const opts = getPreviewFieldOptions(field);
+            const matchedOpt = opts.find((opt) => String(opt.value) === String(selectedVal));
+            return matchedOpt?.is_other === true || String(selectedVal).toLowerCase() === 'other';
+        });
+    }
+    const opts = getPreviewFieldOptions(field);
+    const matchedOpt = opts.find((opt) => String(opt.value) === String(val));
+    return matchedOpt?.is_other === true || String(val).toLowerCase() === 'other';
+};
+
+const openSamplePreviewModal = (targetEvent = null, targetForm = null) => {
+    if (targetEvent?.id) {
+        previewSelectedEventId.value = targetEvent.id;
+    } else if (targetForm?.event_id) {
+        previewSelectedEventId.value = targetForm.event_id;
+    } else if (formConfig.event_id) {
+        previewSelectedEventId.value = Number(formConfig.event_id);
+    } else if (props.events.length > 0) {
+        previewSelectedEventId.value = props.events[0].id;
+    } else {
+        previewSelectedEventId.value = null;
+    }
+
+    if (targetForm?.schema) {
+        previewCustomSchema.value = JSON.parse(JSON.stringify(targetForm.schema));
+    } else {
+        previewCustomSchema.value = null;
+    }
+
+    previewMode.value = 'deployed';
+    previewDevice.value = 'desktop';
+    resetPreviewAnswers('completed');
+    showSamplePreviewModal.value = true;
+};
+
+const onPreviewEventChange = () => {
+    previewCustomSchema.value = null;
+    resetPreviewAnswers(previewFillState.value);
+};
+
+const closeSamplePreviewModal = () => {
+    showSamplePreviewModal.value = false;
+    previewCustomSchema.value = null;
+};
 </script>
 
 <template>
@@ -633,6 +1174,19 @@ const performDelete = () => {
                 </div>
 
                 <div class="flex items-center space-x-2.5">
+                    <button
+                        type="button"
+                        @click="openSamplePreviewModal()"
+                        class="inline-flex items-center px-4 py-2 bg-cream-100 hover:bg-cream-200 text-forest-900 border border-cream-400 text-sm font-semibold rounded-xl shadow-xs transition cursor-pointer"
+                        title="View a sample completed feedback form when embedded or deployed"
+                    >
+                        <svg class="size-4 me-1.5 text-forest-900" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        <span>View Feedback Form</span>
+                    </button>
+
                     <button
                         v-if="activeTab === 'events'"
                         @click="openCreateEventModal"
@@ -1056,6 +1610,18 @@ const performDelete = () => {
 
                                 <div class="flex items-center space-x-1.5">
                                     <button
+                                        type="button"
+                                        @click="openSamplePreviewModal(event)"
+                                        class="p-1.5 rounded-lg text-forest-900 hover:bg-forest-100 transition cursor-pointer"
+                                        title="View Feedback Form Sample for this Event"
+                                    >
+                                        <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                    </button>
+
+                                    <button
                                         @click="openFormConfigModal(event.feedback, event.id)"
                                         class="p-1.5 rounded-lg text-forest-900 hover:bg-lime-200 transition cursor-pointer"
                                         title="Configure Form Questionnaire"
@@ -1344,12 +1910,27 @@ const performDelete = () => {
 
                             <div class="mt-4 pt-3 border-t border-cream-500/40 flex items-center justify-between text-xs text-gray-500">
                                 <span>{{ formItem.submissions_count ?? 0 }} submissions</span>
-                                <button
-                                    @click="openFormConfigModal(formItem, formItem.event_id)"
-                                    class="px-3 py-1.5 bg-forest-900 hover:bg-forest-950 text-white rounded-xl font-semibold shadow-xs transition cursor-pointer"
-                                >
-                                    Edit Schema
-                                </button>
+                                <div class="flex items-center space-x-2">
+                                    <button
+                                        type="button"
+                                        @click="openSamplePreviewModal(formItem.event || { id: formItem.event_id }, formItem)"
+                                        class="px-2.5 py-1.5 bg-cream-100 hover:bg-cream-200 text-forest-900 border border-cream-400 rounded-xl font-semibold shadow-xs transition cursor-pointer flex items-center space-x-1"
+                                        title="View sample completed form"
+                                    >
+                                        <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                        <span>Preview</span>
+                                    </button>
+
+                                    <button
+                                        @click="openFormConfigModal(formItem, formItem.event_id)"
+                                        class="px-3 py-1.5 bg-forest-900 hover:bg-forest-950 text-white rounded-xl font-semibold shadow-xs transition cursor-pointer"
+                                    >
+                                        Edit Schema
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -1580,12 +2161,12 @@ const performDelete = () => {
             </div>
         </div>
 
-        <!-- Form Configuration Editor Modal (With Function-Powered Dropdowns) -->
-        <div v-if="showConfigModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <div class="bg-cream-200 rounded-3xl max-w-3xl w-full shadow-2xl p-6 border border-cream-500/60 max-h-[92vh] flex flex-col">
+        <!-- Form Configuration Editor Modal (Full Display Width and Full Vertical Height Page View) -->
+        <div v-if="showConfigModal" class="fixed inset-0 z-50 bg-cream-200 flex flex-col w-screen h-screen overflow-hidden">
+            <div class="bg-cream-200 w-full h-full p-4 sm:p-6 lg:p-8 flex flex-col overflow-hidden">
                 <div class="flex items-center justify-between pb-4 border-b border-cream-500/40 shrink-0">
                     <div>
-                        <h3 class="text-lg font-bold text-gray-900">
+                        <h3 class="text-xl font-black text-gray-900 tracking-tight">
                             Configure Questionnaire Schema
                         </h3>
                         <p class="text-xs text-gray-500 mt-0.5">Build weighted fields, IDs, and static or function-sourced options</p>
@@ -1619,6 +2200,19 @@ const performDelete = () => {
                         <div class="flex items-end justify-between sm:justify-end space-x-2">
                             <button
                                 type="button"
+                                @click="openSamplePreviewModal(currentSelectedEvent, { schema: formConfig.schema })"
+                                class="px-3 py-2 bg-cream-100 hover:bg-cream-300 text-forest-900 text-xs font-semibold rounded-xl border border-cream-400 transition cursor-pointer flex items-center space-x-1"
+                                title="Preview this questionnaire with completed sample data"
+                            >
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                </svg>
+                                <span>Preview Form</span>
+                            </button>
+
+                            <button
+                                type="button"
                                 @click="resetToDefaultSchema"
                                 class="px-3 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 text-xs font-semibold rounded-xl border border-cream-400 transition cursor-pointer"
                             >
@@ -1626,6 +2220,17 @@ const performDelete = () => {
                             </button>
 
                             <div class="bg-cream-300 p-1 rounded-xl flex items-center space-x-1 border border-cream-500/50">
+                                <button
+                                    type="button"
+                                    @click="switchConfigMode('import')"
+                                    class="px-3 py-1 text-xs font-semibold rounded-lg transition cursor-pointer flex items-center space-x-1"
+                                    :class="configMode === 'import' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                >
+                                    <svg class="size-3.5 me-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                                    </svg>
+                                    <span>Import Form</span>
+                                </button>
                                 <button
                                     type="button"
                                     @click="switchConfigMode('interactive')"
@@ -1648,6 +2253,52 @@ const performDelete = () => {
 
                     <!-- Visual Builder Mode -->
                     <div v-if="configMode === 'interactive'" class="space-y-4">
+                        <div v-if="importSuccessToast" class="p-3 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl text-xs font-semibold flex items-center justify-between shadow-xs">
+                            <span class="flex items-center space-x-1.5">
+                                <span>✅</span>
+                                <span>{{ importSuccessToast }}</span>
+                            </span>
+                            <button type="button" @click="importSuccessToast = ''" class="text-emerald-700 hover:text-emerald-900 font-bold cursor-pointer">✕</button>
+                        </div>
+
+                        <!-- Schema Validation Errors Banner with Quick Go-To Links -->
+                        <div
+                            v-if="schemaErrorsList.length > 0"
+                            class="p-4 bg-red-50/95 border-2 border-red-300 rounded-2xl shadow-xs space-y-2.5 transition-all"
+                        >
+                            <div class="flex items-center justify-between flex-wrap gap-2">
+                                <div class="flex items-center space-x-2 text-red-950 font-bold text-xs sm:text-sm">
+                                    <span class="size-6 rounded-lg bg-red-200 text-red-900 flex items-center justify-center text-xs font-black shrink-0">!</span>
+                                    <span>Validation Errors: {{ schemaErrorsList.length }} field(s) have incomplete or invalid configurations.</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    @click="goToSchemaErrorField(schemaErrorsList[0].idx)"
+                                    class="inline-flex items-center space-x-1 px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-2xs transition cursor-pointer"
+                                >
+                                    <span>⚡ Quick Go To First Error</span>
+                                    <span>→</span>
+                                </button>
+                            </div>
+                            <div class="pt-2 border-t border-red-200 flex flex-wrap items-center gap-1.5">
+                                <span class="text-[11px] font-bold text-red-800 me-1">Jump to question:</span>
+                                <button
+                                    v-for="err in schemaErrorsList"
+                                    :key="err.idx"
+                                    type="button"
+                                    @click="goToSchemaErrorField(err.idx)"
+                                    class="inline-flex items-center space-x-1 px-2.5 py-1 bg-white hover:bg-red-100/90 text-red-900 border border-red-300 rounded-lg text-xs font-semibold shadow-2xs transition cursor-pointer"
+                                    :title="err.message"
+                                >
+                                    <span class="size-4 rounded-full bg-red-100 text-red-800 text-[10px] font-black flex items-center justify-center">
+                                        {{ err.idx + 1 }}
+                                    </span>
+                                    <span class="truncate max-w-[150px]">{{ err.particular }}</span>
+                                    <span class="text-red-500 text-[10px]">↗</span>
+                                </button>
+                            </div>
+                        </div>
+
                         <div class="flex items-center justify-between pt-2">
                             <span class="text-xs font-bold uppercase tracking-wider text-forest-900">
                                 Questions & Fields ({{ formConfig.schema.fields.length }})
@@ -1669,7 +2320,13 @@ const performDelete = () => {
                             <div
                                 v-for="(field, idx) in formConfig.schema.fields"
                                 :key="idx"
-                                class="p-4 bg-[#fffef9] rounded-2xl border border-cream-500/70 shadow-xs space-y-3"
+                                :id="`schema_field_${idx}`"
+                                class="p-4 rounded-2xl border shadow-xs space-y-3 transition-all duration-300"
+                                :class="[
+                                    highlightedSchemaFieldIdx === idx
+                                        ? 'ring-4 ring-red-500/80 ring-offset-2 border-red-500 bg-red-50/90 shadow-xl scale-[1.01] animate-pulse'
+                                        : (getSchemaFieldError(idx) ? 'border-red-400 bg-red-50/20' : 'border-cream-500/70 bg-[#fffef9]')
+                                ]"
                             >
                                 <div class="flex items-center justify-between gap-3">
                                     <div class="flex items-center space-x-1.5 shrink-0">
@@ -1691,7 +2348,7 @@ const performDelete = () => {
                                         >
                                             ▼
                                         </button>
-                                        <span class="size-6 rounded-full bg-lime-200 text-forest-900 font-bold text-xs flex items-center justify-center">
+                                        <span class="size-6 rounded-full bg-forest-900 text-emerald-200 font-bold text-xs flex items-center justify-center shadow-2xs" :title="`Dynamic Question #${field.weight || idx + 1}`">
                                             {{ field.weight || idx + 1 }}
                                         </span>
                                     </div>
@@ -1750,13 +2407,11 @@ const performDelete = () => {
                                     </div>
 
                                     <div class="flex items-center justify-end space-x-2">
-                                        <label class="text-xs text-gray-600 font-medium">Weight / Order:</label>
-                                        <input
-                                            v-model.number="field.weight"
-                                            type="number"
-                                            min="1"
-                                            class="w-16 px-2 py-1 bg-cream-100 border border-cream-500 rounded-lg text-xs font-bold text-center"
-                                        />
+                                        <label class="text-xs text-gray-600 font-medium">Weight / Counter:</label>
+                                        <div class="inline-flex items-center space-x-1.5 px-3 py-1 bg-lime-100 border border-lime-300 rounded-xl text-forest-900 shadow-2xs">
+                                            <span class="text-[10px] font-bold uppercase tracking-wider text-forest-800">Dynamic Counter:</span>
+                                            <span class="text-xs font-black">#{{ field.weight || idx + 1 }}</span>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -1878,6 +2533,12 @@ const performDelete = () => {
                                         </div>
                                     </div>
                                 </div>
+
+                                <!-- Field Error Alert -->
+                                <div v-if="getSchemaFieldError(idx)" class="p-2.5 bg-red-50 border border-red-300 rounded-xl text-xs text-red-700 font-semibold flex items-center space-x-2">
+                                    <span class="text-red-500 font-bold">⚠️</span>
+                                    <span>{{ getSchemaFieldError(idx) }}</span>
+                                </div>
                             </div>
 
                             <div class="flex items-center justify-center py-2">
@@ -1896,7 +2557,7 @@ const performDelete = () => {
                     </div>
 
                     <!-- JSON Editor Mode -->
-                    <div v-else class="space-y-3">
+                    <div v-else-if="configMode === 'json'" class="space-y-3">
                         <div class="flex items-center justify-between">
                             <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider">Raw JSON Schema</label>
                             <span class="text-xs text-gray-500 font-mono">{ "fields": [ ... ] }</span>
@@ -1914,26 +2575,453 @@ const performDelete = () => {
                         </div>
                     </div>
 
+                    <!-- Import Form Mode -->
+                    <div v-else-if="configMode === 'import'" class="space-y-4">
+                        <!-- Step 1: Upload Document -->
+                        <div v-if="!importResult" class="space-y-4">
+                            <div class="text-center max-w-lg mx-auto py-2">
+                                <h4 class="text-sm font-bold text-gray-900">Import Evaluation / Survey Questionnaire</h4>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Upload an existing evaluation form document. The smart assistant will analyze its structure and automatically identify questions, rating scales, and answer choices for your review.
+                                </p>
+                            </div>
+
+                            <!-- Drag & Drop Zone -->
+                            <div
+                                @dragover.prevent="isDragging = true"
+                                @dragleave.prevent="isDragging = false"
+                                @drop.prevent="onDropFile"
+                                class="border-2 border-dashed rounded-3xl p-8 text-center transition cursor-pointer"
+                                :class="isDragging ? 'border-forest-600 bg-forest-50/50' : 'border-cream-500/80 bg-[#fffef9] hover:border-forest-500'"
+                                @click="$refs.fileInput.click()"
+                            >
+                                <input
+                                    ref="fileInput"
+                                    type="file"
+                                    class="hidden"
+                                    accept=".docx,.xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp,.txt"
+                                    @change="onFileSelected"
+                                />
+
+                                <div class="size-14 rounded-2xl bg-cream-300 text-forest-900 flex items-center justify-center mx-auto mb-3 shadow-xs">
+                                    <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12l-3-3m0 0l-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                                    </svg>
+                                </div>
+
+                                <p class="text-sm font-bold text-gray-800">
+                                    Drag & drop your form file here, or <span class="text-forest-900 underline">browse files</span>
+                                </p>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    Supports Word (.docx), Excel (.xlsx, .csv), PDF (.pdf), and images (up to 10MB)
+                                </p>
+
+                                <!-- Supported formats badges -->
+                                <div class="flex items-center justify-center flex-wrap gap-2 mt-4 text-[11px] font-semibold">
+                                    <span class="px-2.5 py-1 bg-blue-50 text-blue-800 border border-blue-200 rounded-lg">📘 Word (.docx)</span>
+                                    <span class="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg">📗 Excel (.xlsx / .csv)</span>
+                                    <span class="px-2.5 py-1 bg-rose-50 text-rose-800 border border-rose-200 rounded-lg">📕 PDF (.pdf)</span>
+                                    <span class="px-2.5 py-1 bg-purple-50 text-purple-800 border border-purple-200 rounded-lg">🖼️ Images</span>
+                                </div>
+                            </div>
+
+                            <!-- Selected File & Analyze Button -->
+                            <div v-if="importFile" class="p-4 bg-[#fffef9] rounded-2xl border border-forest-500/40 shadow-xs flex items-center justify-between gap-4">
+                                <div class="flex items-center space-x-3 truncate">
+                                    <div class="size-10 rounded-xl bg-forest-900 text-white flex items-center justify-center shrink-0 font-bold text-xs uppercase">
+                                        {{ importFile.name.split('.').pop() }}
+                                    </div>
+                                    <div class="truncate">
+                                        <p class="text-xs font-bold text-gray-900 truncate">{{ importFile.name }}</p>
+                                        <p class="text-[11px] text-gray-500">{{ formatFileSize(importFile.size) }}</p>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center space-x-2 shrink-0">
+                                    <button
+                                        type="button"
+                                        @click="importFile = null"
+                                        class="px-3 py-1.5 bg-cream-200 hover:bg-cream-300 text-gray-700 text-xs font-semibold rounded-xl cursor-pointer"
+                                    >
+                                        Clear
+                                    </button>
+                                    <button
+                                        type="button"
+                                        @click="startDocumentAnalysis"
+                                        :disabled="isAnalyzing"
+                                        class="px-4 py-1.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                                    >
+                                        <span v-if="isAnalyzing" class="animate-spin text-sm">⏳</span>
+                                        <span>{{ isAnalyzing ? 'Analyzing Document...' : 'Start Extraction & Analysis' }}</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Processing State Spinner & Staged Messages -->
+                            <div v-if="isAnalyzing" class="p-6 bg-forest-50 border border-forest-200 rounded-2xl text-center space-y-3">
+                                <div class="inline-block size-8 border-3 border-forest-900 border-t-transparent rounded-full animate-spin"></div>
+                                <div>
+                                    <p class="text-sm font-bold text-forest-950">{{ analyzeStepText }}</p>
+                                    <p class="text-xs text-forest-800 mt-0.5">Please wait while the document structure, tables, and rating scales are detected...</p>
+                                </div>
+                            </div>
+
+                            <!-- Error Banner -->
+                            <div v-if="importError" class="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl text-xs space-y-1">
+                                <div class="font-bold flex items-center space-x-1.5">
+                                    <span>⚠️ Import Analysis Error</span>
+                                </div>
+                                <p>{{ importError }}</p>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Import Review & Candidate Mapping -->
+                        <div v-else class="space-y-4">
+                            <!-- Summary Header -->
+                            <div class="p-4 bg-[#fffef9] rounded-2xl border border-cream-500/70 shadow-xs flex items-center justify-between flex-wrap gap-3">
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-xs font-bold text-forest-950">
+                                            Import Review: {{ importResult.filename }}
+                                        </span>
+                                        <span class="px-2 py-0.5 bg-forest-100 text-forest-900 text-[10px] font-bold rounded-md uppercase">
+                                            {{ importResult.file_type }}
+                                        </span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-0.5">
+                                        Verify and correct the detected fields before adding them to the questionnaire schema.
+                                    </p>
+                                </div>
+
+                                <!-- Badges & Counts -->
+                                <div class="flex items-center flex-wrap gap-2 text-xs font-semibold">
+                                    <span class="px-2.5 py-1 bg-cream-200 text-gray-800 rounded-lg">
+                                        {{ importResult.summary.total_detected }} Detected
+                                    </span>
+                                    <span class="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg">
+                                        ✓ {{ importResult.summary.high_confidence }} High
+                                    </span>
+                                    <span v-if="importResult.summary.medium_confidence + importResult.summary.low_confidence > 0" class="px-2.5 py-1 bg-amber-100 text-amber-800 rounded-lg">
+                                        ⚠ {{ importResult.summary.medium_confidence + importResult.summary.low_confidence }} Needs Review
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Warnings if any -->
+                            <div v-if="importResult.warnings && importResult.warnings.length > 0" class="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs space-y-1">
+                                <p v-for="(warn, wIdx) in importResult.warnings" :key="wIdx">ℹ️ {{ warn }}</p>
+                            </div>
+
+                            <!-- Selection Toolbar -->
+                            <div class="flex items-center justify-between flex-wrap gap-2 text-xs font-medium pt-1">
+                                <div class="flex items-center space-x-2">
+                                    <button
+                                        type="button"
+                                        @click="selectAllCandidates(true)"
+                                        class="px-2.5 py-1 bg-cream-200 hover:bg-cream-300 text-gray-800 rounded-lg cursor-pointer"
+                                    >
+                                        Select All
+                                    </button>
+                                    <button
+                                        type="button"
+                                        @click="selectAllCandidates(false)"
+                                        class="px-2.5 py-1 bg-cream-200 hover:bg-cream-300 text-gray-800 rounded-lg cursor-pointer"
+                                    >
+                                        Deselect All
+                                    </button>
+                                    <button
+                                        type="button"
+                                        @click="selectHighConfidenceOnly"
+                                        class="px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg cursor-pointer font-semibold"
+                                    >
+                                        Select High Confidence Only
+                                    </button>
+                                </div>
+
+                                <span class="text-xs font-bold text-forest-900">
+                                    {{ selectedCandidatesCount }} of {{ importResult.candidates.length }} selected to import
+                                </span>
+                            </div>
+
+                            <!-- Candidates Scrollable List -->
+                            <div class="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+                                <div
+                                    v-for="(cand, cIdx) in importResult.candidates"
+                                    :key="cIdx"
+                                    class="p-4 rounded-2xl border transition shadow-xs space-y-3"
+                                    :class="cand.include ? 'bg-[#fffef9] border-cream-500/80' : 'bg-gray-50 border-gray-200 opacity-60'"
+                                >
+                                    <!-- Card Header: Checkbox, Order, Confidence, Source, Actions -->
+                                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                                        <div class="flex items-center space-x-2 shrink-0">
+                                            <label class="flex items-center space-x-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    v-model="cand.include"
+                                                    class="rounded border-cream-400 text-forest-900 focus:ring-forest-500 size-4"
+                                                />
+                                                <span class="size-6 rounded-full bg-forest-900 text-white font-bold text-xs flex items-center justify-center">
+                                                    {{ cIdx + 1 }}
+                                                </span>
+                                            </label>
+
+                                            <!-- Confidence Badge -->
+                                            <span
+                                                class="px-2 py-0.5 rounded-md text-[11px] font-bold"
+                                                :class="{
+                                                    'bg-emerald-100 text-emerald-800 border border-emerald-300': cand.confidence?.level === 'high',
+                                                    'bg-amber-100 text-amber-800 border border-amber-300': cand.confidence?.level === 'medium',
+                                                    'bg-rose-100 text-rose-800 border border-rose-300': cand.confidence?.level === 'low',
+                                                }"
+                                            >
+                                                {{ cand.confidence?.level === 'high' ? '✓ High' : (cand.confidence?.level === 'medium' ? '⚠ Medium' : '! Low') }}
+                                                ({{ cand.confidence?.percentage }}%)
+                                            </span>
+
+                                            <!-- Source badge -->
+                                            <span v-if="cand.source?.location" class="text-[10px] text-gray-500 bg-cream-200 px-2 py-0.5 rounded-md font-medium truncate max-w-xs">
+                                                📍 {{ cand.source.location }}
+                                            </span>
+                                        </div>
+
+                                        <!-- Move & Card Actions -->
+                                        <div class="flex items-center space-x-1 shrink-0">
+                                            <button
+                                                type="button"
+                                                @click="moveCandidate(cIdx, -1)"
+                                                :disabled="cIdx === 0"
+                                                class="p-1 rounded bg-cream-200 hover:bg-cream-300 disabled:opacity-30 text-xs text-gray-700 cursor-pointer"
+                                                title="Move Up"
+                                            >▲</button>
+                                            <button
+                                                type="button"
+                                                @click="moveCandidate(cIdx, 1)"
+                                                :disabled="cIdx === importResult.candidates.length - 1"
+                                                class="p-1 rounded bg-cream-200 hover:bg-cream-300 disabled:opacity-30 text-xs text-gray-700 cursor-pointer"
+                                                title="Move Down"
+                                            >▼</button>
+                                            <button
+                                                type="button"
+                                                @click="duplicateCandidate(cIdx)"
+                                                class="p-1 rounded bg-cream-200 hover:bg-cream-300 text-xs text-gray-700 cursor-pointer"
+                                                title="Duplicate Field"
+                                            >📋</button>
+                                            <button
+                                                type="button"
+                                                @click="removeCandidate(cIdx)"
+                                                class="text-red-500 hover:text-red-700 p-1 transition cursor-pointer"
+                                                title="Remove Candidate"
+                                            >
+                                                <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <!-- Fields: Particular & ID -->
+                                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                        <div class="sm:col-span-2">
+                                            <label class="block text-[10px] font-bold text-gray-500 uppercase">Question / Particular *</label>
+                                            <input
+                                                v-model="cand.particular"
+                                                type="text"
+                                                required
+                                                class="w-full px-3 py-1.5 bg-cream-100/50 border border-cream-500 focus:border-forest-600 rounded-lg text-gray-900 text-xs font-semibold"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-gray-500 uppercase">Field ID *</label>
+                                            <input
+                                                v-model="cand.id"
+                                                type="text"
+                                                required
+                                                class="w-full px-3 py-1.5 bg-cream-100/50 border border-cream-500 focus:border-forest-600 rounded-lg text-gray-900 text-xs font-mono"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <!-- Type, Required, Section -->
+                                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
+                                        <div class="flex items-center space-x-2">
+                                            <label class="text-xs text-gray-600 font-medium">Type:</label>
+                                            <select
+                                                v-model="cand.type"
+                                                @change="onCandidateTypeChange(cand)"
+                                                class="px-2.5 py-1 bg-cream-100 border border-cream-500 rounded-lg text-xs font-semibold text-gray-800"
+                                            >
+                                                <option value="radio">Radio Options</option>
+                                                <option value="select">Dropdown Select</option>
+                                                <option value="checkbox">Checkboxes (Multi-choice)</option>
+                                                <option value="text">Text (Single-line)</option>
+                                                <option value="textarea">Textarea (Long response)</option>
+                                                <option value="number">Number</option>
+                                            </select>
+                                        </div>
+
+                                        <div class="flex items-center space-x-2">
+                                            <label class="flex items-center space-x-1.5 text-xs text-gray-700 cursor-pointer font-medium">
+                                                <input
+                                                    type="checkbox"
+                                                    v-model="cand.required"
+                                                    class="rounded border-cream-400 text-forest-900 focus:ring-forest-500 size-3.5"
+                                                />
+                                                <span>Required Field</span>
+                                            </label>
+                                        </div>
+
+                                        <div v-if="cand.section" class="text-right text-[11px] text-gray-500 truncate">
+                                            📁 {{ cand.section }}
+                                        </div>
+                                    </div>
+
+                                    <!-- Options Editor for radio, select, checkbox -->
+                                    <div
+                                        v-if="['radio', 'select', 'checkbox'].includes(cand.type)"
+                                        class="bg-cream-100 p-3 rounded-xl border border-cream-400/50 space-y-2"
+                                    >
+                                        <div class="flex items-center justify-between text-[11px] font-bold text-forest-900">
+                                            <span>Options ({{ cand.options?.length || 0 }})</span>
+                                            <button
+                                                type="button"
+                                                @click="addOptionToCandidate(cand)"
+                                                class="text-xs text-forest-800 hover:underline font-bold cursor-pointer"
+                                            >
+                                                + Add Option
+                                            </button>
+                                        </div>
+
+                                        <div class="space-y-1.5">
+                                            <div
+                                                v-for="(opt, optIdx) in cand.options"
+                                                :key="optIdx"
+                                                class="flex items-center space-x-2"
+                                            >
+                                                <input
+                                                    v-model="opt.value"
+                                                    type="text"
+                                                    placeholder="value_key"
+                                                    class="w-1/3 px-2 py-1 bg-[#fffef9] border border-cream-400 focus:border-forest-600 rounded-lg text-xs font-mono"
+                                                />
+                                                <input
+                                                    v-model="opt.label"
+                                                    type="text"
+                                                    placeholder="Display Label"
+                                                    class="flex-1 px-2 py-1 bg-[#fffef9] border border-cream-400 focus:border-forest-600 rounded-lg text-xs"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    @click="removeOptionFromCandidate(cand, optIdx)"
+                                                    class="text-red-500 hover:text-red-700 text-xs px-1.5 cursor-pointer"
+                                                >✕</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Review Bottom Action Bar -->
+                            <div class="pt-3 border-t border-cream-500/40 flex items-center justify-between flex-wrap gap-2">
+                                <button
+                                    type="button"
+                                    @click="resetImportState"
+                                    class="px-4 py-2 bg-cream-200 hover:bg-cream-300 text-gray-700 text-xs font-semibold rounded-xl cursor-pointer"
+                                >
+                                    ← Upload Different File
+                                </button>
+
+                                <button
+                                    type="button"
+                                    @click="promptMergeStrategy"
+                                    :disabled="selectedCandidatesCount === 0"
+                                    class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                                >
+                                    <span>Add Selected ({{ selectedCandidatesCount }}) to Questionnaire Builder →</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div v-if="formConfig.errors.schema" class="text-xs text-red-600 font-medium">
                         {{ formConfig.errors.schema }}
                     </div>
                 </div>
 
-                <div class="pt-4 mt-4 border-t border-cream-500/40 flex items-center justify-end space-x-3 shrink-0">
+                <div class="pt-4 mt-4 border-t border-cream-500/40 flex items-center justify-between space-x-3 shrink-0">
+                    <div>
+                        <span v-if="configMode === 'import' && importResult" class="text-xs text-gray-500 font-medium">
+                            Reviewing {{ importResult.filename }}
+                        </span>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        <button
+                            type="button"
+                            @click="closeConfigModal"
+                            class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-sm font-semibold rounded-xl transition cursor-pointer"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            v-if="configMode !== 'import'"
+                            type="button"
+                            @click="saveFeedbackForm"
+                            :disabled="formConfig.processing"
+                            class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer"
+                        >
+                            {{ formConfig.processing ? 'Saving...' : 'Save Questionnaire Schema' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Merge Confirmation Modal Dialog -->
+        <div v-if="showMergeModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div class="bg-cream-200 rounded-3xl max-w-md w-full shadow-2xl p-6 border border-cream-500/60 text-center space-y-4">
+                <div class="size-12 rounded-full bg-forest-100 text-forest-900 flex items-center justify-center mx-auto text-xl font-bold">
+                    📥
+                </div>
+                <div>
+                    <h3 class="text-base font-bold text-gray-900">How should imported fields be applied?</h3>
+                    <p class="text-xs text-gray-600 mt-1">
+                        Your questionnaire builder already contains <strong>{{ formConfig.schema.fields.length }}</strong> question(s).
+                        You have selected <strong>{{ selectedCandidatesCount }}</strong> imported field(s).
+                    </p>
+                </div>
+
+                <div class="space-y-2 text-left text-xs font-semibold">
                     <button
                         type="button"
-                        @click="closeConfigModal"
-                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-sm font-semibold rounded-xl transition cursor-pointer"
+                        @click="applyImportedFields('append')"
+                        class="w-full p-3.5 bg-forest-900 hover:bg-forest-950 text-white rounded-xl shadow-xs transition flex items-center justify-between cursor-pointer"
+                    >
+                        <div>
+                            <p class="font-bold">Append imported fields (Recommended)</p>
+                            <p class="text-[11px] text-white/80 font-normal">Keep existing questions and add {{ selectedCandidatesCount }} imported fields to the end</p>
+                        </div>
+                        <span class="text-base">➕</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        @click="applyImportedFields('replace')"
+                        class="w-full p-3.5 bg-cream-100 hover:bg-amber-100 text-gray-900 hover:text-amber-900 rounded-xl border border-cream-400 hover:border-amber-300 transition flex items-center justify-between cursor-pointer"
+                    >
+                        <div>
+                            <p class="font-bold">Replace existing fields</p>
+                            <p class="text-[11px] text-gray-500 font-normal">Overwrite current questions with the {{ selectedCandidatesCount }} imported fields</p>
+                        </div>
+                        <span class="text-base">🔄</span>
+                    </button>
+                </div>
+
+                <div class="pt-2 border-t border-cream-500/30">
+                    <button
+                        type="button"
+                        @click="showMergeModal = false"
+                        class="text-xs text-gray-500 hover:text-gray-800 font-semibold cursor-pointer"
                     >
                         Cancel
-                    </button>
-                    <button
-                        type="button"
-                        @click="saveFeedbackForm"
-                        :disabled="formConfig.processing"
-                        class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer"
-                    >
-                        {{ formConfig.processing ? 'Saving...' : 'Save Questionnaire Schema' }}
                     </button>
                 </div>
             </div>
@@ -2176,6 +3264,643 @@ const performDelete = () => {
                     >
                         I Have Saved the Secret
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sample Completed Feedback Form Preview Modal (Deployed & Embedded Views) -->
+        <div v-if="showSamplePreviewModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 md:p-6">
+            <div class="bg-[#faf8f5] rounded-3xl max-w-6xl w-full max-h-[92vh] shadow-2xl border border-cream-500/70 flex flex-col overflow-hidden animate-in fade-in duration-200">
+                <!-- Top Navigation & Controls Bar -->
+                <div class="p-4 sm:p-5 bg-[#fffef9] border-b border-cream-500/60 shrink-0 space-y-3">
+                    <div class="flex items-center justify-between flex-wrap gap-3">
+                        <div class="flex items-center space-x-3">
+                            <div class="size-10 rounded-2xl bg-forest-900 text-emerald-200 flex items-center justify-center font-bold text-lg shadow-sm">
+                                👁️
+                            </div>
+                            <div>
+                                <div class="flex items-center space-x-2">
+                                    <h3 class="text-base sm:text-lg font-black text-gray-900">
+                                        Feedback Form Sample View
+                                    </h3>
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-lime-100 text-forest-900 border border-lime-300">
+                                        Live Sample Preview
+                                    </span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-0.5">
+                                    Simulating the completed questionnaire experience as seen by participants in deployed or embedded environments.
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Top Right Quick Links & Close -->
+                        <div class="flex items-center space-x-2.5">
+                            <a
+                                :href="route('feedback.form')"
+                                target="_blank"
+                                class="inline-flex items-center space-x-1 px-3 py-1.5 bg-cream-100 hover:bg-cream-200 text-forest-900 border border-cream-400 rounded-xl text-xs font-semibold transition"
+                                title="Open the live deployed feedback portal in a new browser tab"
+                            >
+                                <span>Open Live Deployed</span>
+                                <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                </svg>
+                            </a>
+
+                            <a
+                                v-if="previewEvent?.embed?.public_id"
+                                :href="route('feedback.embed.show', previewEvent.embed.public_id)"
+                                target="_blank"
+                                class="inline-flex items-center space-x-1 px-3 py-1.5 bg-cream-100 hover:bg-cream-200 text-forest-900 border border-cream-400 rounded-xl text-xs font-semibold transition"
+                                title="Open the live embed standalone URL in a new browser tab"
+                            >
+                                <span>Open Live Embed</span>
+                                <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                </svg>
+                            </a>
+
+                            <button
+                                type="button"
+                                @click="closeSamplePreviewModal"
+                                class="p-2 text-gray-400 hover:text-gray-700 hover:bg-cream-200 rounded-xl transition cursor-pointer"
+                                title="Close Sample Preview"
+                            >
+                                <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Environment & Mode Switchers Toolbar -->
+                    <div class="flex items-center justify-between flex-wrap gap-2.5 pt-2 border-t border-cream-500/30">
+                        <div class="flex items-center flex-wrap gap-2">
+                            <!-- Event Selector -->
+                            <div class="flex items-center space-x-1.5 bg-cream-100 px-3 py-1.5 rounded-xl border border-cream-400 text-xs font-semibold text-gray-800">
+                                <span class="text-gray-500">Event:</span>
+                                <select
+                                    v-model="previewSelectedEventId"
+                                    @change="onPreviewEventChange"
+                                    class="bg-transparent border-none text-xs font-bold text-forest-900 focus:ring-0 p-0 pr-6 cursor-pointer"
+                                >
+                                    <option v-for="ev in events" :key="ev.id" :value="ev.id">
+                                        {{ ev.name }} (ID: {{ ev.id }})
+                                    </option>
+                                </select>
+                            </div>
+
+                            <!-- Mode Switcher: Deployed vs Embedded -->
+                            <div class="bg-cream-200 p-1 rounded-xl flex items-center space-x-1 border border-cream-400">
+                                <button
+                                    type="button"
+                                    @click="previewMode = 'deployed'"
+                                    class="px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer flex items-center space-x-1.5"
+                                    :class="previewMode === 'deployed' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                >
+                                    <span>🌐</span>
+                                    <span>Deployed View (Web Portal)</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="previewMode = 'embedded'"
+                                    class="px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer flex items-center space-x-1.5"
+                                    :class="previewMode === 'embedded' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                >
+                                    <span>📦</span>
+                                    <span>Embedded View (Iframe Mockup)</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Right Options: Sample Filled vs Blank & Device Switcher -->
+                        <div class="flex items-center flex-wrap gap-2">
+                            <!-- Device Viewport Switcher (Active in Embedded Mode) -->
+                            <div v-if="previewMode === 'embedded'" class="bg-cream-200 p-1 rounded-xl flex items-center space-x-1 border border-cream-400">
+                                <button
+                                    type="button"
+                                    @click="previewDevice = 'desktop'"
+                                    class="px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer flex items-center space-x-1"
+                                    :class="previewDevice === 'desktop' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                    title="Desktop Viewport (100% full width)"
+                                >
+                                    <span>🖥️ Desktop</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="previewDevice = 'tablet'"
+                                    class="px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer flex items-center space-x-1"
+                                    :class="previewDevice === 'tablet' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                    title="Tablet Viewport (768px width)"
+                                >
+                                    <span>📱 Tablet (768px)</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="previewDevice = 'mobile'"
+                                    class="px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer flex items-center space-x-1"
+                                    :class="previewDevice === 'mobile' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                    title="Mobile Viewport (375px width)"
+                                >
+                                    <span>📱 Mobile (375px)</span>
+                                </button>
+                            </div>
+
+                            <!-- Fill State Toggle (Sample Completed vs Blank) -->
+                            <div class="bg-cream-200 p-1 rounded-xl flex items-center space-x-1 border border-cream-400">
+                                <button
+                                    type="button"
+                                    @click="resetPreviewAnswers('completed')"
+                                    class="px-3 py-1 text-xs font-bold rounded-lg transition cursor-pointer flex items-center space-x-1"
+                                    :class="previewFillState === 'completed' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                >
+                                    <span>✓</span>
+                                    <span>Sample Completed</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="resetPreviewAnswers('blank')"
+                                    class="px-3 py-1 text-xs font-bold rounded-lg transition cursor-pointer flex items-center space-x-1"
+                                    :class="previewFillState === 'blank' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:text-gray-900'"
+                                >
+                                    <span>⬜</span>
+                                    <span>Blank Form</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scrollable Preview Canvas Body -->
+                <div class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-[#faf8f5]/60">
+                    <!-- Notice Banner -->
+                    <div class="mb-6 p-3 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-900 flex items-center justify-between shadow-2xs">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-base">💡</span>
+                            <span>
+                                <strong>Interactive Simulation:</strong> You are viewing a sample representation of this feedback questionnaire.
+                                <span v-if="previewFillState === 'completed'"> All fields are pre-filled with representative participant answers.</span>
+                                <span v-else> Fields are empty to let you test manual typing and option selections.</span>
+                            </span>
+                        </div>
+                        <span class="text-[11px] font-mono text-amber-700 uppercase tracking-wider shrink-0 hidden sm:inline">
+                            {{ previewMode === 'deployed' ? 'Deployed Portal Layout' : 'Embedded Iframe Layout' }}
+                        </span>
+                    </div>
+
+                    <!-- Empty State If Schema Has No Fields -->
+                    <div v-if="!previewFields.length" class="bg-cream-200 rounded-3xl p-12 text-center border border-cream-500/50 shadow-sm max-w-xl mx-auto">
+                        <div class="size-16 rounded-full bg-cream-100 text-gray-400 flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
+                            📝
+                        </div>
+                        <h3 class="text-base font-bold text-gray-900">No Questionnaire Configured</h3>
+                        <p class="text-xs text-gray-600 max-w-sm mx-auto mt-1">
+                            This event currently has no active questionnaire fields configured. Configure questions in the Visual Builder to see a live preview.
+                        </p>
+                    </div>
+
+                    <!-- MODE 1: DEPLOYED STANDALONE VIEW -->
+                    <div v-else-if="previewMode === 'deployed'" class="max-w-4xl mx-auto space-y-6">
+                        <!-- Simulated Top Web Header -->
+                        <div class="bg-white/80 rounded-2xl px-5 py-3 border border-cream-400 shadow-2xs flex items-center justify-between text-xs text-gray-600">
+                            <div class="flex items-center space-x-2">
+                                <span class="size-2 rounded-full bg-emerald-500"></span>
+                                <span class="font-bold text-gray-800">Login Portal — Participant Feedback System</span>
+                            </div>
+                            <span class="font-mono text-[11px] text-gray-500">Route: /feedback</span>
+                        </div>
+
+                        <!-- Event Banner Card -->
+                        <div
+                            class="bg-forest-900 rounded-3xl p-6 sm:p-8 text-white shadow-lg border border-forest-800 relative overflow-hidden"
+                            style="background-color: #1b4332; color: #ffffff;"
+                        >
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <span
+                                        class="inline-flex items-center px-3 py-1 rounded-lg text-[11px] font-black uppercase tracking-wider shadow-xs mb-3"
+                                        style="background-color: #fde047; color: #1b4332;"
+                                    >
+                                        Active Evaluation
+                                    </span>
+                                    <h1
+                                        class="text-2xl sm:text-3xl font-black tracking-tight"
+                                        style="color: #ffffff;"
+                                    >
+                                        {{ previewEvent?.name || 'Evaluation Feedback Form' }}
+                                    </h1>
+                                    <p
+                                        v-if="previewEvent?.details"
+                                        class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium"
+                                        style="color: #dcfce7;"
+                                    >
+                                        {{ previewEvent.details }}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Questionnaire Fields Card -->
+                        <div class="bg-[#fffef9] rounded-3xl p-6 sm:p-8 border border-cream-500/70 shadow-sm space-y-6">
+                            <div class="border-b border-cream-400/50 pb-3 flex items-center justify-between">
+                                <div>
+                                    <h3 class="text-base font-bold text-gray-900">
+                                        Feedback Questionnaire
+                                    </h3>
+                                    <p class="text-xs text-gray-500 mt-0.5">Please provide your honest answers and ratings for each item below.</p>
+                                </div>
+                                <span class="text-xs font-bold text-forest-900 bg-lime-100 px-2.5 py-1 rounded-lg border border-lime-300">
+                                    {{ previewFields.length }} Item{{ previewFields.length > 1 ? 's' : '' }}
+                                </span>
+                            </div>
+
+                            <div class="space-y-6">
+                                <div
+                                    v-for="(field, index) in previewFields"
+                                    :key="'deployed-' + field.id"
+                                    class="p-5 rounded-2xl border bg-cream-100/50 border-cream-400/60 hover:border-forest-600/40 space-y-3 transition"
+                                >
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="flex items-center space-x-2">
+                                            <span class="size-6 rounded-full bg-forest-900 text-emerald-200 text-xs font-bold flex items-center justify-center shrink-0">
+                                                {{ field.weight || index + 1 }}
+                                            </span>
+                                            <label class="text-sm font-bold text-gray-900">
+                                                {{ field.particular }}
+                                                <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
+                                                <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>
+                                            </label>
+                                        </div>
+                                        <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cream-200 text-gray-600 shrink-0">
+                                            {{ field.type }}
+                                        </span>
+                                    </div>
+
+                                    <!-- Text Input -->
+                                    <div v-if="field.type === 'text'">
+                                        <input
+                                            v-model="previewAnswers[field.id]"
+                                            type="text"
+                                            :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                            class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
+                                        />
+                                    </div>
+
+                                    <!-- Textarea Input -->
+                                    <div v-else-if="field.type === 'textarea'">
+                                        <textarea
+                                            v-model="previewAnswers[field.id]"
+                                            rows="3"
+                                            :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                            class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
+                                        ></textarea>
+                                    </div>
+
+                                    <!-- Number Input -->
+                                    <div v-else-if="field.type === 'number'">
+                                        <input
+                                            v-model.number="previewAnswers[field.id]"
+                                            type="number"
+                                            :min="field.min !== null && field.min !== undefined ? field.min : undefined"
+                                            :max="field.max !== null && field.max !== undefined ? field.max : undefined"
+                                            :placeholder="field.placeholder || '0'"
+                                            class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
+                                        />
+                                    </div>
+
+                                    <!-- Radio Option Tiles -->
+                                    <div v-else-if="field.type === 'radio'" class="space-y-3">
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                            <label
+                                                v-for="opt in getPreviewFieldOptions(field)"
+                                                :key="opt.value"
+                                                class="flex items-center space-x-3 p-3 rounded-xl border transition cursor-pointer"
+                                                :class="String(previewAnswers[field.id]) === String(opt.value) ? 'bg-forest-900 text-white border-forest-950 shadow-xs font-semibold' : 'bg-[#fffef9] text-gray-800 border-cream-400 hover:bg-cream-200/60'"
+                                            >
+                                                <input
+                                                    type="radio"
+                                                    :name="`deployed_field_${field.id}`"
+                                                    :value="opt.value"
+                                                    v-model="previewAnswers[field.id]"
+                                                    class="text-forest-900 focus:ring-forest-500 size-4 shrink-0"
+                                                />
+                                                <span class="text-xs">{{ opt.label }}</span>
+                                            </label>
+                                        </div>
+
+                                        <!-- If allow_other is true and an "Other" option is selected -->
+                                        <div v-if="isPreviewOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
+                                            <label class="block text-xs font-bold text-amber-900">
+                                                Please specify {{ field.particular }}
+                                            </label>
+                                            <input
+                                                v-model="previewAnswers[`${field.id}_other`]"
+                                                type="text"
+                                                placeholder="Please specify details..."
+                                                class="w-full px-3.5 py-2 bg-[#fffef9] border border-amber-400 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-lg text-gray-900 text-xs font-medium"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <!-- Dropdown Select -->
+                                    <div v-else-if="field.type === 'select'" class="space-y-3">
+                                        <select
+                                            v-model="previewAnswers[field.id]"
+                                            class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
+                                        >
+                                            <option value="" disabled>-- Select {{ field.particular }} --</option>
+                                            <option v-for="opt in getPreviewFieldOptions(field)" :key="opt.value" :value="opt.value">
+                                                {{ opt.label }}
+                                            </option>
+                                        </select>
+
+                                        <!-- If allow_other is true and an "Other" option is selected -->
+                                        <div v-if="isPreviewOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
+                                            <label class="block text-xs font-bold text-amber-900">
+                                                Please specify {{ field.particular }}
+                                            </label>
+                                            <input
+                                                v-model="previewAnswers[`${field.id}_other`]"
+                                                type="text"
+                                                placeholder="Please specify details..."
+                                                class="w-full px-3.5 py-2 bg-[#fffef9] border border-amber-400 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-lg text-gray-900 text-xs font-medium"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <!-- Checkbox Multi-Choice Tiles -->
+                                    <div v-else-if="field.type === 'checkbox'" class="space-y-3">
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                            <label
+                                                v-for="opt in getPreviewFieldOptions(field)"
+                                                :key="opt.value"
+                                                class="flex items-center space-x-3 p-3 rounded-xl border transition cursor-pointer"
+                                                :class="(previewAnswers[field.id] || []).includes(opt.value) ? 'bg-forest-900 text-white border-forest-950 shadow-xs font-semibold' : 'bg-[#fffef9] text-gray-800 border-cream-400 hover:bg-cream-200/60'"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    :value="opt.value"
+                                                    :checked="(previewAnswers[field.id] || []).includes(opt.value)"
+                                                    @change="handlePreviewCheckboxToggle(field.id, opt.value)"
+                                                    class="rounded text-forest-900 focus:ring-forest-500 size-4 shrink-0"
+                                                />
+                                                <span class="text-xs">{{ opt.label }}</span>
+                                            </label>
+                                        </div>
+
+                                        <!-- If allow_other is true and an "Other" option is selected -->
+                                        <div v-if="isPreviewOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
+                                            <label class="block text-xs font-bold text-amber-900">
+                                                Please specify {{ field.particular }}
+                                            </label>
+                                            <input
+                                                v-model="previewAnswers[`${field.id}_other`]"
+                                                type="text"
+                                                placeholder="Please specify details..."
+                                                class="w-full px-3.5 py-2 bg-[#fffef9] border border-amber-400 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-lg text-gray-900 text-xs font-medium"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Simulated Action Bar -->
+                        <div class="bg-[#fffef9] rounded-3xl p-6 border border-cream-500/70 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                            <div class="text-xs text-gray-500 text-center sm:text-left">
+                                <span>Your submission will be securely recorded under <strong>{{ previewEvent?.name }}</strong>.</span>
+                            </div>
+
+                            <div class="flex items-center space-x-3 w-full sm:w-auto">
+                                <span class="px-4 py-2 bg-cream-100 text-gray-500 text-xs font-semibold rounded-xl border border-cream-300 select-none">
+                                    Cancel
+                                </span>
+
+                                <span class="inline-flex items-center justify-center px-6 py-2.5 bg-forest-900 text-white text-xs font-bold rounded-xl shadow-md select-none opacity-90 cursor-not-allowed">
+                                    Submit Evaluation Feedback
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- MODE 2: EMBEDDED IFRAME MOCKUP VIEW -->
+                    <div v-else-if="previewMode === 'embedded'" class="w-full transition-all duration-300">
+                        <!-- Simulated Parent Website Frame / Browser Window Mockup -->
+                        <div
+                            class="bg-[#fffef9] rounded-3xl border border-gray-300 shadow-xl overflow-hidden transition-all duration-300 mx-auto"
+                            :class="[
+                                previewDevice === 'desktop' ? 'max-w-4xl' : (previewDevice === 'tablet' ? 'max-w-[768px]' : 'max-w-[375px]')
+                            ]"
+                        >
+                            <!-- Mock Browser Window Title Bar -->
+                            <div class="bg-gray-100 px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+                                <div class="flex items-center space-x-2">
+                                    <span class="size-3 rounded-full bg-red-400"></span>
+                                    <span class="size-3 rounded-full bg-amber-400"></span>
+                                    <span class="size-3 rounded-full bg-emerald-400"></span>
+                                    <span class="text-[11px] font-mono text-gray-400 ml-2">External Host Website (Portal Mockup)</span>
+                                </div>
+                                <div class="px-3 py-1 bg-white rounded-lg border border-gray-300 text-[11px] font-mono text-gray-600 truncate max-w-xs">
+                                    https://agency.gov.ph/services/feedback-window
+                                </div>
+                                <div class="text-[10px] font-bold text-gray-500 uppercase">
+                                    {{ previewDevice }}
+                                </div>
+                            </div>
+
+                            <!-- Mock Host Website Content Container -->
+                            <div class="p-4 sm:p-6 bg-gray-50 border-b border-gray-200 space-y-2">
+                                <div class="flex items-center justify-between">
+                                    <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                                        <span>🏛️</span>
+                                        <span>Agency Intranet & Public Portal</span>
+                                    </h4>
+                                    <span class="text-[10px] font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-bold">
+                                        Parent Iframe Container
+                                    </span>
+                                </div>
+                                <p class="text-xs text-gray-600">
+                                    The feedback questionnaire below is embedded seamlessly via secure iframe with dynamic postMessage cross-origin communication.
+                                </p>
+                            </div>
+
+                            <!-- The Simulated Iframe Container Area -->
+                            <div class="p-3 sm:p-5 bg-[#faf8f5]">
+                                <div class="border-2 border-dashed border-forest-600/30 rounded-2xl p-3 sm:p-6 bg-[#faf8f5] space-y-5">
+                                    <!-- Embedded Header Card (Matches Feedback/Embed.vue) -->
+                                    <div class="bg-forest-900 rounded-2xl p-5 text-white shadow-md">
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-yellow-300 text-forest-950 mb-2">
+                                            Embedded Evaluation
+                                        </span>
+                                        <h2 class="text-lg sm:text-xl font-black">
+                                            {{ previewEvent?.name }}
+                                        </h2>
+                                        <p v-if="previewEvent?.details" class="text-xs text-emerald-100 mt-1 line-clamp-2">
+                                            {{ previewEvent.details }}
+                                        </p>
+                                    </div>
+
+                                    <!-- Embedded Questions -->
+                                    <div class="space-y-4">
+                                        <div
+                                            v-for="(field, index) in previewFields"
+                                            :key="'embed-' + field.id"
+                                            class="p-4 bg-white rounded-xl border border-cream-400 space-y-2.5 shadow-2xs"
+                                        >
+                                            <div class="flex items-start justify-between gap-2">
+                                                <div class="flex items-center space-x-2">
+                                                    <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                                                        {{ field.weight || index + 1 }}
+                                                    </span>
+                                                    <label class="text-xs font-bold text-gray-900">
+                                                        {{ field.particular }}
+                                                        <span v-if="field.required" class="text-red-500">*</span>
+                                                    </label>
+                                                </div>
+                                                <span class="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase bg-gray-100 text-gray-500">
+                                                    {{ field.type }}
+                                                </span>
+                                            </div>
+
+                                            <!-- Field Input for Embed Preview -->
+                                            <div v-if="field.type === 'text'">
+                                                <input
+                                                    v-model="previewAnswers[field.id]"
+                                                    type="text"
+                                                    :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                                    class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
+                                                />
+                                            </div>
+
+                                            <div v-else-if="field.type === 'textarea'">
+                                                <textarea
+                                                    v-model="previewAnswers[field.id]"
+                                                    rows="2"
+                                                    :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                                    class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
+                                                ></textarea>
+                                            </div>
+
+                                            <div v-else-if="field.type === 'number'">
+                                                <input
+                                                    v-model.number="previewAnswers[field.id]"
+                                                    type="number"
+                                                    class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
+                                                />
+                                            </div>
+
+                                            <div v-else-if="field.type === 'radio'" class="space-y-2">
+                                                <div class="grid grid-cols-1 gap-2">
+                                                    <label
+                                                        v-for="opt in getPreviewFieldOptions(field)"
+                                                        :key="opt.value"
+                                                        class="flex items-center space-x-2.5 p-2 rounded-lg border text-xs cursor-pointer transition"
+                                                        :class="String(previewAnswers[field.id]) === String(opt.value) ? 'bg-forest-900 text-white font-semibold' : 'bg-[#fffef9] text-gray-800 border-gray-200'"
+                                                    >
+                                                        <input
+                                                            type="radio"
+                                                            :name="`embed_field_${field.id}`"
+                                                            :value="opt.value"
+                                                            v-model="previewAnswers[field.id]"
+                                                            class="size-3.5 text-forest-900"
+                                                        />
+                                                        <span>{{ opt.label }}</span>
+                                                    </label>
+                                                </div>
+
+                                                <div v-if="isPreviewOtherSelected(field)" class="p-2 bg-amber-50 rounded-lg border border-amber-300 space-y-1">
+                                                    <label class="text-[11px] font-bold text-amber-900">Please specify details:</label>
+                                                    <input
+                                                        v-model="previewAnswers[`${field.id}_other`]"
+                                                        type="text"
+                                                        class="w-full px-2.5 py-1.5 bg-white border border-amber-400 rounded text-xs"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="field.type === 'select'" class="space-y-2">
+                                                <select
+                                                    v-model="previewAnswers[field.id]"
+                                                    class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
+                                                >
+                                                    <option value="" disabled>-- Select {{ field.particular }} --</option>
+                                                    <option v-for="opt in getPreviewFieldOptions(field)" :key="opt.value" :value="opt.value">
+                                                        {{ opt.label }}
+                                                    </option>
+                                                </select>
+
+                                                <div v-if="isPreviewOtherSelected(field)" class="p-2 bg-amber-50 rounded-lg border border-amber-300 space-y-1">
+                                                    <label class="text-[11px] font-bold text-amber-900">Please specify details:</label>
+                                                    <input
+                                                        v-model="previewAnswers[`${field.id}_other`]"
+                                                        type="text"
+                                                        class="w-full px-2.5 py-1.5 bg-white border border-amber-400 rounded text-xs"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="field.type === 'checkbox'" class="space-y-2">
+                                                <div class="grid grid-cols-1 gap-2">
+                                                    <label
+                                                        v-for="opt in getPreviewFieldOptions(field)"
+                                                        :key="opt.value"
+                                                        class="flex items-center space-x-2.5 p-2 rounded-lg border text-xs cursor-pointer transition"
+                                                        :class="(previewAnswers[field.id] || []).includes(opt.value) ? 'bg-forest-900 text-white font-semibold' : 'bg-[#fffef9] text-gray-800 border-gray-200'"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            :value="opt.value"
+                                                            :checked="(previewAnswers[field.id] || []).includes(opt.value)"
+                                                            @change="handlePreviewCheckboxToggle(field.id, opt.value)"
+                                                            class="size-3.5 rounded text-forest-900"
+                                                        />
+                                                        <span>{{ opt.label }}</span>
+                                                    </label>
+                                                </div>
+
+                                                <div v-if="isPreviewOtherSelected(field)" class="p-2 bg-amber-50 rounded-lg border border-amber-300 space-y-1">
+                                                    <label class="text-[11px] font-bold text-amber-900">Please specify details:</label>
+                                                    <input
+                                                        v-model="previewAnswers[`${field.id}_other`]"
+                                                        type="text"
+                                                        class="w-full px-2.5 py-1.5 bg-white border border-amber-400 rounded text-xs"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Embedded Submit Button -->
+                                    <div class="pt-2 flex justify-end">
+                                        <span class="w-full sm:w-auto text-center px-6 py-2.5 bg-forest-900 text-white rounded-xl text-xs font-bold shadow-sm select-none opacity-90 cursor-not-allowed">
+                                            Submit Evaluation Feedback
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer Summary Bar -->
+                <div class="p-4 bg-[#fffef9] border-t border-cream-500/60 shrink-0 flex items-center justify-between text-xs text-gray-500">
+                    <div class="flex items-center space-x-2">
+                        <span class="font-bold text-gray-800">{{ previewEvent?.name }}</span>
+                        <span>•</span>
+                        <span>{{ previewFields.length }} Questionnaire Questions</span>
+                        <span>•</span>
+                        <span class="capitalize text-forest-900 font-semibold">{{ previewMode }} View</span>
+                    </div>
+
+                    <div class="flex items-center space-x-3">
+                        <button
+                            type="button"
+                            @click="closeSamplePreviewModal"
+                            class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-800 text-xs font-semibold rounded-xl transition cursor-pointer"
+                        >
+                            Close Preview
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
