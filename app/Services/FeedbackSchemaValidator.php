@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\Agency;
+use App\Models\Designation;
 use App\Models\FbEvent;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -15,6 +17,8 @@ class FeedbackSchemaValidator
      */
     public const SUPPORTED_TYPES = [
         'text',
+        'textarea',
+        'number',
         'radio',
         'select',
         'checkbox',
@@ -29,6 +33,18 @@ class FeedbackSchemaValidator
         'radio',
         'select',
         'checkbox',
+    ];
+
+    /**
+     * Supported dynamic option sources.
+     *
+     * @var array<int, string>
+     */
+    public const SUPPORTED_OPTION_SOURCES = [
+        'static',
+        'fb_functions',
+        'agencies',
+        'designations',
     ];
 
     /**
@@ -101,14 +117,23 @@ class FeedbackSchemaValidator
             }
 
             $weight = isset($field['weight']) ? (int) $field['weight'] : ($index + 1);
+            $required = (bool) ($field['required'] ?? false);
+            $allowOther = (bool) ($field['allow_other'] ?? false);
+            $allowCustomValue = (bool) ($field['allow_custom_value'] ?? false);
+            $placeholder = isset($field['placeholder']) && is_string($field['placeholder']) ? trim($field['placeholder']) : null;
+            $min = isset($field['min']) && is_numeric($field['min']) ? (float) $field['min'] : null;
+            $max = isset($field['max']) && is_numeric($field['max']) ? (float) $field['max'] : null;
+
             $optionSource = trim((string) ($field['option_source'] ?? 'static'));
+            if (! in_array($optionSource, self::SUPPORTED_OPTION_SOURCES, true)) {
+                $optionSource = 'static';
+            }
 
             // Normalize options
             $options = [];
-            $isFunctionSourced = ($type === 'select' && $optionSource === 'fb_functions');
+            $isDynamicSource = in_array($optionSource, ['fb_functions', 'agencies', 'designations'], true);
 
-            if ($isFunctionSourced) {
-                // Function-sourced dropdown: options are resolved dynamically from event functions
+            if ($isDynamicSource) {
                 $rawFunctionIds = $field['function_ids'] ?? [];
                 $functionIds = [];
                 if (is_array($rawFunctionIds)) {
@@ -120,12 +145,18 @@ class FeedbackSchemaValidator
                     'particular' => $particular,
                     'type' => $type,
                     'weight' => $weight,
-                    'option_source' => 'fb_functions',
+                    'required' => $required,
+                    'placeholder' => $placeholder,
+                    'min' => $min,
+                    'max' => $max,
+                    'allow_other' => $allowOther,
+                    'allow_custom_value' => $allowCustomValue,
+                    'option_source' => $optionSource,
                     'function_ids' => $functionIds,
                     'options' => [],
                 ];
             } else {
-                if (in_array($type, self::TYPES_REQUIRING_OPTIONS, true)) {
+                if (in_array($type, self::TYPES_REQUIRING_OPTIONS, true) && ! $allowCustomValue) {
                     $rawOptions = $field['options'] ?? [];
                     if (! is_array($rawOptions) || empty($rawOptions)) {
                         throw ValidationException::withMessages([
@@ -137,12 +168,14 @@ class FeedbackSchemaValidator
                         if (is_array($opt)) {
                             $optVal = trim((string) ($opt['value'] ?? ''));
                             $optLabel = trim((string) ($opt['label'] ?? $optVal));
+                            $isOther = (bool) ($opt['is_other'] ?? ($optVal === 'other' || strtolower($optLabel) === 'other' || strtolower($optLabel) === 'others'));
                             if ($optVal === '') {
                                 $optVal = Str::slug($optLabel, '_') ?: 'opt_'.($optIdx + 1);
                             }
                         } else {
                             $optLabel = trim((string) $opt);
                             $optVal = Str::slug($optLabel, '_') ?: 'opt_'.($optIdx + 1);
+                            $isOther = ($optVal === 'other' || strtolower($optLabel) === 'other' || strtolower($optLabel) === 'others');
                         }
 
                         if ($optLabel === '') {
@@ -152,6 +185,7 @@ class FeedbackSchemaValidator
                         $options[] = [
                             'value' => $optVal,
                             'label' => $optLabel,
+                            'is_other' => $isOther,
                         ];
                     }
 
@@ -167,6 +201,13 @@ class FeedbackSchemaValidator
                     'particular' => $particular,
                     'type' => $type,
                     'weight' => $weight,
+                    'required' => $required,
+                    'placeholder' => $placeholder,
+                    'min' => $min,
+                    'max' => $max,
+                    'allow_other' => $allowOther,
+                    'allow_custom_value' => $allowCustomValue,
+                    'option_source' => 'static',
                     'options' => $options,
                 ];
             }
@@ -183,7 +224,7 @@ class FeedbackSchemaValidator
     }
 
     /**
-     * Dynamically populate event-specific function options for function-sourced fields.
+     * Dynamically populate event-specific function/lookup options for schema fields.
      */
     public function resolveSchemaForEvent(array $schema, ?FbEvent $event = null): array
     {
@@ -193,7 +234,11 @@ class FeedbackSchemaValidator
 
         $fields = $schema['fields'];
         foreach ($fields as &$field) {
-            if (($field['type'] ?? '') === 'select' && ($field['option_source'] ?? '') === 'fb_functions') {
+            $type = $field['type'] ?? 'text';
+            $source = $field['option_source'] ?? 'static';
+            $allowOther = (bool) ($field['allow_other'] ?? false);
+
+            if ($source === 'fb_functions') {
                 if ($event) {
                     $query = $event->functions()->orderBy('function');
                     if (! empty($field['function_ids']) && is_array($field['function_ids'])) {
@@ -201,21 +246,71 @@ class FeedbackSchemaValidator
                     }
                     $functions = $query->get();
 
-                    $field['options'] = $functions->map(function ($fn) {
+                    $options = $functions->map(function ($fn) {
                         $label = $fn->function;
                         if (! empty($fn->details)) {
                             $label .= " ({$fn->details})";
                         }
+                        $isOther = in_array(strtolower(trim($fn->function)), ['other', 'others'], true);
 
                         return [
                             'value' => (string) $fn->id,
                             'label' => $label,
+                            'is_other' => $isOther,
                         ];
                     })->values()->all();
+
+                    // If allow_other is true and no function is named Other/Others, append standard other option
+                    if ($allowOther && ! collect($options)->contains('is_other', true)) {
+                        $options[] = [
+                            'value' => 'other',
+                            'label' => 'Others',
+                            'is_other' => true,
+                        ];
+                    }
+
+                    $field['options'] = $options;
                 } else {
                     $field['options'] = [];
                 }
+            } elseif ($source === 'agencies') {
+                $agencies = Agency::getCachedList();
+                $field['options'] = array_map(fn ($name) => [
+                    'value' => $name,
+                    'label' => $name,
+                    'is_other' => false,
+                ], $agencies);
+            } elseif ($source === 'designations') {
+                $designations = Designation::getCachedList();
+                $field['options'] = array_map(fn ($name) => [
+                    'value' => $name,
+                    'label' => $name,
+                    'is_other' => false,
+                ], $designations);
+            } else {
+                // Ensure options structure has is_other flag
+                $rawOptions = $field['options'] ?? [];
+                $normalizedOptions = [];
+                foreach ($rawOptions as $opt) {
+                    if (is_array($opt)) {
+                        $optVal = (string) ($opt['value'] ?? '');
+                        $optLabel = (string) ($opt['label'] ?? $optVal);
+                        $isOther = (bool) ($opt['is_other'] ?? ($optVal === 'other' || in_array(strtolower($optLabel), ['other', 'others'], true)));
+                        $normalizedOptions[] = [
+                            'value' => $optVal,
+                            'label' => $optLabel,
+                            'is_other' => $isOther,
+                        ];
+                    }
+                }
+                $field['options'] = $normalizedOptions;
             }
+
+            // Ensure baseline properties exist
+            $field['required'] = (bool) ($field['required'] ?? false);
+            $field['allow_other'] = $allowOther;
+            $field['allow_custom_value'] = (bool) ($field['allow_custom_value'] ?? false);
+            $field['placeholder'] = $field['placeholder'] ?? null;
         }
 
         return ['fields' => $fields];
@@ -237,11 +332,11 @@ class FeedbackSchemaValidator
 
         if (! is_array($data)) {
             throw ValidationException::withMessages([
-                'data' => 'Submission data must be a valid key-value object.',
+                'answers' => 'Submission data must be a valid key-value object.',
             ]);
         }
 
-        // Dynamically resolve options if schema has function-sourced fields
+        // Dynamically resolve options if schema has function-sourced or lookup fields
         $resolvedSchema = $this->resolveSchemaForEvent($schema, $event);
         $fields = $resolvedSchema['fields'] ?? [];
         $fieldMap = [];
@@ -251,10 +346,16 @@ class FeedbackSchemaValidator
 
         $errors = [];
 
-        // Check for unknown fields
+        // Check for unknown fields (ignoring valid _other suffix keys)
         foreach ($data as $key => $val) {
+            if (str_ends_with($key, '_other')) {
+                $baseKey = substr($key, 0, -6);
+                if (isset($fieldMap[$baseKey])) {
+                    continue;
+                }
+            }
             if (! isset($fieldMap[$key])) {
-                $errors["data.{$key}"] = "Unknown field '{$key}' is not part of this feedback form.";
+                $errors["answers.{$key}"] = "Unknown field '{$key}' is not part of this feedback form.";
             }
         }
 
@@ -267,18 +368,24 @@ class FeedbackSchemaValidator
         foreach ($fields as $field) {
             $id = $field['id'];
             $particular = $field['particular'];
-            $type = $field['type'];
+            $type = $field['type'] ?? 'text';
+            $isRequired = (bool) ($field['required'] ?? false);
+            $allowOther = (bool) ($field['allow_other'] ?? false);
+            $allowCustomValue = (bool) ($field['allow_custom_value'] ?? false);
             $options = $field['options'] ?? [];
 
             $allowedValues = array_column($options, 'value');
 
-            if (! array_key_exists($id, $data)) {
+            $value = $data[$id] ?? null;
+
+            // Check required constraint
+            if ($isRequired && ($value === null || $value === '' || (is_array($value) && count($value) === 0))) {
+                $errors["answers.{$id}"] = "The '{$particular}' field is required.";
+                $errors["data.{$id}"] = "The '{$particular}' field is required.";
                 $sanitized[$id] = null;
 
                 continue;
             }
-
-            $value = $data[$id];
 
             if ($value === null || $value === '' || (is_array($value) && count($value) === 0)) {
                 $sanitized[$id] = null;
@@ -288,29 +395,67 @@ class FeedbackSchemaValidator
 
             switch ($type) {
                 case 'text':
+                case 'textarea':
                     if (! is_string($value) && ! is_numeric($value)) {
+                        $errors["answers.{$id}"] = "The '{$particular}' field must be text.";
                         $errors["data.{$id}"] = "The '{$particular}' field must be text.";
                     } else {
                         $sanitized[$id] = (string) $value;
                     }
                     break;
 
+                case 'number':
+                    if (! is_numeric($value)) {
+                        $errors["answers.{$id}"] = "The '{$particular}' field must be a number.";
+                        $errors["data.{$id}"] = "The '{$particular}' field must be a number.";
+                    } else {
+                        $num = is_int($value) ? (int) $value : (float) $value;
+                        if (isset($field['min']) && $num < $field['min']) {
+                            $errors["answers.{$id}"] = "The '{$particular}' must be at least {$field['min']}.";
+                            $errors["data.{$id}"] = "The '{$particular}' must be at least {$field['min']}.";
+                        }
+                        if (isset($field['max']) && $num > $field['max']) {
+                            $errors["answers.{$id}"] = "The '{$particular}' may not be greater than {$field['max']}.";
+                            $errors["data.{$id}"] = "The '{$particular}' may not be greater than {$field['max']}.";
+                        }
+                        $sanitized[$id] = $num;
+                    }
+                    break;
+
                 case 'radio':
                 case 'select':
                     if (! is_scalar($value)) {
+                        $errors["answers.{$id}"] = "The selected option for '{$particular}' is invalid.";
                         $errors["data.{$id}"] = "The selected option for '{$particular}' is invalid.";
                     } else {
                         $strVal = (string) $value;
-                        if (! in_array($strVal, $allowedValues, true)) {
-                            $errors["data.{$id}"] = "The selected option for '{$particular}' is invalid.";
-                        } else {
+                        $matchedOpt = collect($options)->firstWhere('value', $strVal);
+                        $isOtherSelected = $allowOther && (
+                            ($matchedOpt['is_other'] ?? false) ||
+                            ($strVal === 'other' && in_array('other', $allowedValues, true))
+                        );
+
+                        if ($isOtherSelected) {
+                            $otherVal = $data[$id.'_other'] ?? $data['custom_'.$id] ?? null;
                             $sanitized[$id] = $strVal;
+                            $sanitized[$id.'_other'] = $otherVal !== null ? trim((string) $otherVal) : null;
+
+                            if ($isRequired && empty($sanitized[$id.'_other'])) {
+                                $errors["answers.{$id}_other"] = "Please specify a value for '{$particular}'.";
+                                $errors["data.{$id}_other"] = "Please specify a value for '{$particular}'.";
+                            }
+                        } elseif ($allowCustomValue || in_array($strVal, $allowedValues, true)) {
+                            $sanitized[$id] = $strVal;
+                        } else {
+                            $errors["answers.{$id}"] = "The selected option for '{$particular}' is invalid.";
+                            $errors["data.{$id}"] = "The selected option for '{$particular}' is invalid.";
                         }
                     }
                     break;
 
                 case 'checkbox':
                     if (! is_array($value)) {
+                        $errors["answers.{$id}"] = "The '{$particular}' field must be an array of selected options.";
                         $errors["data.{$id}"] = "The '{$particular}' field must be an array of selected options.";
                     } else {
                         $hasNonScalar = false;
@@ -322,13 +467,20 @@ class FeedbackSchemaValidator
                         }
 
                         if ($hasNonScalar) {
+                            $errors["answers.{$id}"] = "The selected options for '{$particular}' contain invalid values.";
                             $errors["data.{$id}"] = "The selected options for '{$particular}' contain invalid values.";
                         } else {
-                            $invalidVals = array_diff(array_map('strval', $value), $allowedValues);
-                            if (! empty($invalidVals)) {
-                                $errors["data.{$id}"] = "The selected options for '{$particular}' contain invalid values.";
+                            $strVals = array_values(array_map('strval', $value));
+                            if (! $allowCustomValue) {
+                                $invalidVals = array_diff($strVals, $allowedValues);
+                                if (! empty($invalidVals)) {
+                                    $errors["answers.{$id}"] = "The selected options for '{$particular}' contain invalid values.";
+                                    $errors["data.{$id}"] = "The selected options for '{$particular}' contain invalid values.";
+                                } else {
+                                    $sanitized[$id] = $strVals;
+                                }
                             } else {
-                                $sanitized[$id] = array_values(array_map('strval', $value));
+                                $sanitized[$id] = $strVals;
                             }
                         }
                     }

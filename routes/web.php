@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\SsoPortalController;
 use App\Http\Controllers\Admin\SystemAppearanceController;
 use App\Http\Controllers\Admin\SystemRuleController;
 use App\Http\Controllers\ChatController;
+use App\Http\Controllers\FeedbackFormController;
 use App\Http\Controllers\Sso\ConnectedSystemsController;
 use App\Http\Controllers\Sso\SsoProviderController;
 use App\Http\Middleware\CheckPendingSsoRequest;
@@ -107,6 +108,10 @@ Route::middleware([
     Route::post('/chat/{conversation}/read', [ChatController::class, 'markAsRead'])->name('chat.mark-read');
     Route::post('/chat/messages/{message}/reaction', [ChatController::class, 'toggleReaction'])->name('chat.reaction');
     Route::delete('/chat/messages/{message}', [ChatController::class, 'deleteMessage'])->name('chat.delete-message');
+
+    // User Feedback Form Routes
+    Route::get('/feedback', [FeedbackFormController::class, 'show'])->name('feedback.form');
+    Route::post('/feedback', [FeedbackFormController::class, 'submit'])->name('feedback.submit');
 
     // Admin Panel Routes
     Route::prefix('admin')->middleware('admin')->name('admin.')->group(function () {

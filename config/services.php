@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'feedback' => [
+        'api_key' => env('LGU_PORTAL_FEEDBACK_API_KEY'),
+    ],
+
 ];

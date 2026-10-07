@@ -99,28 +99,38 @@ class FeedbackApiController extends Controller
         $validatedData = $schemaValidator->validateSubmissionData($feedback->schema, $answers, $event);
 
         $submission = DB::transaction(function () use ($event, $feedback, $pData, $validatedData) {
+            $name = $pData['name'] ?? ($validatedData['name'] ?? null);
+            $agencyInput = $pData['agency'] ?? ($validatedData['agency'] ?? null);
+            $designationInput = $pData['designation'] ?? ($validatedData['designation'] ?? null);
+            $functionInput = $pData['function_id'] ?? ($validatedData['function'] ?? ($validatedData['function_id'] ?? null));
+            $customFunctionInput = $pData['custom_function'] ?? ($validatedData['function_other'] ?? ($validatedData['custom_function'] ?? null));
+            $yearsInDesignation = $pData['years_in_designation'] ?? ($validatedData['years_in_designation'] ?? 0);
+            $location = $pData['location'] ?? ($validatedData['location'] ?? null);
+            $noOfExercises = $pData['no_of_exercises'] ?? ($validatedData['no_of_exercises'] ?? 0);
+
             // 1. Dynamic / Cached Agency creation
-            $agencyName = Agency::findOrCreateByName($pData['agency'] ?? null);
+            $agencyName = Agency::findOrCreateByName($agencyInput);
 
             // 2. Dynamic / Cached Designation creation
-            $designationName = Designation::findOrCreateByName($pData['designation'] ?? null);
+            $designationName = Designation::findOrCreateByName($designationInput);
 
             // 3. Resolve Function (must belong to this event)
-            $functionId = $pData['function_id'] ?? null;
-            if ($functionId) {
-                $func = $event->functions()->where('fb_functions.id', $functionId)->first();
+            $functionId = null;
+            if ($functionInput && is_numeric($functionInput)) {
+                $func = $event->functions()->where('fb_functions.id', (int) $functionInput)->first();
                 $functionId = $func?->id;
             }
 
             // 4. Create Participant (name is nullable for anonymous participants)
             $participant = FbParticipant::create([
-                'name' => ! empty($pData['name']) ? $pData['name'] : null,
+                'name' => ! empty($name) ? $name : null,
                 'function_id' => $functionId,
+                'custom_function' => $customFunctionInput,
                 'agency' => $agencyName,
                 'designation' => $designationName,
-                'years_in_designation' => $pData['years_in_designation'] ?? 0,
-                'location' => $pData['location'] ?? null,
-                'no_of_exercises' => $pData['no_of_exercises'] ?? 0,
+                'years_in_designation' => (int) $yearsInDesignation,
+                'location' => $location,
+                'no_of_exercises' => (int) $noOfExercises,
             ]);
 
             // 5. Create Submission

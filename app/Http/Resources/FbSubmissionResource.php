@@ -28,6 +28,7 @@ class FbSubmissionResource extends JsonResource
                 'years_in_designation' => $this->participant?->years_in_designation,
                 'location' => $this->participant?->location,
                 'no_of_exercises' => $this->participant?->no_of_exercises,
+                'custom_function' => $this->participant?->custom_function,
                 'function' => $this->participant?->function ? [
                     'id' => $this->participant->function->id,
                     'function' => $this->participant->function->function,

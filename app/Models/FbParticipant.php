@@ -16,6 +16,7 @@ class FbParticipant extends Model
     protected $fillable = [
         'name',
         'function_id',
+        'custom_function',
         'agency',
         'designation',
         'years_in_designation',
