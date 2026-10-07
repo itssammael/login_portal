@@ -145,7 +145,6 @@ class FeedbackEmbed extends Model
 
         $this->sessions()->create([
             'token_hash' => $tokenHash,
-            'respondent_id' => $respondentId,
             'respondent_hash' => $respondentHash,
             'metadata' => $metadata,
             'expires_at' => $expiresAt,

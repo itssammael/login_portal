@@ -24,6 +24,10 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    allowedOrigins: {
+        type: Array,
+        default: () => [],
+    },
 });
 
 // Sorted schema fields by weight ascending
@@ -33,6 +37,40 @@ const sortedFields = computed(() => {
     }
     return [...props.form.schema.fields].sort((a, b) => (Number(a.weight) || 0) - (Number(b.weight) || 0));
 });
+
+// Helper to determine target origin from document.referrer against allowed list
+const getTargetOrigin = () => {
+    try {
+        if (!document.referrer) {
+            return null;
+        }
+        const refUrl = new URL(document.referrer);
+        const refOrigin = refUrl.origin;
+        if (Array.isArray(props.allowedOrigins) && props.allowedOrigins.includes(refOrigin)) {
+            return refOrigin;
+        }
+        if (typeof window !== 'undefined' && refOrigin === window.location.origin) {
+            return refOrigin;
+        }
+    } catch (e) {
+        // Invalid referrer URL
+    }
+    return null;
+};
+
+// Send postMessage strictly to verified parent origin
+const sendParentMessage = (message) => {
+    try {
+        if (window.parent && window.parent !== window) {
+            const targetOrigin = getTargetOrigin();
+            if (targetOrigin) {
+                window.parent.postMessage(message, targetOrigin);
+            }
+        }
+    } catch (e) {
+        // Suppress cross-origin frame access warnings
+    }
+};
 
 // Dynamic form answers dictionary keyed by field.id
 const answers = ref({});
@@ -69,17 +107,11 @@ const submittedRecord = ref(null);
 
 onMounted(() => {
     // Notify parent frame that embedded form is ready
-    try {
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'feedback-embed-ready',
-                publicId: props.publicId,
-                height: document.body.scrollHeight,
-            }, '*');
-        }
-    } catch (e) {
-        // Suppress cross-origin frame access warnings
-    }
+    sendParentMessage({
+        type: 'feedback-embed-ready',
+        publicId: props.publicId,
+        height: document.body.scrollHeight,
+    });
 });
 
 // Check if currently selected option represents "other"
@@ -129,18 +161,12 @@ const submitForm = async () => {
             submissionSuccess.value = true;
             submittedRecord.value = response.data?.data || null;
 
-            // Notify parent iframe container
-            try {
-                if (window.parent && window.parent !== window) {
-                    window.parent.postMessage({
-                        type: 'feedback-submitted',
-                        publicId: props.publicId,
-                        submissionId: response.data?.data?.id || null,
-                    }, '*');
-                }
-            } catch (e) {
-                // Cross-origin safe
-            }
+            // Notify parent iframe container strictly to allowed origin
+            sendParentMessage({
+                type: 'feedback-submitted',
+                publicId: props.publicId,
+                submissionId: response.data?.data?.id || null,
+            });
         }
     } catch (error) {
         if (error.response && error.response.status === 422) {

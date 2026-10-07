@@ -16,6 +16,23 @@ class CreateEmbedSessionRequest extends FormRequest
     }
 
     /**
+     * Prepare the data for validation.
+     */
+    protected function prepareForValidation(): void
+    {
+        $merge = [];
+        if (! $this->has('client_id') && $this->header('X-Client-Id')) {
+            $merge['client_id'] = $this->header('X-Client-Id');
+        }
+        if (! $this->has('client_secret') && $this->header('X-Client-Secret')) {
+            $merge['client_secret'] = $this->header('X-Client-Secret');
+        }
+        if (! empty($merge)) {
+            $this->merge($merge);
+        }
+    }
+
+    /**
      * Get the validation rules that apply to the request.
      *
      * @return array<string, ValidationRule|array<mixed>|string>

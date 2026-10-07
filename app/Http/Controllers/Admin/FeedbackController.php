@@ -35,13 +35,6 @@ class FeedbackController extends Controller
             ->latest()
             ->get();
 
-        foreach ($events as $event) {
-            if (! $event->embed) {
-                $event->embed()->create();
-                $event->load('embed');
-            }
-        }
-
         $functions = FbFunction::query()
             ->with(['events:id,name', 'creator:id,name,email'])
             ->withCount(['participants', 'events'])
@@ -271,7 +264,7 @@ class FeedbackController extends Controller
         $admin = $request->user();
         $request->validate([
             'allowed_origins' => ['nullable', 'array'],
-            'allowed_origins.*' => ['string', 'max:255'],
+            'allowed_origins.*' => ['string', 'max:255', 'regex:/^https?:\/\/[a-zA-Z0-9.-]+(?::[1-9][0-9]{0,4})?$/'],
             'is_active' => ['nullable', 'boolean'],
         ]);
 

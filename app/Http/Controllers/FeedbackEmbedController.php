@@ -76,6 +76,7 @@ class FeedbackEmbedController extends Controller
             'publicId' => $publicId,
             'sessionToken' => $token,
             'userDefaults' => $session->metadata['user_defaults'] ?? [],
+            'allowedOrigins' => $embed->allowed_origins ?? [],
         ]);
 
         $response = $inertiaResponse->toResponse($request);
@@ -135,8 +136,10 @@ class FeedbackEmbedController extends Controller
         $validatedData = $schemaValidator->validateSubmissionData($feedback->schema, $answers, $event);
 
         $submission = DB::transaction(function () use ($event, $feedback, $embed, $session, $pData, $validatedData) {
-            // Invalidate session immediately to prevent reuse
-            $session->markAsUsed();
+            // Invalidate session atomically to prevent reuse
+            if (! $session->markAsUsed()) {
+                abort(404, 'This feedback session has expired or has already been submitted.');
+            }
 
             $name = $pData['name'] ?? ($validatedData['name'] ?? null);
             $agencyInput = $pData['agency'] ?? ($validatedData['agency'] ?? null);
@@ -202,7 +205,7 @@ class FeedbackEmbedController extends Controller
         $sanitizedOrigins = [];
         foreach ($allowedOrigins as $origin) {
             $origin = trim((string) $origin);
-            if ($origin !== '') {
+            if (preg_match('/^https?:\/\/[a-zA-Z0-9.-]+(?::[1-9][0-9]{0,4})?$/', $origin)) {
                 $sanitizedOrigins[] = $origin;
             }
         }
@@ -211,7 +214,7 @@ class FeedbackEmbedController extends Controller
             return "frame-ancestors 'self';";
         }
 
-        $originList = implode(' ', $sanitizedOrigins);
+        $originList = implode(' ', array_unique($sanitizedOrigins));
 
         return "frame-ancestors 'self' {$originList};";
     }

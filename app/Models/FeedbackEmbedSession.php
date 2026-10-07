@@ -71,10 +71,21 @@ class FeedbackEmbedSession extends Model
     }
 
     /**
-     * Atomically mark the session as used.
+     * Atomically mark the session as used if valid and unused.
      */
-    public function markAsUsed(): void
+    public function markAsUsed(): bool
     {
-        $this->update(['used_at' => now()]);
+        $updated = static::whereKey($this->getKey())
+            ->whereNull('used_at')
+            ->where('expires_at', '>', now())
+            ->update(['used_at' => now()]);
+
+        if ($updated === 1) {
+            $this->used_at = now();
+
+            return true;
+        }
+
+        return false;
     }
 }

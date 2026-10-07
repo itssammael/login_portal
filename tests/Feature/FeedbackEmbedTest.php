@@ -58,7 +58,6 @@ class FeedbackEmbedTest extends TestCase
 
         $this->assertDatabaseHas('fb_embed_sessions', [
             'embed_id' => $embed->id,
-            'respondent_id' => 'user_12345',
             'respondent_hash' => hash('sha256', 'user_12345'),
         ]);
     }
@@ -78,7 +77,7 @@ class FeedbackEmbedTest extends TestCase
 
         $this->assertDatabaseHas('fb_embed_sessions', [
             'embed_id' => $embed->id,
-            'respondent_id' => 'test_user',
+            'respondent_hash' => hash('sha256', 'test_user'),
         ]);
     }
 
@@ -409,5 +408,90 @@ class FeedbackEmbedTest extends TestCase
         $this->actingAs($user)->put(route('admin.feedback.events.update-embed-origins', $event->id), [
             'allowed_origins' => ['https://malicious.com'],
         ])->assertForbidden();
+    }
+
+    public function test_external_backend_can_authenticate_via_headers(): void
+    {
+        $event = FbEvent::factory()->create();
+        Feedback::factory()->create(['event_id' => $event->id]);
+
+        $plainSecret = 'header-secret-12345';
+        /** @var FeedbackEmbed $embed */
+        $embed = $event->embed;
+        $embed->update([
+            'client_id' => 'emb_client_header_test',
+            'client_secret' => Hash::make($plainSecret),
+            'is_active' => true,
+        ]);
+
+        $response = $this->postJson(
+            route('api.feedback.embed.sessions'),
+            [],
+            [
+                'X-Client-Id' => 'emb_client_header_test',
+                'X-Client-Secret' => $plainSecret,
+            ]
+        );
+
+        $response->assertCreated()
+            ->assertJsonStructure([
+                'status',
+                'data' => [
+                    'session_token',
+                    'expires_at',
+                    'iframe_url',
+                ],
+            ]);
+    }
+
+    public function test_update_embed_origins_validates_origin_format(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        // Valid origins
+        $response = $this->actingAs($admin)->put(route('admin.feedback.events.update-embed-origins', $event->id), [
+            'allowed_origins' => [
+                'http://gis-portal.test',
+                'https://gis-portal.gov.ph:8080',
+            ],
+            'is_active' => true,
+        ]);
+        $response->assertRedirect();
+        $response->assertSessionHasNoErrors();
+
+        // Invalid origin with path, wildcard or injection
+        $invalidOrigins = [
+            ['https://gis-portal.test/some/path'],
+            ['*'],
+            ["https://valid.com; frame-ancestors 'none'"],
+        ];
+
+        foreach ($invalidOrigins as $invalid) {
+            $badResponse = $this->actingAs($admin)->put(route('admin.feedback.events.update-embed-origins', $event->id), [
+                'allowed_origins' => $invalid,
+            ]);
+            $badResponse->assertSessionHasErrors('allowed_origins.0');
+        }
+    }
+
+    public function test_mark_as_used_atomically_prevents_duplicate_consumption(): void
+    {
+        $event = FbEvent::factory()->create();
+        Feedback::factory()->create(['event_id' => $event->id]);
+
+        /** @var FeedbackEmbed $embed */
+        $embed = $event->embed;
+        $sessionData = $embed->createSession();
+        $token = $sessionData['session_token'];
+        $tokenHash = hash('sha256', $token);
+
+        $session = $embed->sessions()->where('token_hash', $tokenHash)->firstOrFail();
+
+        // First call succeeds
+        $this->assertTrue($session->markAsUsed());
+
+        // Second call on already used session returns false
+        $this->assertFalse($session->markAsUsed());
     }
 }
