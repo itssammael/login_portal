@@ -22,6 +22,7 @@ class FeedbackSchemaValidator
         'radio',
         'select',
         'checkbox',
+        'section',
     ];
 
     /**
@@ -117,16 +118,31 @@ class FeedbackSchemaValidator
             }
 
             $weight = isset($field['weight']) ? (int) $field['weight'] : ($index + 1);
-            $required = (bool) ($field['required'] ?? false);
+            $required = $type === 'section' ? false : (bool) ($field['required'] ?? false);
             $allowOther = (bool) ($field['allow_other'] ?? false);
             $allowCustomValue = (bool) ($field['allow_custom_value'] ?? false);
             $placeholder = isset($field['placeholder']) && is_string($field['placeholder']) ? trim($field['placeholder']) : null;
+            $description = isset($field['description']) && is_string($field['description']) ? trim($field['description']) : null;
             $min = isset($field['min']) && is_numeric($field['min']) ? (float) $field['min'] : null;
             $max = isset($field['max']) && is_numeric($field['max']) ? (float) $field['max'] : null;
 
             $optionSource = trim((string) ($field['option_source'] ?? 'static'));
             if (! in_array($optionSource, self::SUPPORTED_OPTION_SOURCES, true)) {
                 $optionSource = 'static';
+            }
+
+            $sectionFlow = isset($field['section_flow']) ? trim((string) $field['section_flow']) : 'next';
+            $conditions = [];
+            if (isset($field['conditions']) && is_array($field['conditions'])) {
+                foreach ($field['conditions'] as $cond) {
+                    if (is_array($cond) && ! empty($cond['field_id'])) {
+                        $conditions[] = [
+                            'field_id' => trim((string) $cond['field_id']),
+                            'operator' => in_array($cond['operator'] ?? '', ['equals', 'not_equals', 'is_answered', 'is_not_answered'], true) ? $cond['operator'] : 'equals',
+                            'value' => (string) ($cond['value'] ?? ''),
+                        ];
+                    }
+                }
             }
 
             // Normalize options
@@ -147,12 +163,15 @@ class FeedbackSchemaValidator
                     'weight' => $weight,
                     'required' => $required,
                     'placeholder' => $placeholder,
+                    'description' => $description,
                     'min' => $min,
                     'max' => $max,
                     'allow_other' => $allowOther,
                     'allow_custom_value' => $allowCustomValue,
                     'option_source' => $optionSource,
                     'function_ids' => $functionIds,
+                    'section_flow' => $sectionFlow,
+                    'conditions' => $conditions,
                     'options' => [],
                 ];
             } else {
@@ -165,10 +184,14 @@ class FeedbackSchemaValidator
                     }
 
                     foreach ($rawOptions as $optIdx => $opt) {
+                        $gotoSection = null;
                         if (is_array($opt)) {
                             $optVal = trim((string) ($opt['value'] ?? ''));
                             $optLabel = trim((string) ($opt['label'] ?? $optVal));
                             $isOther = (bool) ($opt['is_other'] ?? ($optVal === 'other' || strtolower($optLabel) === 'other' || strtolower($optLabel) === 'others'));
+                            if (isset($opt['goto_section']) && is_string($opt['goto_section']) && trim($opt['goto_section']) !== '') {
+                                $gotoSection = trim($opt['goto_section']);
+                            }
                             if ($optVal === '') {
                                 $optVal = Str::slug($optLabel, '_') ?: 'opt_'.($optIdx + 1);
                             }
@@ -186,6 +209,7 @@ class FeedbackSchemaValidator
                             'value' => $optVal,
                             'label' => $optLabel,
                             'is_other' => $isOther,
+                            'goto_section' => $gotoSection,
                         ];
                     }
 
@@ -203,11 +227,14 @@ class FeedbackSchemaValidator
                     'weight' => $weight,
                     'required' => $required,
                     'placeholder' => $placeholder,
+                    'description' => $description,
                     'min' => $min,
                     'max' => $max,
                     'allow_other' => $allowOther,
                     'allow_custom_value' => $allowCustomValue,
                     'option_source' => 'static',
+                    'section_flow' => $sectionFlow,
+                    'conditions' => $conditions,
                     'options' => $options,
                 ];
             }
@@ -218,9 +245,29 @@ class FeedbackSchemaValidator
         // Sort fields by weight ascending
         usort($normalizedFields, fn ($a, $b) => $a['weight'] <=> $b['weight']);
 
-        return [
+        $normalizedPagination = [
+            'enabled' => (bool) ($schema['pagination']['enabled'] ?? false),
+            'progress_bar' => (bool) ($schema['pagination']['progress_bar'] ?? true),
+            'show_section_numbers' => (bool) ($schema['pagination']['show_section_numbers'] ?? true),
+        ];
+
+        $output = [
             'fields' => array_values($normalizedFields),
         ];
+
+        if ($normalizedPagination['enabled'] || isset($schema['pagination'])) {
+            $output['pagination'] = $normalizedPagination;
+        }
+
+        if (isset($schema['title']) && is_string($schema['title'])) {
+            $output['title'] = trim($schema['title']);
+        }
+
+        if (isset($schema['description']) && is_string($schema['description'])) {
+            $output['description'] = trim($schema['description']);
+        }
+
+        return $output;
     }
 
     /**
@@ -313,7 +360,186 @@ class FeedbackSchemaValidator
             $field['placeholder'] = $field['placeholder'] ?? null;
         }
 
-        return ['fields' => $fields];
+        $output = ['fields' => $fields];
+        if (isset($schema['pagination'])) {
+            $output['pagination'] = $schema['pagination'];
+        }
+        if (isset($schema['title'])) {
+            $output['title'] = $schema['title'];
+        }
+        if (isset($schema['description'])) {
+            $output['description'] = $schema['description'];
+        }
+
+        return $output;
+    }
+
+    /**
+     * Evaluate a list of conditional display rules against submitted answers.
+     *
+     * @param  array<int, array<string, mixed>>  $conditions
+     * @param  array<string, mixed>  $data
+     */
+    public function evaluateConditions(array $conditions, array $data): bool
+    {
+        if (empty($conditions)) {
+            return true;
+        }
+
+        foreach ($conditions as $cond) {
+            $triggerFieldId = $cond['field_id'] ?? '';
+            $operator = $cond['operator'] ?? 'equals';
+            $targetVal = (string) ($cond['value'] ?? '');
+            $actualVal = $data[$triggerFieldId] ?? null;
+
+            if ($operator === 'equals') {
+                if (is_array($actualVal)) {
+                    $matches = in_array($targetVal, array_map('strval', $actualVal), true);
+                } else {
+                    $matches = (string) $actualVal === $targetVal;
+                }
+                if (! $matches) {
+                    return false;
+                }
+            } elseif ($operator === 'not_equals') {
+                if (is_array($actualVal)) {
+                    $matches = in_array($targetVal, array_map('strval', $actualVal), true);
+                } else {
+                    $matches = (string) $actualVal === $targetVal;
+                }
+                if ($matches) {
+                    return false;
+                }
+            } elseif ($operator === 'contains') {
+                if (is_array($actualVal)) {
+                    $matches = false;
+                    foreach ($actualVal as $item) {
+                        if (str_contains(strtolower((string) $item), strtolower($targetVal))) {
+                            $matches = true;
+                            break;
+                        }
+                    }
+                } else {
+                    $matches = str_contains(strtolower((string) $actualVal), strtolower($targetVal));
+                }
+                if (! $matches) {
+                    return false;
+                }
+            } elseif ($operator === 'not_contains') {
+                if (is_array($actualVal)) {
+                    $matches = false;
+                    foreach ($actualVal as $item) {
+                        if (str_contains(strtolower((string) $item), strtolower($targetVal))) {
+                            $matches = true;
+                            break;
+                        }
+                    }
+                } else {
+                    $matches = str_contains(strtolower((string) $actualVal), strtolower($targetVal));
+                }
+                if ($matches) {
+                    return false;
+                }
+            } elseif ($operator === 'is_answered') {
+                if ($actualVal === null || $actualVal === '' || (is_array($actualVal) && empty($actualVal))) {
+                    return false;
+                }
+            } elseif ($operator === 'is_not_answered') {
+                if ($actualVal !== null && $actualVal !== '' && (! is_array($actualVal) || ! empty($actualVal))) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Determine which section IDs are active/shown based on submission answers and conditional rules.
+     *
+     * @param  array<int, array<string, mixed>>  $fields
+     * @param  array<string, mixed>  $data
+     * @return array<int, string>
+     */
+    public function determineActiveSectionIds(array $fields, array $data): array
+    {
+        $sections = [];
+        $currentSectionId = '_root';
+
+        foreach ($fields as $field) {
+            if (($field['type'] ?? '') === 'section') {
+                $currentSectionId = $field['id'];
+                $sections[$currentSectionId] = [
+                    'section' => $field,
+                    'fields' => [],
+                ];
+            } else {
+                if (! isset($sections[$currentSectionId])) {
+                    $sections[$currentSectionId] = [
+                        'section' => null,
+                        'fields' => [],
+                    ];
+                }
+                $sections[$currentSectionId]['fields'][] = $field;
+            }
+        }
+
+        $activeSectionIds = [];
+        $sectionKeys = array_keys($sections);
+        $i = 0;
+        $total = count($sectionKeys);
+
+        while ($i < $total) {
+            $secId = $sectionKeys[$i];
+            $secData = $sections[$secId];
+            $sectionField = $secData['section'];
+
+            if ($sectionField && ! empty($sectionField['conditions'])) {
+                if (! $this->evaluateConditions($sectionField['conditions'], $data)) {
+                    $i++;
+
+                    continue;
+                }
+            }
+
+            $activeSectionIds[] = $secId;
+
+            // Check if any question in this section has option-level branching or section_flow
+            $nextSecTarget = null;
+            foreach ($secData['fields'] as $f) {
+                $fVal = $data[$f['id']] ?? null;
+                if ($fVal !== null && ! empty($f['options'])) {
+                    foreach ($f['options'] as $opt) {
+                        $isMatch = is_array($fVal) ? in_array($opt['value'], $fVal, true) : (string) $fVal === (string) $opt['value'];
+                        if ($isMatch && ! empty($opt['goto_section'])) {
+                            $nextSecTarget = $opt['goto_section'];
+                            break 2;
+                        }
+                    }
+                }
+            }
+
+            if ($nextSecTarget === null && $sectionField && ! empty($sectionField['section_flow'])) {
+                if ($sectionField['section_flow'] !== 'next') {
+                    $nextSecTarget = $sectionField['section_flow'];
+                }
+            }
+
+            if ($nextSecTarget === 'submit') {
+                break;
+            } elseif ($nextSecTarget !== null && in_array($nextSecTarget, $sectionKeys, true)) {
+                $targetIndex = array_search($nextSecTarget, $sectionKeys, true);
+                if ($targetIndex !== false && $targetIndex > $i) {
+                    $i = $targetIndex;
+
+                    continue;
+                }
+            }
+
+            $i++;
+        }
+
+        return $activeSectionIds;
     }
 
     /**
@@ -363,12 +589,51 @@ class FeedbackSchemaValidator
             throw ValidationException::withMessages($errors);
         }
 
+        $isPaginated = (bool) ($schema['pagination']['enabled'] ?? false);
+        $activeSectionIds = null;
+        $fieldSectionMap = [];
+
+        if ($isPaginated) {
+            $activeSectionIds = $this->determineActiveSectionIds($fields, $data);
+            $currentSec = '_root';
+            foreach ($fields as $f) {
+                if (($f['type'] ?? '') === 'section') {
+                    $currentSec = $f['id'];
+                } else {
+                    $fieldSectionMap[$f['id']] = $currentSec;
+                }
+            }
+        }
+
         $sanitized = [];
 
         foreach ($fields as $field) {
             $id = $field['id'];
             $particular = $field['particular'];
             $type = $field['type'] ?? 'text';
+
+            if ($type === 'section') {
+                continue;
+            }
+
+            if ($activeSectionIds !== null) {
+                $secId = $fieldSectionMap[$id] ?? '_root';
+                if (! in_array($secId, $activeSectionIds, true)) {
+                    $sanitized[$id] = null;
+
+                    continue;
+                }
+            }
+
+            // Skip fields whose conditional display rules are not satisfied
+            if (! empty($field['conditions'])) {
+                if (! $this->evaluateConditions($field['conditions'], $data)) {
+                    $sanitized[$id] = null;
+
+                    continue;
+                }
+            }
+
             $isRequired = (bool) ($field['required'] ?? false);
             $allowOther = (bool) ($field['allow_other'] ?? false);
             $allowCustomValue = (bool) ($field['allow_custom_value'] ?? false);

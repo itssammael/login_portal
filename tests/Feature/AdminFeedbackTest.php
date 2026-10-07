@@ -11,8 +11,10 @@ use App\Models\FbParticipant;
 use App\Models\FbSubmission;
 use App\Models\Feedback;
 use App\Models\User;
+use App\Services\FeedbackSchemaValidator;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 class AdminFeedbackTest extends TestCase
@@ -424,5 +426,228 @@ class AdminFeedbackTest extends TestCase
         ]);
 
         $response->assertSessionHasErrors();
+    }
+
+    public function test_admin_can_save_schema_with_section_fields_and_receive_submissions(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'section_1',
+                    'particular' => 'Part 1: Speaker Performance',
+                    'type' => 'section',
+                    'weight' => 1,
+                    'description' => 'Rate the overall quality and delivery of speakers.',
+                ],
+                [
+                    'id' => 'speaker_rating',
+                    'particular' => 'Speaker delivery and mastery',
+                    'type' => 'radio',
+                    'weight' => 2,
+                    'required' => true,
+                    'options' => [
+                        ['value' => 'excellent', 'label' => 'Excellent'],
+                        ['value' => 'good', 'label' => 'Good'],
+                    ],
+                ],
+            ],
+        ];
+
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        $response->assertSessionHas('success');
+
+        $savedFeedback = Feedback::where('event_id', $event->id)->firstOrFail();
+        $this->assertCount(2, $savedFeedback->schema['fields']);
+        $this->assertEquals('section', $savedFeedback->schema['fields'][0]['type']);
+        $this->assertEquals('Part 1: Speaker Performance', $savedFeedback->schema['fields'][0]['particular']);
+        $this->assertEquals('Rate the overall quality and delivery of speakers.', $savedFeedback->schema['fields'][0]['description']);
+
+        // Test submission with section field in schema: respondent answers required question, no section answer needed
+        $participant = FbParticipant::factory()->create();
+        $validator = app(FeedbackSchemaValidator::class);
+        $sanitized = $validator->validateSubmissionData($savedFeedback->schema, [
+            'speaker_rating' => 'excellent',
+        ], $event);
+
+        $this->assertEquals(['speaker_rating' => 'excellent'], $sanitized);
+    }
+
+    public function test_admin_can_save_paginated_questionnaire_schema_with_conditional_sections_and_branching(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        $schema = [
+            'title' => 'Training Evaluation Survey',
+            'description' => 'Please share your feedback across workshop sessions.',
+            'pagination' => [
+                'enabled' => true,
+                'progress_bar' => true,
+                'show_section_numbers' => true,
+            ],
+            'fields' => [
+                [
+                    'id' => 'section_intro',
+                    'particular' => 'Section 1: General Info',
+                    'type' => 'section',
+                    'weight' => 1,
+                    'section_flow' => 'next',
+                ],
+                [
+                    'id' => 'attended_workshop',
+                    'particular' => 'Did you attend Workshop B?',
+                    'type' => 'radio',
+                    'weight' => 2,
+                    'required' => true,
+                    'options' => [
+                        [
+                            'value' => 'yes',
+                            'label' => 'Yes, attended Workshop B',
+                            'goto_section' => 'section_workshop_b',
+                        ],
+                        [
+                            'value' => 'no',
+                            'label' => 'No, skipped Workshop B',
+                            'goto_section' => 'submit',
+                        ],
+                    ],
+                ],
+                [
+                    'id' => 'section_workshop_b',
+                    'particular' => 'Section 2: Workshop B Feedback',
+                    'type' => 'section',
+                    'weight' => 3,
+                    'section_flow' => 'submit',
+                    'conditions' => [
+                        [
+                            'field_id' => 'attended_workshop',
+                            'operator' => 'equals',
+                            'value' => 'yes',
+                        ],
+                    ],
+                ],
+                [
+                    'id' => 'workshop_b_rating',
+                    'particular' => 'Workshop B Rating',
+                    'type' => 'radio',
+                    'weight' => 4,
+                    'required' => true,
+                    'options' => [
+                        ['value' => 'excellent', 'label' => 'Excellent'],
+                        ['value' => 'good', 'label' => 'Good'],
+                    ],
+                ],
+            ],
+        ];
+
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        $response->assertSessionHas('success');
+
+        $savedFeedback = Feedback::where('event_id', $event->id)->firstOrFail();
+        $this->assertTrue($savedFeedback->schema['pagination']['enabled']);
+        $this->assertEquals('Training Evaluation Survey', $savedFeedback->schema['title']);
+        $this->assertCount(4, $savedFeedback->schema['fields']);
+        $this->assertEquals('section_workshop_b', $savedFeedback->schema['fields'][1]['options'][0]['goto_section']);
+        $this->assertEquals('submit', $savedFeedback->schema['fields'][1]['options'][1]['goto_section']);
+        $this->assertEquals('attended_workshop', $savedFeedback->schema['fields'][2]['conditions'][0]['field_id']);
+
+        // Test validator with submission that chose 'no' -> skipped section 2's required field
+        $validator = app(FeedbackSchemaValidator::class);
+        $sanitizedNo = $validator->validateSubmissionData($savedFeedback->schema, [
+            'attended_workshop' => 'no',
+        ], $event);
+        $this->assertEquals('no', $sanitizedNo['attended_workshop']);
+        $this->assertNull($sanitizedNo['workshop_b_rating']);
+
+        // Test validator with submission that chose 'yes' -> section 2 is active and required
+        $sanitizedYes = $validator->validateSubmissionData($savedFeedback->schema, [
+            'attended_workshop' => 'yes',
+            'workshop_b_rating' => 'excellent',
+        ], $event);
+        $this->assertEquals('yes', $sanitizedYes['attended_workshop']);
+        $this->assertEquals('excellent', $sanitizedYes['workshop_b_rating']);
+    }
+
+    public function test_validator_evaluates_field_level_conditions_and_operators(): void
+    {
+        $event = FbEvent::factory()->create();
+        $validator = app(FeedbackSchemaValidator::class);
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'feedback_type',
+                    'particular' => 'Feedback Category',
+                    'type' => 'text',
+                    'weight' => 1,
+                    'required' => true,
+                ],
+                [
+                    'id' => 'critical_details',
+                    'particular' => 'Please explain the critical issue',
+                    'type' => 'textarea',
+                    'weight' => 2,
+                    'required' => true,
+                    'conditions' => [
+                        [
+                            'field_id' => 'feedback_type',
+                            'operator' => 'contains',
+                            'value' => 'urgent',
+                        ],
+                    ],
+                ],
+                [
+                    'id' => 'regular_comment',
+                    'particular' => 'General Comment',
+                    'type' => 'textarea',
+                    'weight' => 3,
+                    'required' => true,
+                    'conditions' => [
+                        [
+                            'field_id' => 'feedback_type',
+                            'operator' => 'not_contains',
+                            'value' => 'urgent',
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        // Case 1: 'feedback_type' does NOT contain 'urgent' -> 'critical_details' is skipped, 'regular_comment' is required
+        $sanitized = $validator->validateSubmissionData($schema, [
+            'feedback_type' => 'general feedback',
+            'regular_comment' => 'Great session!',
+        ], $event);
+
+        $this->assertEquals('general feedback', $sanitized['feedback_type']);
+        $this->assertNull($sanitized['critical_details']);
+        $this->assertEquals('Great session!', $sanitized['regular_comment']);
+
+        // Case 2: 'feedback_type' contains 'urgent' -> 'critical_details' is required, 'regular_comment' is skipped
+        $sanitizedUrgent = $validator->validateSubmissionData($schema, [
+            'feedback_type' => 'urgent issue report',
+            'critical_details' => 'Server disconnected during plenary',
+        ], $event);
+
+        $this->assertEquals('urgent issue report', $sanitizedUrgent['feedback_type']);
+        $this->assertEquals('Server disconnected during plenary', $sanitizedUrgent['critical_details']);
+        $this->assertNull($sanitizedUrgent['regular_comment']);
+
+        // Case 3: 'feedback_type' is 'urgent' but 'critical_details' is missing -> throws ValidationException
+        $this->expectException(ValidationException::class);
+        $validator->validateSubmissionData($schema, [
+            'feedback_type' => 'urgent issue report',
+        ], $event);
     }
 }

@@ -79,6 +79,9 @@ const answers = ref({});
 const initAnswers = () => {
     const initial = {};
     sortedFields.value.forEach((field) => {
+        if (field.type === 'section') {
+            return;
+        }
         if (field.type === 'checkbox') {
             initial[field.id] = [];
         } else {
@@ -98,6 +101,187 @@ watch(
     },
     { immediate: true }
 );
+
+// --- Pagination & Multi-Page Sections Engine ---
+const currentPageIdx = ref(0);
+const pageHistory = ref([0]);
+const clientErrors = ref({});
+
+const sectionPages = computed(() => {
+    if (!sortedFields.value.length) return [];
+    const pages = [];
+    let currentSection = null;
+    let currentFields = [];
+
+    sortedFields.value.forEach((field) => {
+        if (field.type === 'section') {
+            if (currentSection !== null || currentFields.length > 0) {
+                pages.push({
+                    section: currentSection,
+                    fields: currentFields,
+                });
+            }
+            currentSection = field;
+            currentFields = [];
+        } else {
+            currentFields.push(field);
+        }
+    });
+
+    if (currentSection !== null || currentFields.length > 0) {
+        pages.push({
+            section: currentSection,
+            fields: currentFields,
+        });
+    }
+
+    return pages;
+});
+
+const isPaginated = computed(() => {
+    return Boolean(props.form?.schema?.pagination?.enabled && sectionPages.value.length > 1);
+});
+
+const currentPage = computed(() => {
+    return sectionPages.value[currentPageIdx.value] || null;
+});
+
+const isConditionsMet = (conditions) => {
+    if (!conditions || conditions.length === 0) return true;
+    for (const cond of conditions) {
+        const triggerId = cond.field_id;
+        const op = cond.operator || 'equals';
+        const targetVal = String(cond.value ?? '');
+        const actual = answers.value[triggerId];
+
+        if (op === 'equals') {
+            if (Array.isArray(actual)) {
+                if (!actual.map(String).includes(targetVal)) return false;
+            } else {
+                if (String(actual ?? '') !== targetVal) return false;
+            }
+        } else if (op === 'not_equals') {
+            if (Array.isArray(actual)) {
+                if (actual.map(String).includes(targetVal)) return false;
+            } else {
+                if (String(actual ?? '') === targetVal) return false;
+            }
+        } else if (op === 'contains') {
+            if (Array.isArray(actual)) {
+                if (!actual.some((item) => String(item ?? '').toLowerCase().includes(targetVal.toLowerCase()))) return false;
+            } else {
+                if (!String(actual ?? '').toLowerCase().includes(targetVal.toLowerCase())) return false;
+            }
+        } else if (op === 'not_contains') {
+            if (Array.isArray(actual)) {
+                if (actual.some((item) => String(item ?? '').toLowerCase().includes(targetVal.toLowerCase()))) return false;
+            } else {
+                if (String(actual ?? '').toLowerCase().includes(targetVal.toLowerCase())) return false;
+            }
+        } else if (op === 'is_answered') {
+            if (actual === null || actual === '' || (Array.isArray(actual) && actual.length === 0)) return false;
+        } else if (op === 'is_not_answered') {
+            if (actual !== null && actual !== '' && (!Array.isArray(actual) || actual.length > 0)) return false;
+        }
+    }
+    return true;
+};
+
+const isSectionConditionMet = (sec) => isConditionsMet(sec?.conditions);
+const isFieldConditionMet = (field) => isConditionsMet(field?.conditions);
+
+const validateCurrentPage = () => {
+    clientErrors.value = {};
+    const page = currentPage.value;
+    if (!page) return true;
+
+    let hasError = false;
+    for (const field of page.fields) {
+        if (!isFieldConditionMet(field)) continue;
+        if (field.required) {
+            const val = answers.value[field.id];
+            if (val === null || val === undefined || val === '' || (Array.isArray(val) && val.length === 0)) {
+                clientErrors.value[field.id] = `The '${field.particular}' field is required.`;
+                hasError = true;
+            }
+        }
+    }
+    return !hasError;
+};
+
+const isLastPage = computed(() => {
+    if (!isPaginated.value) return true;
+    return currentPageIdx.value >= sectionPages.value.length - 1;
+});
+
+const goToNextPage = () => {
+    if (!validateCurrentPage()) {
+        const firstErrId = Object.keys(clientErrors.value)[0];
+        if (firstErrId) {
+            highlightField(firstErrId);
+            const el = document.getElementById(`field_container_${firstErrId}`);
+            el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        return;
+    }
+
+    let target = null;
+    const page = currentPage.value;
+    if (page) {
+        for (const f of page.fields) {
+            const ans = answers.value[f.id];
+            if (ans !== undefined && f.options) {
+                for (const opt of f.options) {
+                    const isMatch = Array.isArray(ans) ? ans.includes(opt.value) : String(ans) === String(opt.value);
+                    if (isMatch && opt.goto_section) {
+                        target = opt.goto_section;
+                        break;
+                    }
+                }
+            }
+            if (target) break;
+        }
+
+        if (!target && page.section?.section_flow && page.section.section_flow !== 'next') {
+            target = page.section.section_flow;
+        }
+    }
+
+    if (target === 'submit') {
+        submitForm();
+        return;
+    }
+
+    let nextIdx = -1;
+    if (target && target !== 'next') {
+        nextIdx = sectionPages.value.findIndex((p) => p.section?.id === target);
+    }
+
+    if (nextIdx === -1) {
+        nextIdx = currentPageIdx.value + 1;
+    }
+
+    while (nextIdx < sectionPages.value.length && !isSectionConditionMet(sectionPages.value[nextIdx].section)) {
+        nextIdx++;
+    }
+
+    if (nextIdx >= sectionPages.value.length) {
+        submitForm();
+        return;
+    }
+
+    pageHistory.value.push(nextIdx);
+    currentPageIdx.value = nextIdx;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+const goToPreviousPage = () => {
+    if (pageHistory.value.length > 1) {
+        pageHistory.value.pop();
+        currentPageIdx.value = pageHistory.value[pageHistory.value.length - 1];
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+};
 
 // Submission states
 const isSubmitting = ref(false);
@@ -133,6 +317,9 @@ const errorFieldsList = computed(() => {
         if (!seenFieldIds.has(fieldId)) {
             seenFieldIds.add(fieldId);
             const field = sortedFields.value.find((f) => String(f.id) === String(fieldId));
+            if (field?.type === 'section') {
+                return;
+            }
             const errorMsg = serverErrors.value[key]?.[0]
                 || getFieldError(fieldId)
                 || getOtherFieldError(fieldId)
@@ -166,25 +353,32 @@ const highlightField = (fieldId) => {
 const goToErrorField = (fieldId) => {
     if (!fieldId) return;
 
-    highlightField(fieldId);
-
-    const containerEl = document.getElementById(`field_container_${fieldId}`);
-    if (containerEl) {
-        containerEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (isPaginated.value) {
+        const targetPageIdx = sectionPages.value.findIndex((p) => p.fields.some((f) => String(f.id) === String(fieldId)));
+        if (targetPageIdx !== -1 && targetPageIdx !== currentPageIdx.value) {
+            currentPageIdx.value = targetPageIdx;
+        }
     }
 
-    const inputEl = document.getElementById(`input_${fieldId}`)
-        || containerEl?.querySelector('input:not([type=hidden]), textarea, select, [tabindex="0"]');
+    highlightField(fieldId);
 
-    if (inputEl) {
-        setTimeout(() => {
+    setTimeout(() => {
+        const containerEl = document.getElementById(`field_container_${fieldId}`);
+        if (containerEl) {
+            containerEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        const inputEl = document.getElementById(`input_${fieldId}`)
+            || containerEl?.querySelector('input:not([type=hidden]), textarea, select, [tabindex="0"]');
+
+        if (inputEl) {
             try {
                 inputEl.focus();
             } catch (e) {
                 // Ignore focus errors
             }
-        }, 350);
-    }
+        }
+    }, 100);
 };
 
 const goToFirstError = () => {
@@ -293,7 +487,8 @@ const submitForm = async () => {
 };
 
 const getFieldError = (fieldId) => {
-    return serverErrors.value[`answers.${fieldId}`]?.[0]
+    return clientErrors.value[fieldId]
+        || serverErrors.value[`answers.${fieldId}`]?.[0]
         || serverErrors.value[`data.${fieldId}`]?.[0]
         || serverErrors.value[fieldId]?.[0]
         || null;
@@ -347,7 +542,7 @@ const getOtherFieldError = (fieldId) => {
             </div>
 
             <!-- Active Questionnaire Form -->
-            <form v-else @submit.prevent="submitForm" class="space-y-6">
+            <form v-else @submit.prevent="isPaginated && !isLastPage ? goToNextPage() : submitForm()" class="space-y-6">
                 <!-- General Error Alert -->
                 <div v-if="serverErrors.general" class="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl text-xs font-medium flex items-center shadow-xs">
                     <svg class="size-5 me-2 shrink-0 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -381,7 +576,25 @@ const getOtherFieldError = (fieldId) => {
 
                 <!-- Schema Fields Container -->
                 <div class="bg-[#fffef9] rounded-3xl p-6 sm:p-8 border border-cream-500/70 shadow-sm space-y-6">
-                    <div class="border-b border-cream-400/50 pb-3">
+                    <!-- Multi-Page Progress Indicator -->
+                    <div v-if="isPaginated" class="border-b border-cream-400/50 pb-4 space-y-2">
+                        <div class="flex items-center justify-between text-xs font-bold text-forest-900">
+                            <span>{{ currentPage?.section?.particular || `Section ${currentPageIdx + 1}` }}</span>
+                            <span v-if="props.form?.schema?.pagination?.show_section_numbers !== false">
+                                Section {{ currentPageIdx + 1 }} of {{ sectionPages.length }}
+                            </span>
+                        </div>
+                        <p v-if="currentPage?.section?.description" class="text-xs text-gray-600">
+                            {{ currentPage.section.description }}
+                        </p>
+                        <div v-if="props.form?.schema?.pagination?.progress_bar !== false" class="h-2 w-full bg-cream-200 rounded-full overflow-hidden">
+                            <div
+                                class="h-full bg-forest-900 transition-all duration-300 rounded-full"
+                                :style="{ width: `${Math.round(((currentPageIdx + 1) / sectionPages.length) * 100)}%` }"
+                            ></div>
+                        </div>
+                    </div>
+                    <div v-else class="border-b border-cream-400/50 pb-3">
                         <h3 class="text-base font-bold text-gray-900">
                             Questionnaire
                         </h3>
@@ -390,19 +603,41 @@ const getOtherFieldError = (fieldId) => {
 
                     <div class="space-y-6">
                         <!-- Dynamic Field Loop -->
-                        <div
-                            v-for="(field, index) in sortedFields"
-                            :key="field.id"
-                            :id="`field_container_${field.id}`"
-                            class="p-5 rounded-2xl border space-y-3 transition-all duration-300"
-                            :class="[
-                                highlightedFieldId === field.id
-                                    ? 'ring-4 ring-red-500/80 ring-offset-2 border-red-500 bg-red-50/90 shadow-xl scale-[1.01] animate-pulse'
-                                    : (getFieldError(field.id) || getOtherFieldError(field.id)
-                                        ? 'border-red-400 bg-red-50/30'
-                                        : 'bg-cream-100/50 border-cream-400/60 hover:border-forest-600/40')
-                            ]"
-                        >
+                        <template v-for="(field, index) in (isPaginated ? (currentPage?.fields || []) : sortedFields)" :key="field.id">
+                            <!-- Section Header / Divider -->
+                            <div
+                                v-if="field.type === 'section'"
+                                :id="`field_container_${field.id}`"
+                                class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
+                            >
+                                <div class="flex items-center gap-3">
+                                    <span class="size-7 rounded-xl bg-forest-900 text-emerald-200 text-xs font-black flex items-center justify-center shrink-0 shadow-xs">
+                                        #{{ field.weight || index + 1 }}
+                                    </span>
+                                    <div class="flex-1">
+                                        <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight">
+                                            {{ field.particular }}
+                                        </h3>
+                                        <p v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium">
+                                            {{ field.description }}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Regular Question / Input Card -->
+                            <div
+                                v-else-if="isFieldConditionMet(field)"
+                                :id="`field_container_${field.id}`"
+                                class="p-5 rounded-2xl border space-y-3 transition-all duration-300"
+                                :class="[
+                                    highlightedFieldId === field.id
+                                        ? 'ring-4 ring-red-500/80 ring-offset-2 border-red-500 bg-red-50/90 shadow-xl scale-[1.01] animate-pulse'
+                                        : (getFieldError(field.id) || getOtherFieldError(field.id)
+                                            ? 'border-red-400 bg-red-50/30'
+                                            : 'bg-cream-100/50 border-cream-400/60 hover:border-forest-600/40')
+                                ]"
+                            >
                             <div class="flex items-start justify-between gap-3">
                                 <div class="flex items-center space-x-2">
                                     <span class="size-6 rounded-full bg-forest-900 text-emerald-200 text-xs font-bold flex items-center justify-center shrink-0">
@@ -590,6 +825,7 @@ const getOtherFieldError = (fieldId) => {
                                 {{ getFieldError(field.id) }}
                             </div>
                         </div>
+                        </template>
                     </div>
                 </div>
 
@@ -647,19 +883,44 @@ const getOtherFieldError = (fieldId) => {
                     </div>
                 </div>
 
-                <!-- Submit Button Bar -->
-                <div class="bg-[#fffef9] rounded-3xl p-6 border border-cream-500/70 shadow-sm flex items-center justify-end">
-                    <button
-                        type="submit"
-                        :disabled="isSubmitting"
-                        class="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3 bg-forest-900 hover:bg-forest-950 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer"
-                    >
-                        <svg v-if="isSubmitting" class="animate-spin -ms-1 me-2 size-4 text-white" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span>{{ isSubmitting ? 'Submitting Responses...' : 'Submit Feedback' }}</span>
-                    </button>
+                <!-- Submit / Navigation Action Bar -->
+                <div class="bg-[#fffef9] rounded-3xl p-6 border border-cream-500/70 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div class="text-xs text-gray-500 text-center sm:text-left">
+                        <span>Your responses will be securely recorded under <strong>{{ event?.name }}</strong>.</span>
+                    </div>
+
+                    <div class="flex items-center space-x-3 w-full sm:w-auto">
+                        <button
+                            v-if="isPaginated && pageHistory.length > 1"
+                            type="button"
+                            @click="goToPreviousPage"
+                            class="flex-1 sm:flex-initial text-center px-5 py-2.5 bg-cream-100 hover:bg-cream-200 text-gray-700 text-xs font-bold rounded-xl border border-cream-400 transition cursor-pointer"
+                        >
+                            ← Back
+                        </button>
+
+                        <button
+                            v-if="isPaginated && !isLastPage"
+                            type="button"
+                            @click="goToNextPage"
+                            class="flex-1 sm:flex-initial inline-flex items-center justify-center px-7 py-2.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer"
+                        >
+                            <span>Next Page →</span>
+                        </button>
+
+                        <button
+                            v-else
+                            type="submit"
+                            :disabled="isSubmitting"
+                            class="flex-1 sm:flex-initial inline-flex items-center justify-center px-7 py-2.5 bg-forest-900 hover:bg-forest-950 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer"
+                        >
+                            <svg v-if="isSubmitting" class="animate-spin -ms-1 me-2 size-4 text-white" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span>{{ isSubmitting ? 'Submitting Responses...' : 'Submit Feedback' }}</span>
+                        </button>
+                    </div>
                 </div>
             </form>
         </div>
