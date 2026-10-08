@@ -83,6 +83,9 @@ class HandleInertiaRequests extends Middleware
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),
+                'revealed_secret' => fn () => $request->session()->get('revealed_secret'),
+                'new_secret' => fn () => $request->session()->get('new_secret'),
+                'new_secret_client_name' => fn () => $request->session()->get('new_secret_client_name'),
             ],
             'system_appearance' => [
                 'name' => SystemSetting::get('system_name', config('app.name', 'LGUNET Portal')),
