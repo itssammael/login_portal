@@ -188,21 +188,36 @@ const confirmRegenerateSecret = () => {
     if (!eventForRegenerateSecret.value) return;
     router.post(route('admin.feedback.events.regenerate-embed-secret', eventForRegenerateSecret.value.id), {}, {
         preserveScroll: true,
-        onSuccess: () => {
+        onSuccess: (pageResponse) => {
             showRegenerateSecretModal.value = false;
             eventForRegenerateSecret.value = null;
+            const secret = pageResponse?.props?.flash?.revealed_secret || page.props.flash?.revealed_secret;
+            if (secret) {
+                localRevealedSecret.value = secret;
+                showRevealedSecretModal.value = true;
+            }
         },
     });
 };
 
 // Modal for newly revealed secret (from flash session)
 const showRevealedSecretModal = ref(false);
+const localRevealedSecret = ref(null);
 const revealedSecret = computed(() => {
-    return page.props.flash?.revealed_secret || null;
+    return localRevealedSecret.value || page.props.flash?.revealed_secret || null;
 });
+
+const closeRevealedSecretModal = () => {
+    showRevealedSecretModal.value = false;
+    localRevealedSecret.value = null;
+    if (page.props.flash?.revealed_secret) {
+        page.props.flash.revealed_secret = null;
+    }
+};
 
 watch(() => page.props.flash?.revealed_secret, (val) => {
     if (val) {
+        localRevealedSecret.value = val;
         showRevealedSecretModal.value = true;
     }
 }, { immediate: true });
@@ -2020,7 +2035,7 @@ const closeSamplePreviewModal = () => {
                 <div class="pt-2 flex items-center justify-end">
                     <button
                         type="button"
-                        @click="showRevealedSecretModal = false;"
+                        @click="closeRevealedSecretModal"
                         class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition"
                     >
                         I Have Saved the Secret
