@@ -34,7 +34,7 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.fields' => ['required', 'array', 'min:1'],
             'schema.fields.*.id' => ['required', 'string', 'max:100'],
             'schema.fields.*.particular' => ['required', 'string', 'max:255'],
-            'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,radio,select,checkbox,section'],
+            'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,date,radio,select,checkbox,section'],
             'schema.fields.*.weight' => ['required', 'integer', 'min:0'],
             'schema.fields.*.required' => ['nullable', 'boolean'],
             'schema.fields.*.allow_other' => ['nullable', 'boolean'],

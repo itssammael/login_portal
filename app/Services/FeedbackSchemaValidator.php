@@ -19,6 +19,7 @@ class FeedbackSchemaValidator
         'text',
         'textarea',
         'number',
+        'date',
         'radio',
         'select',
         'checkbox',
@@ -684,6 +685,28 @@ class FeedbackSchemaValidator
                             $errors["data.{$id}"] = "The '{$particular}' may not be greater than {$field['max']}.";
                         }
                         $sanitized[$id] = $num;
+                    }
+                    break;
+
+                case 'date':
+                    if (! is_string($value) && ! is_numeric($value)) {
+                        $errors["answers.{$id}"] = "The '{$particular}' field must be a valid date.";
+                        $errors["data.{$id}"] = "The '{$particular}' field must be a valid date.";
+                    } else {
+                        $trimmed = trim((string) $value);
+                        $parsed = date_parse($trimmed);
+                        if (
+                            $parsed['error_count'] > 0 ||
+                            ! is_int($parsed['year']) ||
+                            ! is_int($parsed['month']) ||
+                            ! is_int($parsed['day']) ||
+                            ! checkdate($parsed['month'], $parsed['day'], $parsed['year'])
+                        ) {
+                            $errors["answers.{$id}"] = "The '{$particular}' field must be a valid date format.";
+                            $errors["data.{$id}"] = "The '{$particular}' field must be a valid date format.";
+                        } else {
+                            $sanitized[$id] = sprintf('%04d-%02d-%02d', $parsed['year'], $parsed['month'], $parsed['day']);
+                        }
                     }
                     break;
 

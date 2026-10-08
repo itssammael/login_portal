@@ -650,4 +650,84 @@ class AdminFeedbackTest extends TestCase
             'feedback_type' => 'urgent issue report',
         ], $event);
     }
+
+    public function test_admin_can_save_schema_with_date_field(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'attendance_date',
+                    'particular' => 'Date of Attendance',
+                    'type' => 'date',
+                    'weight' => 1,
+                    'required' => true,
+                ],
+            ],
+        ];
+
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        $response->assertSessionHas('success');
+        $feedback = Feedback::where('event_id', $event->id)->firstOrFail();
+        $this->assertEquals('date', $feedback->schema['fields'][0]['type']);
+    }
+
+    public function test_date_field_validation_and_sanitization(): void
+    {
+        $event = FbEvent::factory()->create();
+        $validator = app(FeedbackSchemaValidator::class);
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'activity_date',
+                    'particular' => 'Activity Date',
+                    'type' => 'date',
+                    'weight' => 1,
+                    'required' => true,
+                ],
+                [
+                    'id' => 'followup_date',
+                    'particular' => 'Follow-up Date',
+                    'type' => 'date',
+                    'weight' => 2,
+                    'required' => false,
+                ],
+            ],
+        ];
+
+        // Valid dates normalization
+        $sanitized = $validator->validateSubmissionData($schema, [
+            'activity_date' => '2026-10-15',
+            'followup_date' => 'November 20, 2026',
+        ], $event);
+
+        $this->assertEquals('2026-10-15', $sanitized['activity_date']);
+        $this->assertEquals('2026-11-20', $sanitized['followup_date']);
+
+        // Optional date can be empty
+        $sanitizedOptionalEmpty = $validator->validateSubmissionData($schema, [
+            'activity_date' => '2026-10-15',
+            'followup_date' => '',
+        ], $event);
+        $this->assertNull($sanitizedOptionalEmpty['followup_date']);
+
+        // Invalid date format and relative strings throw ValidationException
+        foreach (['not-a-valid-date-string', 'now', '1000', '2026-02-30'] as $invalidInput) {
+            try {
+                $validator->validateSubmissionData($schema, [
+                    'activity_date' => $invalidInput,
+                ], $event);
+                $this->fail("Expected ValidationException for invalid date input: {$invalidInput}");
+            } catch (ValidationException $e) {
+                $this->assertArrayHasKey('answers.activity_date', $e->errors());
+            }
+        }
+    }
 }

@@ -650,6 +650,8 @@ const generateSampleAnswers = (fields = []) => {
             }
         } else if (field.type === 'number') {
             sample[id] = field.max !== null && field.max !== undefined ? Math.min(5, Number(field.max)) : 5;
+        } else if (field.type === 'date') {
+            sample[id] = new Date().toISOString().slice(0, 10);
         } else if (field.type === 'radio') {
             const opts = getPreviewFieldOptions(field);
             if (opts.length > 0) {
@@ -2371,6 +2373,15 @@ const closeSamplePreviewModal = () => {
                                         />
                                     </div>
 
+                                    <!-- Date Input -->
+                                    <div v-else-if="field.type === 'date'">
+                                        <input
+                                            v-model="previewAnswers[field.id]"
+                                            type="date"
+                                            class="w-full sm:w-64 px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
+                                        />
+                                    </div>
+
                                     <!-- Radio Option Tiles -->
                                     <div v-else-if="field.type === 'radio'" class="space-y-3">
                                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -2641,6 +2652,14 @@ const closeSamplePreviewModal = () => {
                                                     v-model.number="previewAnswers[field.id]"
                                                     type="number"
                                                     class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
+                                                />
+                                            </div>
+
+                                            <div v-else-if="field.type === 'date'">
+                                                <input
+                                                    v-model="previewAnswers[field.id]"
+                                                    type="date"
+                                                    class="w-full sm:w-64 px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
                                                 />
                                             </div>
 

@@ -645,6 +645,17 @@ const getOtherFieldError = (fieldId) => {
                                     />
                                 </div>
 
+                                <!-- Date Input -->
+                                <div v-else-if="field.type === 'date'">
+                                    <input
+                                        :id="`input_${field.id}`"
+                                        v-model="answers[field.id]"
+                                        type="date"
+                                        :required="field.required"
+                                        class="w-full sm:w-64 px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
+                                    />
+                                </div>
+
                                 <!-- Radio Buttons (Choice Tiles) -->
                                 <div v-else-if="field.type === 'radio'" class="space-y-3">
                                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">

@@ -1209,6 +1209,7 @@ onUnmounted(() => {
                                                 <option value="text">📝 Short answer</option>
                                                 <option value="textarea">📄 Paragraph</option>
                                                 <option value="number">🔢 Linear scale / Number</option>
+                                                <option value="date">📅 Date</option>
                                                 <option value="section">〓 Section header</option>
                                             </select>
                                         </div>
@@ -1365,6 +1366,14 @@ onUnmounted(() => {
                                     <div v-else-if="['text', 'textarea'].includes(field.type)" class="py-2">
                                         <div class="text-xs text-gray-400 border-b border-cream-300 pb-1 italic">
                                             {{ field.type === 'text' ? 'Short answer text' : 'Long answer text / paragraph' }}
+                                        </div>
+                                    </div>
+
+                                    <!-- Date Preview Mockup -->
+                                    <div v-else-if="field.type === 'date'" class="py-2">
+                                        <div class="inline-flex items-center justify-between text-xs text-gray-400 border-b border-cream-300 pb-1.5 w-60">
+                                            <span>Month, day, year</span>
+                                            <span class="text-gray-400 text-sm">📅</span>
                                         </div>
                                     </div>
 
@@ -1537,6 +1546,15 @@ onUnmounted(() => {
 
                                     <div v-else-if="['text', 'textarea'].includes(field.type)" class="text-xs text-gray-400 italic border-b border-cream-300 pb-1">
                                         {{ field.type === 'text' ? 'Short answer' : 'Paragraph' }}
+                                    </div>
+
+                                    <div v-else-if="field.type === 'date'" class="text-xs text-gray-400 italic border-b border-cream-300 pb-1 flex items-center justify-between w-48">
+                                        <span>Month, day, year</span>
+                                        <span>📅</span>
+                                    </div>
+
+                                    <div v-else-if="field.type === 'number'" class="text-xs text-gray-500 italic">
+                                        Scale: {{ field.min ?? 1 }} to {{ field.max ?? 5 }}
                                     </div>
                                 </div>
                             </div>
