@@ -16,18 +16,16 @@ use App\Http\Controllers\Sso\SsoProviderController;
 use App\Http\Middleware\CheckPendingSsoRequest;
 use App\Models\AuditLog;
 use App\Models\Sso;
-use Illuminate\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
 Route::get('/', function () {
-    return Inertia::render('Welcome', [
-        'canLogin' => Route::has('login'),
-        'canRegister' => Route::has('register'),
-        'laravelVersion' => Application::VERSION,
-        'phpVersion' => PHP_VERSION,
-    ]);
+    if (auth()->check()) {
+        return redirect()->route('dashboard');
+    }
+
+    return redirect()->route('login');
 });
 
 // Public Embedded Feedback Form Routes (Session-authenticated & frame-protected)

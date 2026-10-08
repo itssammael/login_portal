@@ -389,6 +389,12 @@ class FeedbackEmbedTest extends TestCase
         $response->assertRedirect();
         $response->assertSessionHas('revealed_secret');
 
+        $followed = $this->actingAs($admin)->get(route('admin.feedback.setup'));
+        $followed->assertInertia(fn ($page) => $page
+            ->where('flash.revealed_secret.client_id', $embed->client_id)
+            ->where('flash.revealed_secret.client_secret', fn ($secret) => ! empty($secret) && is_string($secret))
+        );
+
         // Session was invalidated
         $this->get(route('feedback.embed.show', ['publicId' => $embed->public_id, 'token' => $token]))
             ->assertNotFound();
