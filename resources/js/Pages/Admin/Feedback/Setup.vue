@@ -138,6 +138,50 @@ const closeEmbedSettingsModal = () => {
     embedSettingsForm.reset();
 };
 
+// --- Embed Integration Guide Modal ---
+const showEmbedGuideModal = ref(false);
+const eventForEmbedGuide = ref(null);
+
+const openEmbedGuideModal = (event) => {
+    eventForEmbedGuide.value = event;
+    showEmbedGuideModal.value = true;
+};
+
+const closeEmbedGuideModal = () => {
+    showEmbedGuideModal.value = false;
+    eventForEmbedGuide.value = null;
+};
+
+const guidePublicToken = computed(() => {
+    return eventForEmbedGuide.value?.embed?.public_id || 'sample-public-token';
+});
+
+const guideEmbedUrl = computed(() => {
+    if (!eventForEmbedGuide.value?.embed?.public_id) {
+        return 'https://example.com/feedback/embed/' + guidePublicToken.value;
+    }
+    return route('feedback.embed.show', eventForEmbedGuide.value.embed.public_id);
+});
+
+const guideSessionIframeUrl = computed(() => {
+    const base = guideEmbedUrl.value || 'https://example.com/feedback/embed/YOUR_PUBLIC_ID';
+    return `${base}?token=YOUR_SESSION_TOKEN`;
+});
+
+const guideIframeCode = computed(() => {
+    return `<!-- Supply the dynamic 5-minute single-use iframe_url from POST /api/feedback/embed/sessions -->\n<iframe\n  src="${guideSessionIframeUrl.value}"\n  title="Public Feedback Form"\n  width="100%"\n  height="750"\n  frameborder="0"\n  loading="lazy"\n  style="width: 100%; min-height: 700px; border: 0; border-radius: 8px; overflow: hidden;"\n></iframe>`;
+});
+
+const guideResponsiveWrapperCode = computed(() => {
+    return `<!-- Responsive HTML Wrapper (supplying fresh iframe_url for each session) -->\n<div class="feedback-embed-container" style="max-width: 900px; width: 100%; margin: 0 auto; padding: 16px 0;">\n  <iframe\n    src="${guideSessionIframeUrl.value}"\n    title="Public Feedback Form"\n    width="100%"\n    height="750"\n    frameborder="0"\n    loading="lazy"\n    style="width: 100%; min-height: 700px; border: 0; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.06);"\n  ></iframe>\n</div>`;
+});
+
+const guideBackendRequestSnippet = computed(() => {
+    const clientId = eventForEmbedGuide.value?.embed?.client_id || 'YOUR_CLIENT_ID';
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://example.com';
+    return `// Backend Server-to-Server Request (e.g., PHP / Laravel / Node / Python)\n// POST /api/feedback/embed/sessions\n$response = Http::withHeaders([\n    'X-Client-Id' => '${clientId}',\n    'X-Client-Secret' => 'YOUR_CLIENT_SECRET',\n])->post('${origin}/api/feedback/embed/sessions', [\n    'respondent_id' => $userId ?? null, // Optional unique user ID\n]);\n\n// Returns:\n// {\n//   "status": "success",\n//   "data": {\n//     "session_token": "...",\n//     "expires_at": "...",\n//     "iframe_url": "${guideEmbedUrl.value}?token=..."\n//   }\n// }\n\n$iframeUrl = $response->json('data.iframe_url');`;
+});
+
 const saveEmbedSettings = () => {
     if (!eventForEmbedSettings.value) return;
 
@@ -1109,12 +1153,25 @@ const closeSamplePreviewModal = () => {
                                             </svg>
                                             <span>Public Iframe Integration</span>
                                         </span>
-                                        <span
-                                            class="px-2 py-0.5 rounded-full text-[10px] font-semibold"
-                                            :class="event.embed?.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'"
-                                        >
-                                            {{ event.embed?.is_active ? 'Embed Active' : 'Embed Disabled' }}
-                                        </span>
+                                        <div class="flex items-center space-x-2">
+                                            <button
+                                                type="button"
+                                                @click="openEmbedGuideModal(event)"
+                                                class="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-forest-50 text-forest-800 hover:bg-forest-100 border border-forest-200 transition cursor-pointer flex items-center space-x-1"
+                                                title="View developer integration guide"
+                                            >
+                                                <svg class="size-3 text-forest-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+                                                </svg>
+                                                <span>Embed Guide</span>
+                                            </button>
+                                            <span
+                                                class="px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                                                :class="event.embed?.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'"
+                                            >
+                                                {{ event.embed?.is_active ? 'Embed Active' : 'Embed Disabled' }}
+                                            </span>
+                                        </div>
                                     </div>
 
                                     <!-- Public ID & Client ID Rows -->
@@ -1211,22 +1268,34 @@ const closeSamplePreviewModal = () => {
                                             </p>
                                         </div>
 
-                                        <!-- Action Links for Regeneration -->
+                                        <!-- Action Links for Regeneration & Guide -->
                                         <div class="mt-2 pt-2 border-t border-cream-300 flex items-center justify-between text-[10px]">
                                             <button
                                                 type="button"
-                                                @click="promptRegenerateEmbedId(event)"
-                                                class="text-amber-800 hover:text-amber-950 font-medium cursor-pointer"
+                                                @click="openEmbedGuideModal(event)"
+                                                class="text-forest-800 hover:text-forest-950 font-semibold underline cursor-pointer flex items-center space-x-1"
                                             >
-                                                Regenerate Public ID
+                                                <svg class="size-3 text-forest-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+                                                </svg>
+                                                <span>View Integration Guide</span>
                                             </button>
-                                            <button
-                                                type="button"
-                                                @click="promptRegenerateSecret(event)"
-                                                class="text-amber-800 hover:text-amber-950 font-medium cursor-pointer"
-                                            >
-                                                Regenerate Client Secret
-                                            </button>
+                                            <div class="flex items-center space-x-3">
+                                                <button
+                                                    type="button"
+                                                    @click="promptRegenerateEmbedId(event)"
+                                                    class="text-amber-800 hover:text-amber-950 font-medium cursor-pointer"
+                                                >
+                                                    Regenerate Public ID
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    @click="promptRegenerateSecret(event)"
+                                                    class="text-amber-800 hover:text-amber-950 font-medium cursor-pointer"
+                                                >
+                                                    Regenerate Client Secret
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -2041,6 +2110,241 @@ const closeSamplePreviewModal = () => {
                         class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition"
                     >
                         I Have Saved the Secret
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Iframe Embed Integration Guide Modal -->
+        <div v-if="showEmbedGuideModal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 md:p-6">
+            <div class="bg-[#fffef9] rounded-3xl max-w-3xl w-full max-h-[90vh] shadow-2xl border border-cream-500/70 flex flex-col overflow-hidden animate-in fade-in duration-200">
+                <!-- Modal Header -->
+                <div class="p-4 sm:p-5 bg-cream-100/80 border-b border-cream-400/80 shrink-0 flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="size-10 rounded-2xl bg-forest-900 text-emerald-200 flex items-center justify-center font-bold text-lg shadow-sm">
+                            <svg class="size-5 text-emerald-300" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-base sm:text-lg font-bold text-gray-900">
+                                Public Feedback Form Embed Guide
+                            </h3>
+                            <p class="text-xs text-gray-600 mt-0.5">
+                                Integration instructions for <strong class="text-forest-900 font-semibold">{{ eventForEmbedGuide?.name || 'Feedback Form' }}</strong>
+                            </p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        @click="closeEmbedGuideModal"
+                        class="text-gray-400 hover:text-gray-700 size-8 rounded-lg flex items-center justify-center transition cursor-pointer"
+                        title="Close guide"
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                <!-- Modal Body (Scrollable) -->
+                <div class="p-5 sm:p-6 overflow-y-auto space-y-6 text-gray-800">
+                    <!-- Intro -->
+                    <div class="p-3.5 bg-forest-50/60 rounded-2xl border border-forest-200/70 text-xs sm:text-sm text-forest-950 leading-relaxed">
+                        Seamlessly collect citizen and stakeholder responses directly on your agency website, portal, or intranet. To prevent unauthorized framing and spam, every embed session requires a <strong>fresh, 5-minute single-use pre-signed session URL (<code class="font-mono text-xs text-forest-900 bg-cream-200 px-1 py-0.5 rounded">iframe_url</code>)</strong> generated via your backend.
+                    </div>
+
+                    <!-- 1. Backend Request: Obtain fresh iframe_url -->
+                    <div class="space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                                <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">1</span>
+                                <span>Obtain a Fresh Session URL (Backend Server Request)</span>
+                            </h4>
+                            <button
+                                type="button"
+                                @click="copyText(guideBackendRequestSnippet, 'guide_backend')"
+                                class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-xs font-semibold shrink-0 transition cursor-pointer"
+                            >
+                                {{ copiedRef === 'guide_backend' ? '✓ Copied API Snippet' : 'Copy API Snippet' }}
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-600">
+                            Whenever a user accesses your host page, your backend server performs a server-to-server request using your Client ID and Client Secret to obtain a 5-minute single-use pre-signed <code class="font-mono text-xs bg-cream-200 text-gray-800 px-1 py-0.5 rounded">iframe_url</code>:
+                        </p>
+                        <pre class="bg-gray-900 text-emerald-300 p-3.5 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed select-all shadow-inner border border-gray-800"><code>{{ guideBackendRequestSnippet }}</code></pre>
+                    </div>
+
+                    <!-- 2. Frontend Embed: Quick Setup -->
+                    <div class="space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                                <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">2</span>
+                                <span>Quick Setup (Frontend Embed)</span>
+                            </h4>
+                            <button
+                                type="button"
+                                @click="copyText(guideIframeCode, 'guide_iframe')"
+                                class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-xs font-semibold shrink-0 transition cursor-pointer"
+                            >
+                                {{ copiedRef === 'guide_iframe' ? '✓ Copied Iframe Code' : 'Copy Iframe Code' }}
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-600">
+                            Supply the dynamic <code class="font-mono text-xs bg-cream-200 text-gray-800 px-1 py-0.5 rounded">iframe_url</code> returned from Step 1 into the iframe's <code class="font-mono text-xs bg-cream-200 text-gray-800 px-1 py-0.5 rounded">src</code> attribute:
+                        </p>
+                        <pre class="bg-gray-900 text-emerald-300 p-3.5 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed select-all shadow-inner border border-gray-800"><code>{{ guideIframeCode }}</code></pre>
+                    </div>
+
+                    <!-- 3. Responsive Wrapper -->
+                    <div class="space-y-2.5">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                                <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">3</span>
+                                <span>Responsive Wrapper (Mobile &amp; Desktop)</span>
+                            </h4>
+                            <button
+                                type="button"
+                                @click="copyText(guideResponsiveWrapperCode, 'guide_wrapper')"
+                                class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-xs font-semibold shrink-0 transition cursor-pointer"
+                            >
+                                {{ copiedRef === 'guide_wrapper' ? '✓ Copied Wrapper' : 'Copy Wrapper' }}
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-600">
+                            For optimal rendering across smartphones, tablets, and high-resolution screens, wrap the iframe in a centered responsive container with a max width:
+                        </p>
+                        <pre class="bg-gray-900 text-emerald-300 p-3.5 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed select-all shadow-inner border border-gray-800"><code>{{ guideResponsiveWrapperCode }}</code></pre>
+                    </div>
+
+                    <!-- 4. Recommended Attributes -->
+                    <div class="space-y-2">
+                        <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                            <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">4</span>
+                            <span>Recommended Attributes</span>
+                        </h4>
+                        <p class="text-xs text-gray-600">
+                            The snippet above includes the standard settings required for a smooth user experience:
+                        </p>
+                        <ul class="list-disc pl-5 text-xs text-gray-600 space-y-1.5">
+                            <li>
+                                <strong class="text-gray-900 font-mono">width="100%"</strong>: Stretches the form to automatically fill the width of its parent container.
+                            </li>
+                            <li>
+                                <strong class="text-gray-900 font-mono">height="750"</strong> (or <strong class="text-gray-900 font-mono">min-height: 700px</strong>): Provides enough initial vertical height for the questions without unnecessary nested scrollbars.
+                            </li>
+                            <li>
+                                <strong class="text-gray-900 font-mono">frameborder="0"</strong>: Removes the legacy default border for clean integration with your site design.
+                            </li>
+                            <li>
+                                <strong class="text-gray-900 font-mono">loading="lazy"</strong>: Keeps your host page loading fast by waiting to load the form until the visitor scrolls near it.
+                            </li>
+                            <li>
+                                <strong class="text-gray-900 font-mono">title="..."</strong>: Provides an accessible label for screen readers and assistive accessibility tools.
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- 5. Where to Paste the Code -->
+                    <div class="space-y-2">
+                        <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                            <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">5</span>
+                            <span>Where to Paste the Snippet</span>
+                        </h4>
+                        <p class="text-xs text-gray-600">
+                            You can embed this form into any platform supporting custom HTML:
+                        </p>
+                        <ul class="list-disc pl-5 text-xs text-gray-600 space-y-1.5">
+                            <li>
+                                <strong class="text-gray-900">Standard HTML / Static Websites</strong>: Paste the snippet inside the main content area (such as a <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[11px]">&lt;main&gt;</code> or <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[11px]">&lt;section&gt;</code> tag) of your feedback or contact page.
+                            </li>
+                            <li>
+                                <strong class="text-gray-900">Content Management Systems (WordPress, Drupal, Joomla)</strong>: Add a "Custom HTML", "Code", or "Raw HTML" block within the page editor and paste the snippet inside.
+                            </li>
+                            <li>
+                                <strong class="text-gray-900">Website Builders (Webflow, Squarespace, Wix)</strong>: Insert an "Embed" or "HTML Code" widget and paste the iframe snippet into the code field.
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- 6. Security & Privacy Note -->
+                    <div class="p-4 bg-amber-50 rounded-2xl border border-amber-200 space-y-1.5">
+                        <h4 class="text-xs font-bold text-amber-900 flex items-center space-x-1.5">
+                            <svg class="size-4 shrink-0 text-amber-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.008v.008H12v-.008z" />
+                            </svg>
+                            <span>Security &amp; Privacy Notice</span>
+                        </h4>
+                        <p class="text-xs text-amber-800 leading-relaxed">
+                            Always keep your <strong>Client Secret</strong> strictly on your private backend server. Never expose it in client-side HTML or frontend JavaScript. Only provide the short-lived, pre-signed <code class="px-1 py-0.5 bg-white border border-amber-300 rounded font-mono text-[11px] text-amber-900">{{ guideSessionIframeUrl }}</code> to the user's browser. <strong>Never</strong> embed internal administrative dashboard pages (<code class="px-1 py-0.5 bg-white border border-amber-300 rounded font-mono text-[11px] text-amber-900">/admin/*</code>).
+                        </p>
+                    </div>
+
+                    <!-- 7. Troubleshooting -->
+                    <div class="space-y-3">
+                        <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
+                            <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">7</span>
+                            <span>Troubleshooting Common Issues</span>
+                        </h4>
+                        
+                        <div class="space-y-2.5 text-xs text-gray-600">
+                            <div class="p-3 bg-cream-100/70 rounded-xl border border-cream-300/80">
+                                <h5 class="font-bold text-gray-900">
+                                    Session expired or 404 (Not Found)
+                                </h5>
+                                <p class="mt-0.5 text-gray-600">
+                                    The embed endpoint requires a valid, unexpired session token. Loading the static public URL without a <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">?token=...</code> parameter, loading a previously submitted session, or waiting past the 5-minute expiration window will return a 404 error. Ensure your backend requests a fresh <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">iframe_url</code> on each page visit or modal open.
+                                </p>
+                            </div>
+
+                            <div class="p-3 bg-cream-100/70 rounded-xl border border-cream-300/80">
+                                <h5 class="font-bold text-gray-900">
+                                    The form does not appear or shows a blank box
+                                </h5>
+                                <p class="mt-0.5 text-gray-600">
+                                    Confirm that the embed status is toggled to <strong>Active</strong> in your Feedback Event setup. In addition, check that your website's origin (e.g. <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">https://yourcity.gov.ph</code>) is entered under <strong>Allowed Origins</strong> to satisfy Content Security Policy (CSP) frame protection.
+                                </p>
+                            </div>
+
+                            <div class="p-3 bg-cream-100/70 rounded-xl border border-cream-300/80">
+                                <h5 class="font-bold text-gray-900">
+                                    The form content is cut off or shows double scrollbars
+                                </h5>
+                                <p class="mt-0.5 text-gray-600">
+                                    Increase the <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">min-height</code> or <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">height</code> value in your iframe snippet (e.g. from <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">750</code> to <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">900</code>) to accommodate questionnaires with longer sections or multiple rating matrices.
+                                </p>
+                            </div>
+
+                            <div class="p-3 bg-cream-100/70 rounded-xl border border-cream-300/80">
+                                <h5 class="font-bold text-gray-900">
+                                    Your website's Content Security Policy (CSP) blocks the frame
+                                </h5>
+                                <p class="mt-0.5 text-gray-600">
+                                    If your website server uses a custom Content Security Policy header, make sure your site's <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">frame-src</code> or <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">child-src</code> directive permits the feedback portal's domain.
+                                </p>
+                            </div>
+
+                            <div class="p-3 bg-cream-100/70 rounded-xl border border-cream-300/80">
+                                <h5 class="font-bold text-gray-900">
+                                    Mixed Content error (HTTP vs HTTPS)
+                                </h5>
+                                <p class="mt-0.5 text-gray-600">
+                                    Modern web browsers automatically block insecure (<code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">http://</code>) iframes embedded inside secure (<code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">https://</code>) websites. Ensure both your website and the portal use matching secure <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">https://</code> protocols in production.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Modal Footer -->
+                <div class="p-4 bg-cream-100/80 border-t border-cream-400/80 shrink-0 flex items-center justify-between">
+                    <span class="text-xs text-gray-500 font-mono">
+                        Public ID: {{ guidePublicToken }}
+                    </span>
+                    <button
+                        type="button"
+                        @click="closeEmbedGuideModal"
+                        class="px-5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                    >
+                        Done
                     </button>
                 </div>
             </div>
