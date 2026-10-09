@@ -730,4 +730,338 @@ class AdminFeedbackTest extends TestCase
             }
         }
     }
+
+    public function test_admin_compiled_responses_empty_when_no_event_selected(): void
+    {
+        $admin = User::factory()->admin()->create();
+        FbFunction::factory()->create(['function' => 'Project Lead']);
+
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions'));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Admin/Feedback/Submissions')
+            ->where('compiledResponses', null)
+            ->where('compiledResponseMeta', null)
+            ->has('filterFunctions')
+        );
+    }
+
+    public function test_admin_compiled_responses_calculates_single_choice_percentages_and_includes_zero_options(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create(['name' => 'Tech Summit']);
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'rating',
+                    'particular' => 'Overall Rating',
+                    'type' => 'radio',
+                    'options' => [
+                        ['value' => 'excellent', 'label' => 'Excellent'],
+                        ['value' => 'fair', 'label' => 'Fair'],
+                        ['value' => 'poor', 'label' => 'Poor'],
+                    ],
+                ],
+            ],
+        ];
+
+        $feedback = Feedback::factory()->create([
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        // 2 Excellent, 1 Fair, 0 Poor
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['rating' => 'excellent'],
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['rating' => 'excellent'],
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['rating' => 'fair'],
+        ]);
+
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $event->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Admin/Feedback/Submissions')
+            ->where('compiledResponseMeta.total_filtered_submissions', 3)
+            ->has('compiledResponses', 1)
+            ->where('compiledResponses.0.particular', 'Overall Rating')
+            ->where('compiledResponses.0.answered_count', 3)
+            ->where('compiledResponses.0.options.0.value', 'excellent')
+            ->where('compiledResponses.0.options.0.count', 2)
+            ->where('compiledResponses.0.options.0.percentage', fn ($val) => (float) $val === 66.7)
+            ->where('compiledResponses.0.options.1.value', 'fair')
+            ->where('compiledResponses.0.options.1.count', 1)
+            ->where('compiledResponses.0.options.1.percentage', fn ($val) => (float) $val === 33.3)
+            ->where('compiledResponses.0.options.2.value', 'poor')
+            ->where('compiledResponses.0.options.2.count', 0)
+            ->where('compiledResponses.0.options.2.percentage', fn ($val) => (float) $val === 0.0)
+        );
+    }
+
+    public function test_admin_compiled_responses_calculates_checkbox_percentages_independently(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create(['name' => 'Health Expo']);
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'topics',
+                    'particular' => 'Topics Interested In',
+                    'type' => 'checkbox',
+                    'options' => [
+                        ['value' => 'nutrition', 'label' => 'Nutrition'],
+                        ['value' => 'fitness', 'label' => 'Fitness'],
+                        ['value' => 'mental_health', 'label' => 'Mental Health'],
+                    ],
+                ],
+            ],
+        ];
+
+        $feedback = Feedback::factory()->create([
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        // Submission 1: nutrition and fitness
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['topics' => ['nutrition', 'fitness']],
+        ]);
+        // Submission 2: nutrition only
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['topics' => ['nutrition']],
+        ]);
+        // Submission 3: un-answered / empty checkbox
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['topics' => []],
+        ]);
+
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $event->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Admin/Feedback/Submissions')
+            ->where('compiledResponseMeta.total_filtered_submissions', 3)
+            ->has('compiledResponses', 1)
+            ->where('compiledResponses.0.particular', 'Topics Interested In')
+            ->where('compiledResponses.0.is_multiselect', true)
+            ->where('compiledResponses.0.answered_count', 2)
+            ->where('compiledResponses.0.options.0.value', 'nutrition')
+            ->where('compiledResponses.0.options.0.count', 2)
+            ->where('compiledResponses.0.options.0.percentage', fn ($val) => (float) $val === 100.0)
+            ->where('compiledResponses.0.options.1.value', 'fitness')
+            ->where('compiledResponses.0.options.1.count', 1)
+            ->where('compiledResponses.0.options.1.percentage', fn ($val) => (float) $val === 50.0)
+            ->where('compiledResponses.0.options.2.value', 'mental_health')
+            ->where('compiledResponses.0.options.2.count', 0)
+            ->where('compiledResponses.0.options.2.percentage', fn ($val) => (float) $val === 0.0)
+        );
+    }
+
+    public function test_admin_compiled_responses_filtered_by_function_agency_and_designation(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create(['name' => 'Disaster Preparedness']);
+
+        $fnCoordinator = FbFunction::factory()->create(['function' => 'Coordinator']);
+        $fnVolunteer = FbFunction::factory()->create(['function' => 'Volunteer']);
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'prepared',
+                    'particular' => 'Are you prepared?',
+                    'type' => 'radio',
+                    'options' => [
+                        ['value' => 'yes', 'label' => 'Yes'],
+                        ['value' => 'no', 'label' => 'No'],
+                    ],
+                ],
+            ],
+        ];
+
+        $feedback = Feedback::factory()->create([
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        // Participant 1: Coordinator at DILG with Designation "Director"
+        $p1 = FbParticipant::factory()->create([
+            'function_id' => $fnCoordinator->id,
+            'agency' => 'DILG',
+            'designation' => 'Director',
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'participant_id' => $p1->id,
+            'data' => ['prepared' => 'yes'],
+        ]);
+
+        // Participant 2: Volunteer at Red Cross with Designation "Responder"
+        $p2 = FbParticipant::factory()->create([
+            'function_id' => $fnVolunteer->id,
+            'agency' => 'Red Cross',
+            'designation' => 'Responder',
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'participant_id' => $p2->id,
+            'data' => ['prepared' => 'no'],
+        ]);
+
+        // Filter by Function
+        $resFn = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $event->id,
+            'function_id' => $fnCoordinator->id,
+        ]));
+        $resFn->assertOk();
+        $resFn->assertInertia(fn ($page) => $page
+            ->where('compiledResponseMeta.total_filtered_submissions', 1)
+            ->where('compiledResponses.0.options.0.count', 1)
+            ->where('compiledResponses.0.options.0.percentage', fn ($val) => (float) $val === 100.0)
+            ->where('compiledResponses.0.options.1.count', 0)
+        );
+
+        // Filter by Agency
+        $resAg = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $event->id,
+            'agency' => 'Red Cross',
+        ]));
+        $resAg->assertOk();
+        $resAg->assertInertia(fn ($page) => $page
+            ->where('compiledResponseMeta.total_filtered_submissions', 1)
+            ->where('compiledResponses.0.options.0.count', 0)
+            ->where('compiledResponses.0.options.1.count', 1)
+            ->where('compiledResponses.0.options.1.percentage', fn ($val) => (float) $val === 100.0)
+        );
+
+        // Filter by Designation
+        $resDes = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $event->id,
+            'designation' => 'Director',
+        ]));
+        $resDes->assertOk();
+        $resDes->assertInertia(fn ($page) => $page
+            ->where('compiledResponseMeta.total_filtered_submissions', 1)
+            ->where('compiledResponses.0.options.0.count', 1)
+            ->where('compiledResponses.0.options.1.count', 0)
+        );
+    }
+
+    public function test_admin_compiled_responses_aggregates_across_all_pages_not_only_paginated_page(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create(['name' => 'Big Survey']);
+
+        $schema = [
+            'fields' => [
+                [
+                    'id' => 'score',
+                    'particular' => 'Score',
+                    'type' => 'select',
+                    'options' => [
+                        ['value' => 'high', 'label' => 'High'],
+                        ['value' => 'low', 'label' => 'Low'],
+                    ],
+                ],
+            ],
+        ];
+
+        $feedback = Feedback::factory()->create([
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        // Create 20 submissions: 15 high, 5 low
+        for ($i = 0; $i < 15; $i++) {
+            FbSubmission::factory()->create([
+                'feedback_id' => $feedback->id,
+                'data' => ['score' => 'high'],
+            ]);
+        }
+        for ($i = 0; $i < 5; $i++) {
+            FbSubmission::factory()->create([
+                'feedback_id' => $feedback->id,
+                'data' => ['score' => 'low'],
+            ]);
+        }
+
+        // Request page 1
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $event->id,
+            'page' => 1,
+        ]));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            // Table is paginated to 15 items on page 1
+            ->has('submissions.data', 15)
+            // But compiled responses reflect all 20 records
+            ->where('compiledResponseMeta.total_filtered_submissions', 20)
+            ->where('compiledResponses.0.answered_count', 20)
+            ->where('compiledResponses.0.total_submissions', 20)
+            ->where('compiledResponses.0.options.0.value', 'high')
+            ->where('compiledResponses.0.options.0.count', 15)
+            ->where('compiledResponses.0.options.0.percentage', fn ($val) => (float) $val === 75.0)
+            ->where('compiledResponses.0.options.1.value', 'low')
+            ->where('compiledResponses.0.options.1.count', 5)
+            ->where('compiledResponses.0.options.1.percentage', fn ($val) => (float) $val === 25.0)
+        );
+    }
+
+    public function test_admin_compiled_responses_meta_has_schema_reflects_event_schema_presence(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        // Event without feedback template
+        $eventNoFeedback = FbEvent::factory()->create(['name' => 'Event Without Form']);
+        $resNoFeedback = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $eventNoFeedback->id,
+        ]));
+        $resNoFeedback->assertOk();
+        $resNoFeedback->assertInertia(fn ($page) => $page
+            ->where('compiledResponseMeta.has_schema', false)
+            ->where('compiledResponses', null)
+        );
+
+        // Event with feedback template having only a section (no compilable questions)
+        $eventWithSchema = FbEvent::factory()->create(['name' => 'Event With Section Only']);
+        Feedback::factory()->create([
+            'event_id' => $eventWithSchema->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'section_header',
+                        'particular' => 'General Information',
+                        'type' => 'section',
+                    ],
+                ],
+            ],
+        ]);
+
+        $resWithSchema = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $eventWithSchema->id,
+        ]));
+        $resWithSchema->assertOk();
+        $resWithSchema->assertInertia(fn ($page) => $page
+            ->where('compiledResponseMeta.has_schema', true)
+            ->where('compiledResponses', [])
+        );
+    }
 }

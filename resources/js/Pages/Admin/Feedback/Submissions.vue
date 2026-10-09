@@ -13,6 +13,10 @@ const props = defineProps({
         type: Array,
         required: true,
     },
+    filterFunctions: {
+        type: Array,
+        default: () => [],
+    },
     filterAgencies: {
         type: Array,
         required: true,
@@ -25,10 +29,19 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    compiledResponses: {
+        type: Array,
+        default: null,
+    },
+    compiledResponseMeta: {
+        type: Object,
+        default: null,
+    },
 });
 
 const filterForm = ref({
     event_id: props.filters.event_id || '',
+    function_id: props.filters.function_id || '',
     agency: props.filters.agency || '',
     designation: props.filters.designation || '',
     search: props.filters.search || '',
@@ -44,6 +57,7 @@ const applyFilters = () => {
 const resetFilters = () => {
     filterForm.value = {
         event_id: '',
+        function_id: '',
         agency: '',
         designation: '',
         search: '',
@@ -119,7 +133,7 @@ const getOptionDisplayLabel = (field, val) => {
             <div class="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8">
                 <!-- Filters Bar -->
                 <div class="bg-cream-200 p-4 rounded-2xl border border-cream-500/50 shadow-xs mb-6">
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                         <div>
                             <label class="block text-[11px] font-bold text-forest-900 uppercase tracking-wider mb-1">Filter by Event</label>
                             <select
@@ -130,6 +144,20 @@ const getOptionDisplayLabel = (field, val) => {
                                 <option value="">All Events</option>
                                 <option v-for="ev in filterEvents" :key="ev.id" :value="ev.id">
                                     {{ ev.name }} {{ ev.deleted_at ? '(Archived)' : '' }}
+                                </option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-[11px] font-bold text-forest-900 uppercase tracking-wider mb-1">Filter by Function</label>
+                            <select
+                                v-model="filterForm.function_id"
+                                @change="applyFilters"
+                                class="w-full px-3 py-2 bg-[#fffef9] border border-cream-500 focus:border-forest-600 rounded-xl text-xs font-semibold text-gray-800"
+                            >
+                                <option value="">All Functions</option>
+                                <option v-for="fn in filterFunctions" :key="fn.id" :value="fn.id">
+                                    {{ fn.function }}
                                 </option>
                             </select>
                         </div>
@@ -180,7 +208,7 @@ const getOptionDisplayLabel = (field, val) => {
                                     Filter
                                 </button>
                                 <button
-                                    v-if="filterForm.event_id || filterForm.agency || filterForm.designation || filterForm.search"
+                                    v-if="filterForm.event_id || filterForm.function_id || filterForm.agency || filterForm.designation || filterForm.search"
                                     type="button"
                                     @click="resetFilters"
                                     class="px-2.5 py-2 bg-cream-300 hover:bg-cream-400 text-gray-700 rounded-xl text-xs font-semibold"
@@ -188,6 +216,131 @@ const getOptionDisplayLabel = (field, val) => {
                                 >
                                     ✕
                                 </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Compiled Responses Analytics Section -->
+                <!-- Empty State (No Event Selected) -->
+                <div v-if="!compiledResponseMeta" class="bg-cream-200/90 p-8 rounded-2xl border border-cream-500/60 shadow-xs mb-6 text-center">
+                    <div class="size-14 rounded-2xl bg-forest-900/10 text-forest-900 flex items-center justify-center mx-auto mb-3 shadow-inner">
+                        <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+                        </svg>
+                    </div>
+                    <h3 class="text-base font-bold text-gray-900">Select an Event to View Compiled Responses</h3>
+                    <p class="text-xs text-gray-600 max-w-lg mx-auto mt-1 leading-relaxed">
+                        Feedback questionnaires and schema fields are configured per event. Select an event in the filter dropdown above to compile response totals, percentage breakdowns, and charts.
+                    </p>
+                </div>
+
+                <!-- Aggregated Analytics Cards (Event Selected) -->
+                <div v-else class="mb-6 space-y-4">
+                    <!-- Analytics Header Banner -->
+                    <div class="bg-forest-900 text-white p-5 rounded-2xl shadow-sm border border-forest-950 flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                            <div class="flex items-center space-x-2">
+                                <span class="size-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                <h3 class="text-base font-bold tracking-tight">Compiled Response Analytics</h3>
+                            </div>
+                            <p class="text-xs text-cream-200 mt-0.5">
+                                Form: <strong class="text-white">{{ compiledResponseMeta?.event_name }}</strong>
+                            </p>
+                        </div>
+                        <div class="flex items-center flex-wrap gap-2 text-xs">
+                            <span class="px-3 py-1 bg-white/10 rounded-xl font-semibold border border-white/10">
+                                {{ compiledResponseMeta?.total_filtered_submissions }} Total Submissions
+                            </span>
+                            <span class="px-3 py-1 bg-white/10 rounded-xl font-semibold border border-white/10">
+                                {{ compiledResponses?.length || 0 }} Questions Compiled
+                            </span>
+                            <span v-if="filterForm.function_id || filterForm.agency || filterForm.designation" class="px-2.5 py-1 bg-amber-400/20 text-amber-200 rounded-xl font-semibold border border-amber-300/30">
+                                Filtered Population
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Empty Questions State -->
+                    <div v-if="!compiledResponses || compiledResponses.length === 0" class="bg-cream-200 p-8 rounded-2xl border border-cream-500/50 text-center">
+                        <p v-if="!compiledResponseMeta?.has_schema" class="text-xs font-semibold text-gray-600">
+                            No feedback form schema configured for this event.
+                        </p>
+                        <p v-else class="text-xs font-semibold text-gray-600">
+                            No question fields configured for this event's feedback form schema.
+                        </p>
+                    </div>
+
+                    <!-- Question Analytics Grid -->
+                    <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div
+                            v-for="q in compiledResponses"
+                            :key="q.id"
+                            class="bg-[#fffef9] rounded-2xl border border-cream-400/80 p-5 shadow-xs flex flex-col justify-between"
+                        >
+                            <div>
+                                <!-- Card Header -->
+                                <div class="flex items-start justify-between gap-3 mb-3">
+                                    <h4 class="text-xs font-bold text-gray-900 leading-snug">
+                                        {{ q.particular }}
+                                    </h4>
+                                    <span class="px-2 py-0.5 text-[10px] font-bold rounded-md uppercase tracking-wider shrink-0 bg-cream-200 text-forest-900 border border-cream-400/70">
+                                        {{ q.type }}
+                                    </span>
+                                </div>
+
+                                <!-- Participation Subheader -->
+                                <div class="flex items-center justify-between text-[11px] text-gray-500 pb-3 mb-3 border-b border-cream-300/80">
+                                    <span>
+                                        Answered: <strong class="text-gray-900 font-semibold">{{ q.answered_count }}</strong>
+                                        <span class="text-gray-400"> / {{ q.total_submissions }}</span>
+                                    </span>
+                                    <span>
+                                        {{ q.total_submissions > 0 ? Math.round((q.answered_count / q.total_submissions) * 100) : 0 }}% response rate
+                                    </span>
+                                </div>
+
+                                <!-- Multi-select note -->
+                                <p v-if="q.is_multiselect" class="text-[10px] text-forest-800 bg-forest-50/80 px-2.5 py-1 rounded-lg mb-3 border border-forest-200/60">
+                                    ℹ Multi-select question: Percentages represent respondents who selected each option out of total respondents who answered (sum may exceed 100%).
+                                </p>
+
+                                <!-- Choice Question: Horizontal Bar Charts -->
+                                <div v-if="q.is_choice" class="space-y-3">
+                                    <div v-if="q.options.length === 0" class="text-xs text-gray-400 italic py-2">
+                                        No options configured.
+                                    </div>
+                                    <div
+                                        v-for="opt in q.options"
+                                        :key="opt.value"
+                                        class="space-y-1"
+                                    >
+                                        <div class="flex items-center justify-between text-xs gap-2">
+                                            <span class="font-medium text-gray-800 truncate" :title="opt.label">
+                                                {{ opt.label }}
+                                            </span>
+                                            <span class="font-bold text-forest-900 shrink-0 font-mono text-[11px]">
+                                                {{ opt.percentage }}%
+                                                <span class="text-gray-500 font-normal font-sans text-[10px]">({{ opt.count }})</span>
+                                            </span>
+                                        </div>
+                                        <!-- Bar -->
+                                        <div class="w-full bg-cream-200 rounded-full h-2.5 overflow-hidden">
+                                            <div
+                                                class="bg-forest-900 h-2.5 rounded-full transition-all duration-500"
+                                                :style="{ width: `${Math.min(100, Math.max(0, opt.percentage))}%` }"
+                                            ></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Free-text / Qualitative Question Card -->
+                                <div v-else class="p-3 bg-cream-100/70 rounded-xl border border-cream-300 text-xs text-gray-600 space-y-1">
+                                    <div class="font-semibold text-gray-800">Qualitative Text Response</div>
+                                    <p class="text-[11px] text-gray-500">
+                                        Free-text answers are not charted by percentage. You can read individual participant submissions in the table below.
+                                    </p>
+                                </div>
                             </div>
                         </div>
                     </div>

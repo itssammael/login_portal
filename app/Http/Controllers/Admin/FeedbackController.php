@@ -78,30 +78,37 @@ class FeedbackController extends Controller
      */
     public function submissions(Request $request): Response
     {
-        $query = FbSubmission::query()
+        $baseQuery = FbSubmission::query();
+
+        if ($request->filled('event_id')) {
+            $eventId = (int) $request->input('event_id');
+            $baseQuery->whereHas('feedback', fn ($q) => $q->where('event_id', $eventId));
+        }
+
+        if ($request->filled('function_id')) {
+            $functionId = (int) $request->input('function_id');
+            $baseQuery->whereHas('participant', fn ($q) => $q->where('function_id', $functionId));
+        }
+
+        if ($request->filled('agency')) {
+            $agency = (string) $request->input('agency');
+            $baseQuery->whereHas('participant', fn ($q) => $q->where('agency', $agency));
+        }
+
+        if ($request->filled('designation')) {
+            $designation = (string) $request->input('designation');
+            $baseQuery->whereHas('participant', fn ($q) => $q->where('designation', $designation));
+        }
+
+        $tableQuery = (clone $baseQuery)
             ->with([
                 'feedback.event' => fn ($q) => $q->withTrashed(),
                 'participant.function',
             ]);
 
-        if ($request->filled('event_id')) {
-            $eventId = (int) $request->input('event_id');
-            $query->whereHas('feedback', fn ($q) => $q->where('event_id', $eventId));
-        }
-
-        if ($request->filled('agency')) {
-            $agency = (string) $request->input('agency');
-            $query->whereHas('participant', fn ($q) => $q->where('agency', $agency));
-        }
-
-        if ($request->filled('designation')) {
-            $designation = (string) $request->input('designation');
-            $query->whereHas('participant', fn ($q) => $q->where('designation', $designation));
-        }
-
         if ($request->filled('search')) {
             $search = (string) $request->input('search');
-            $query->whereHas('participant', function ($q) use ($search): void {
+            $tableQuery->whereHas('participant', function ($q) use ($search): void {
                 $q->where('name', 'like', "%{$search}%")
                     ->orWhere('agency', 'like', "%{$search}%")
                     ->orWhere('designation', 'like', "%{$search}%")
@@ -109,18 +116,168 @@ class FeedbackController extends Controller
             });
         }
 
-        $submissions = $query->latest()->paginate(15)->withQueryString();
+        $submissions = $tableQuery->latest()->paginate(15)->withQueryString();
+
+        $compiledResponses = null;
+        $compiledResponseMeta = null;
+
+        if ($request->filled('event_id')) {
+            $eventId = (int) $request->input('event_id');
+            $event = FbEvent::withTrashed()->find($eventId);
+            $feedback = Feedback::where('event_id', $eventId)->first();
+
+            $totalFilteredSubmissions = (clone $baseQuery)->count();
+
+            if ($event && $feedback && is_array($feedback->schema)) {
+                $validator = app(FeedbackSchemaValidator::class);
+                $resolvedSchema = $validator->resolveSchemaForEvent($feedback->schema, $event);
+                $fields = $resolvedSchema['fields'] ?? [];
+
+                // Retrieve all submission data for aggregation across entire filtered dataset
+                $allSubmissionsData = (clone $baseQuery)->pluck('data');
+
+                $compiledQuestions = [];
+
+                foreach ($fields as $field) {
+                    $type = $field['type'] ?? 'text';
+                    if ($type === 'section') {
+                        continue;
+                    }
+
+                    $fieldId = (string) ($field['id'] ?? '');
+                    $particular = (string) ($field['particular'] ?? $fieldId);
+                    $rawOptions = $field['options'] ?? [];
+
+                    $isChoice = in_array($type, ['radio', 'select', 'checkbox'], true);
+                    $isCheckbox = $type === 'checkbox';
+
+                    if ($isChoice) {
+                        // Options map initialized with 0 count
+                        $optionsMap = [];
+                        foreach ($rawOptions as $opt) {
+                            $val = (string) ($opt['value'] ?? '');
+                            $lbl = (string) ($opt['label'] ?? $val);
+                            $optionsMap[$val] = [
+                                'value' => $val,
+                                'label' => $lbl,
+                                'count' => 0,
+                                'percentage' => 0.0,
+                            ];
+                        }
+
+                        $answeredCount = 0;
+
+                        foreach ($allSubmissionsData as $submissionData) {
+                            if (! is_array($submissionData) || ! array_key_exists($fieldId, $submissionData)) {
+                                continue;
+                            }
+
+                            $val = $submissionData[$fieldId];
+
+                            if ($isCheckbox) {
+                                if (is_array($val) && count($val) > 0) {
+                                    $answeredCount++;
+                                    foreach ($val as $selectedOpt) {
+                                        $strVal = (string) $selectedOpt;
+                                        if (! isset($optionsMap[$strVal])) {
+                                            $optionsMap[$strVal] = [
+                                                'value' => $strVal,
+                                                'label' => $strVal,
+                                                'count' => 0,
+                                                'percentage' => 0.0,
+                                            ];
+                                        }
+                                        $optionsMap[$strVal]['count']++;
+                                    }
+                                }
+                            } else {
+                                if ($val !== null && $val !== '') {
+                                    $answeredCount++;
+                                    $strVal = (string) $val;
+                                    if (! isset($optionsMap[$strVal])) {
+                                        $optionsMap[$strVal] = [
+                                            'value' => $strVal,
+                                            'label' => $strVal,
+                                            'count' => 0,
+                                            'percentage' => 0.0,
+                                        ];
+                                    }
+                                    $optionsMap[$strVal]['count']++;
+                                }
+                            }
+                        }
+
+                        // Calculate percentages
+                        $optionsList = array_values($optionsMap);
+                        foreach ($optionsList as &$optItem) {
+                            $optItem['percentage'] = $answeredCount > 0
+                                ? round(($optItem['count'] / $answeredCount) * 100, 1)
+                                : 0.0;
+                        }
+                        unset($optItem);
+
+                        $compiledQuestions[] = [
+                            'id' => $fieldId,
+                            'particular' => $particular,
+                            'type' => $type,
+                            'is_choice' => true,
+                            'is_multiselect' => $isCheckbox,
+                            'total_submissions' => $totalFilteredSubmissions,
+                            'answered_count' => $answeredCount,
+                            'unanswered_count' => max(0, $totalFilteredSubmissions - $answeredCount),
+                            'options' => $optionsList,
+                        ];
+                    } else {
+                        // Free-text, date, or number questions
+                        $answeredCount = 0;
+                        foreach ($allSubmissionsData as $submissionData) {
+                            if (is_array($submissionData) && array_key_exists($fieldId, $submissionData)) {
+                                $val = $submissionData[$fieldId];
+                                if ($val !== null && $val !== '' && (! is_array($val) || count($val) > 0)) {
+                                    $answeredCount++;
+                                }
+                            }
+                        }
+
+                        $compiledQuestions[] = [
+                            'id' => $fieldId,
+                            'particular' => $particular,
+                            'type' => $type,
+                            'is_choice' => false,
+                            'is_multiselect' => false,
+                            'total_submissions' => $totalFilteredSubmissions,
+                            'answered_count' => $answeredCount,
+                            'unanswered_count' => max(0, $totalFilteredSubmissions - $answeredCount),
+                            'options' => [],
+                        ];
+                    }
+                }
+
+                $compiledResponses = $compiledQuestions;
+            }
+
+            $compiledResponseMeta = [
+                'event_id' => $event?->id ?? $eventId,
+                'event_name' => $event?->name ?? 'Unknown Event',
+                'total_filtered_submissions' => $totalFilteredSubmissions,
+                'has_schema' => ! empty($feedback?->schema),
+            ];
+        }
 
         $filterEvents = FbEvent::withTrashed()->orderBy('name')->get(['id', 'name', 'deleted_at']);
+        $filterFunctions = FbFunction::orderBy('function')->get(['id', 'function']);
         $filterAgencies = Agency::getCachedList();
         $filterDesignations = Designation::getCachedList();
 
         return Inertia::render('Admin/Feedback/Submissions', [
             'submissions' => $submissions,
             'filterEvents' => $filterEvents,
+            'filterFunctions' => $filterFunctions,
             'filterAgencies' => $filterAgencies,
             'filterDesignations' => $filterDesignations,
-            'filters' => $request->only(['event_id', 'agency', 'designation', 'search']),
+            'filters' => $request->only(['event_id', 'function_id', 'agency', 'designation', 'search']),
+            'compiledResponses' => $compiledResponses,
+            'compiledResponseMeta' => $compiledResponseMeta,
         ]);
     }
 
