@@ -193,8 +193,26 @@ class SsoService
             ];
         }
 
-        // Invalidate authorization code immediately to prevent replay
-        $authCode->update(['used_at' => now()]);
+        // Atomically invalidate authorization code immediately to prevent replay and race conditions
+        if (! $authCode->markAsUsed()) {
+            $this->logEvent(
+                user: $authCode->user,
+                action: 'replayed_authorization_code',
+                targetType: 'sso_client',
+                targetId: $client->id,
+                details: [
+                    'client_id' => $client->client_id,
+                    'code_id' => $authCode->id,
+                ]
+            );
+
+            return [
+                'success' => false,
+                'status' => 400,
+                'error' => 'invalid_grant',
+                'error_description' => 'Authorization code has already been used.',
+            ];
+        }
 
         // Touch client last used timestamp
         $client->update(['last_used_at' => now()]);

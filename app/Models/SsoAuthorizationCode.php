@@ -42,6 +42,25 @@ class SsoAuthorizationCode extends Model
         return $this->used_at === null && $this->expires_at->isFuture();
     }
 
+    /**
+     * Atomically mark the authorization code as used if valid and unused.
+     */
+    public function markAsUsed(): bool
+    {
+        $updated = static::whereKey($this->getKey())
+            ->whereNull('used_at')
+            ->where('expires_at', '>', now())
+            ->update(['used_at' => now()]);
+
+        if ($updated === 1) {
+            $this->used_at = now();
+
+            return true;
+        }
+
+        return false;
+    }
+
     public function verifyPkce(?string $codeVerifier): bool
     {
         if (empty($this->code_challenge)) {

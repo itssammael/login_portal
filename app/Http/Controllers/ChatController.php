@@ -552,10 +552,11 @@ class ChatController extends Controller
 
         $mimeType = $message->attachment_type ?: 'application/octet-stream';
         $filename = $message->attachment_name ?: 'attachment';
+        $sanitizedFilename = str_replace(["\r", "\n", '"', ';'], '', $filename);
 
         return response($decryptedContent, 200, [
             'Content-Type' => $mimeType,
-            'Content-Disposition' => 'inline; filename="'.addslashes($filename).'"',
+            'Content-Disposition' => 'inline; filename="'.$sanitizedFilename.'"',
             'Cache-Control' => 'private, max-age=3600',
         ]);
     }

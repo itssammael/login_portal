@@ -40,9 +40,6 @@ class User extends Authenticatable
         'section_id',
         'position',
         'employee_number',
-        'is_admin',
-        'is_banned',
-        'banned_at',
         'last_seen_at',
     ];
 

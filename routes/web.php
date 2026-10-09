@@ -32,7 +32,7 @@ Route::get('/', function () {
 Route::get('/embed/feedback/{publicId}', [FeedbackEmbedController::class, 'show'])->name('feedback.embed.show');
 Route::post('/embed/feedback/{publicId}', [FeedbackEmbedController::class, 'submit'])->middleware('throttle:30,1')->name('feedback.embed.submit');
 
-Route::get('/sso/authorize', [SsoProviderController::class, 'authorize'])->name('sso.authorize');
+Route::get('/sso/authorize', [SsoProviderController::class, 'authorize'])->middleware('throttle:60,1')->name('sso.authorize');
 Route::post('/sso/token', [SsoProviderController::class, 'token'])->middleware('throttle:60,1')->name('sso.token');
 
 Route::middleware([
@@ -91,6 +91,10 @@ Route::middleware([
     })->name('dashboard');
 
     Route::get('/test-broadcast', function () {
+        if (! app()->environment('local') && ! auth()->user()?->canAccessAdmin()) {
+            abort(403, 'Unauthorized broadcast test access.');
+        }
+
         $message = request('message', 'Hello world from Reverb');
         broadcast(new MessageSent($message));
 
@@ -107,7 +111,7 @@ Route::middleware([
     Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])->name('chat.download-attachment');
     Route::post('/chat/direct', [ChatController::class, 'startDirect'])->name('chat.start-direct');
     Route::post('/chat/group', [ChatController::class, 'createGroup'])->name('chat.create-group');
-    Route::post('/chat/{conversation}/messages', [ChatController::class, 'sendMessage'])->name('chat.send-message');
+    Route::post('/chat/{conversation}/messages', [ChatController::class, 'sendMessage'])->middleware('throttle:60,1')->name('chat.send-message');
     Route::post('/chat/{conversation}/read', [ChatController::class, 'markAsRead'])->name('chat.mark-read');
     Route::post('/chat/messages/{message}/reaction', [ChatController::class, 'toggleReaction'])->name('chat.reaction');
     Route::delete('/chat/messages/{message}', [ChatController::class, 'deleteMessage'])->name('chat.delete-message');

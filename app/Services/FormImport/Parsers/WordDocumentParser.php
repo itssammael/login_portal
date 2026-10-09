@@ -34,7 +34,7 @@ class WordDocumentParser
         $dom = new DOMDocument;
         // Suppress warnings for malformed XML fragments
         libxml_use_internal_errors(true);
-        $dom->loadXML($xmlContent, LIBXML_NOENT | LIBXML_NONET);
+        $dom->loadXML($xmlContent, LIBXML_NONET);
         libxml_clear_errors();
 
         $xpath = new DOMXPath($dom);

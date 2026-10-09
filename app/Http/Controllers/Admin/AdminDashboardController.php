@@ -136,8 +136,8 @@ class AdminDashboardController extends Controller
             'section_id' => $validated['section_id'] ?? null,
             'position' => $validated['position'] ?? null,
             'employee_number' => $validated['employee_number'] ?? null,
-            'is_admin' => $isAdmin,
         ]);
+        $newUser->is_admin = $isAdmin;
         $newUser->email_verified_at = now();
         $newUser->save();
 
@@ -238,10 +238,10 @@ class AdminDashboardController extends Controller
 
         $isBanned = ! $user->is_banned;
 
-        $user->update([
+        $user->forceFill([
             'is_banned' => $isBanned,
             'banned_at' => $isBanned ? now() : null,
-        ]);
+        ])->save();
 
         AuditLog::create([
             'admin_id' => $admin->id,
@@ -276,10 +276,10 @@ class AdminDashboardController extends Controller
         $role = Role::findOrFail($request->input('role_id'));
         $isAdmin = $role->slug === 'admin' || $role->hasPermission('access_admin');
 
-        $user->update([
+        $user->forceFill([
             'role_id' => $role->id,
             'is_admin' => $isAdmin,
-        ]);
+        ])->save();
 
         AuditLog::create([
             'admin_id' => $admin->id,
@@ -310,9 +310,9 @@ class AdminDashboardController extends Controller
 
         $isAdmin = ! $user->is_admin;
 
-        $user->update([
+        $user->forceFill([
             'is_admin' => $isAdmin,
-        ]);
+        ])->save();
 
         AuditLog::create([
             'admin_id' => $admin->id,

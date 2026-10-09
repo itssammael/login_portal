@@ -164,15 +164,19 @@ class ConnectedSystemsController extends Controller
     {
         $bases = [];
         if (! empty($client->api_url)) {
-            $bases[] = rtrim($client->api_url, '/');
+            $parsedApi = parse_url($client->api_url);
+            $scheme = strtolower($parsedApi['scheme'] ?? '');
+            if (in_array($scheme, ['http', 'https'], true) && isset($parsedApi['host'])) {
+                $bases[] = rtrim($client->api_url, '/');
+            }
         }
 
         if (! empty($client->redirect_uri)) {
             $redirectUris = array_filter(array_map('trim', explode(',', $client->redirect_uri)));
             foreach ($redirectUris as $uri) {
                 $parsed = parse_url($uri);
-                if (isset($parsed['host'])) {
-                    $scheme = $parsed['scheme'] ?? 'http';
+                $scheme = strtolower($parsed['scheme'] ?? '');
+                if (in_array($scheme, ['http', 'https'], true) && isset($parsed['host'])) {
                     $host = $parsed['host'];
                     $port = isset($parsed['port']) ? ':'.$parsed['port'] : '';
                     $bases[] = "{$scheme}://{$host}{$port}";

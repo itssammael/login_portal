@@ -55,4 +55,4 @@ Route::get('/announcements/latest', function () {
             'formatted_date' => $latest->created_at->diffForHumans(),
         ],
     ]);
-})->name('api.announcements.latest');
+})->middleware('throttle:60,1')->name('api.announcements.latest');
