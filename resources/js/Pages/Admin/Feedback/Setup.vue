@@ -147,9 +147,14 @@ const openEmbedGuideModal = (event) => {
     showEmbedGuideModal.value = true;
 };
 
+const activeGuideTab = ref('curl');
+const activeFrontendTab = ref('ssr');
+
 const closeEmbedGuideModal = () => {
     showEmbedGuideModal.value = false;
     eventForEmbedGuide.value = null;
+    activeGuideTab.value = 'curl';
+    activeFrontendTab.value = 'ssr';
 };
 
 const guidePublicToken = computed(() => {
@@ -176,10 +181,115 @@ const guideResponsiveWrapperCode = computed(() => {
     return `<!-- Responsive HTML Wrapper (supplying fresh iframe_url for each session) -->\n<div class="feedback-embed-container" style="max-width: 900px; width: 100%; margin: 0 auto; padding: 16px 0;">\n  <iframe\n    src="${guideSessionIframeUrl.value}"\n    title="Public Feedback Form"\n    width="100%"\n    height="750"\n    frameborder="0"\n    loading="lazy"\n    style="width: 100%; min-height: 700px; border: 0; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.06);"\n  ></iframe>\n</div>`;
 });
 
-const guideBackendRequestSnippet = computed(() => {
+const guideBackendSnippets = computed(() => {
     const clientId = eventForEmbedGuide.value?.embed?.client_id || 'YOUR_CLIENT_ID';
     const origin = typeof window !== 'undefined' ? window.location.origin : 'https://example.com';
-    return `// Backend Server-to-Server Request (e.g., PHP / Laravel / Node / Python)\n// POST /api/feedback/embed/sessions\n$response = Http::withHeaders([\n    'X-Client-Id' => '${clientId}',\n    'X-Client-Secret' => 'YOUR_CLIENT_SECRET',\n])->post('${origin}/api/feedback/embed/sessions', [\n    'respondent_id' => $userId ?? null, // Optional unique user ID\n]);\n\n// Returns:\n// {\n//   "status": "success",\n//   "data": {\n//     "session_token": "...",\n//     "expires_at": "...",\n//     "iframe_url": "${guideEmbedUrl.value}?token=..."\n//   }\n// }\n\n$iframeUrl = $response->json('data.iframe_url');`;
+    const originHost = typeof window !== 'undefined' ? window.location.host : 'example.com';
+    const embedUrl = guideEmbedUrl.value;
+
+    return {
+        curl: `# 1. cURL / Command Line Test
+curl -X POST "${origin}/api/feedback/embed/sessions" \\
+  -H "Content-Type: application/json" \\
+  -H "X-Client-Id: ${clientId}" \\
+  -H "X-Client-Secret: YOUR_CLIENT_SECRET" \\
+  -d '{"respondent_id": "optional-user-id"}'`,
+
+        node: `// Node.js (Next.js App Router, Express, Nuxt, Fastify)
+// Run on your private server only - keep Client Secret private!
+const user = typeof req !== 'undefined' ? req.user : null; // Obtain from framework auth context
+
+const response = await fetch('${origin}/api/feedback/embed/sessions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Client-Id': '${clientId}',
+    'X-Client-Secret': process.env.FEEDBACK_CLIENT_SECRET, // From server environment
+  },
+  body: JSON.stringify({
+    respondent_id: user?.id || null, // Optional unique respondent ID
+  }),
+});
+
+const data = await response.json();
+const iframeUrl = data.data.iframe_url; // 5-minute single-use URL`,
+
+        python: `# Python (FastAPI, Django, Flask)
+import os
+import requests
+
+# Obtain user from framework auth context (or None for anonymous)
+current_user = getattr(request, "user", None) if "request" in locals() else None
+
+# Keep secret in server environment variables
+url = "${origin}/api/feedback/embed/sessions"
+headers = {
+    "Content-Type": "application/json",
+    "X-Client-Id": "${clientId}",
+    "X-Client-Secret": os.environ.get("FEEDBACK_CLIENT_SECRET", "YOUR_CLIENT_SECRET"),
+}
+payload = {
+    "respondent_id": getattr(current_user, "id", None) if current_user else None,  # Optional
+}
+
+response = requests.post(url, json=payload, headers=headers)
+data = response.json()
+iframe_url = data["data"]["iframe_url"]  # 5-minute single-use URL`,
+
+        php: `// PHP / Laravel (Http Client)
+$user = auth()->user(); // Obtain from Laravel auth context (or null for anonymous)
+
+$response = Http::withHeaders([
+    'X-Client-Id' => '${clientId}',
+    'X-Client-Secret' => config('services.feedback.client_secret'),
+])->post('${origin}/api/feedback/embed/sessions', [
+    'respondent_id' => $user?->id ?? null, // Optional unique respondent ID
+]);
+
+$iframeUrl = $response->json('data.iframe_url');
+
+// Plain PHP / WordPress alternative:
+// $res = wp_remote_post('${origin}/api/feedback/embed/sessions', [
+//     'headers' => ['X-Client-Id' => '${clientId}', 'X-Client-Secret' => '...'],
+//     'body' => json_encode(['respondent_id' => get_current_user_id()]),
+// ]);`,
+
+        http: `POST /api/feedback/embed/sessions HTTP/1.1
+Host: ${originHost}
+Content-Type: application/json
+X-Client-Id: ${clientId}
+X-Client-Secret: YOUR_CLIENT_SECRET
+
+{
+  "respondent_id": "optional-user-id"
+}
+
+// Response (HTTP 200 OK):
+// {
+//   "status": "success",
+//   "data": {
+//     "session_token": "abc123xyz...",
+//     "expires_at": "2026-10-09T09:40:00Z",
+//     "iframe_url": "${embedUrl}?token=abc123xyz..."
+//   }
+// }`,
+    };
+});
+
+const guideBackendRequestSnippet = computed(() => {
+    return guideBackendSnippets.value[activeGuideTab.value] || guideBackendSnippets.value.curl;
+});
+
+const guideSpaSnippet = computed(() => {
+    return `// In your frontend SPA component (React, Vue, Svelte, Angular, Vanilla JS)
+// 1. Request fresh iframe_url from YOUR host backend (which securely holds the secret)
+const response = await fetch('/api/my-host-app/feedback-session');
+const { iframe_url } = await response.json();
+
+// 2. Supply the returned URL to the iframe (eager load so token doesn't expire):
+// React:   <iframe src={iframe_url} width="100%" height="750" />
+// Vue:     <iframe :src="iframe_url" width="100%" height="750" />
+// Vanilla: document.getElementById('feedback-iframe').src = iframe_url;`;
 });
 
 const saveEmbedSettings = () => {
@@ -2152,46 +2262,117 @@ const closeSamplePreviewModal = () => {
                         Seamlessly collect citizen and stakeholder responses directly on your agency website, portal, or intranet. To prevent unauthorized framing and spam, every embed session requires a <strong>fresh, 5-minute single-use pre-signed session URL (<code class="font-mono text-xs text-forest-900 bg-cream-200 px-1 py-0.5 rounded">iframe_url</code>)</strong> generated via your backend.
                     </div>
 
+                    <!-- Architecture / Universal Compatibility Callout -->
+                    <div class="p-4 bg-cream-100/70 rounded-2xl border border-cream-300/80 text-xs text-gray-700 space-y-2">
+                        <div class="font-bold text-gray-900 flex items-center space-x-1.5">
+                            <span class="text-forest-900 font-extrabold">✦</span>
+                            <span>Compatible with Any Tech Stack</span>
+                        </div>
+                        <p class="leading-relaxed">
+                            Whether your host application runs on <strong>Node.js, Python, PHP, Java, Go, Ruby, .NET</strong>, or a CMS like <strong>WordPress</strong>, the integration follows the same secure 3-step pattern:
+                        </p>
+                        <ol class="list-decimal pl-4 space-y-1 text-gray-600">
+                            <li><strong class="text-gray-900">Host Backend:</strong> Calls <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">POST /api/feedback/embed/sessions</code> with your Client Secret to obtain a single-use <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">iframe_url</code>.</li>
+                            <li><strong class="text-gray-900">Host Frontend:</strong> Injects the URL into the iframe's <code class="px-1 py-0.5 bg-cream-200 text-gray-800 rounded font-mono text-[10px]">src</code> attribute.</li>
+                            <li><strong class="text-gray-900">User Experience:</strong> The public feedback form renders securely; your secret is never leaked to the client browser.</li>
+                        </ol>
+                    </div>
+
                     <!-- 1. Backend Request: Obtain fresh iframe_url -->
-                    <div class="space-y-2.5">
+                    <div class="space-y-3">
                         <div class="flex items-center justify-between">
                             <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
                                 <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">1</span>
-                                <span>Obtain a Fresh Session URL (Backend Server Request)</span>
+                                <span>Obtain a Fresh Session URL (Backend Request)</span>
                             </h4>
                             <button
                                 type="button"
-                                @click="copyText(guideBackendRequestSnippet, 'guide_backend')"
+                                @click="copyText(guideBackendRequestSnippet, 'guide_backend_' + activeGuideTab)"
                                 class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-xs font-semibold shrink-0 transition cursor-pointer"
                             >
-                                {{ copiedRef === 'guide_backend' ? '✓ Copied API Snippet' : 'Copy API Snippet' }}
+                                {{ copiedRef === 'guide_backend_' + activeGuideTab ? '✓ Copied' : 'Copy Snippet' }}
                             </button>
                         </div>
                         <p class="text-xs text-gray-600">
-                            Whenever a user accesses your host page, your backend server performs a server-to-server request using your Client ID and Client Secret to obtain a 5-minute single-use pre-signed <code class="font-mono text-xs bg-cream-200 text-gray-800 px-1 py-0.5 rounded">iframe_url</code>:
+                            Select your stack to see how your backend requests a 5-minute pre-signed <code class="font-mono text-xs bg-cream-200 text-gray-800 px-1 py-0.5 rounded">iframe_url</code>:
                         </p>
+
+                        <!-- Stack Tabs -->
+                        <div class="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-gray-200">
+                            <button
+                                v-for="tab in [
+                                    { id: 'curl', label: 'cURL / Shell' },
+                                    { id: 'node', label: 'Node.js / Next.js' },
+                                    { id: 'python', label: 'Python' },
+                                    { id: 'php', label: 'PHP / Laravel' },
+                                    { id: 'http', label: 'HTTP / REST' },
+                                ]"
+                                :key="tab.id"
+                                type="button"
+                                @click="activeGuideTab = tab.id"
+                                :class="[
+                                    'px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer',
+                                    activeGuideTab === tab.id
+                                        ? 'bg-forest-900 text-white shadow-xs'
+                                        : 'text-gray-600 hover:text-gray-900 hover:bg-cream-200/60'
+                                ]"
+                            >
+                                {{ tab.label }}
+                            </button>
+                        </div>
+
                         <pre class="bg-gray-900 text-emerald-300 p-3.5 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed select-all shadow-inner border border-gray-800"><code>{{ guideBackendRequestSnippet }}</code></pre>
                     </div>
 
                     <!-- 2. Frontend Embed: Quick Setup -->
-                    <div class="space-y-2.5">
+                    <div class="space-y-3">
                         <div class="flex items-center justify-between">
                             <h4 class="text-sm font-bold text-gray-900 flex items-center space-x-1.5">
                                 <span class="size-5 rounded-full bg-forest-900 text-white text-[11px] font-bold flex items-center justify-center">2</span>
-                                <span>Quick Setup (Frontend Embed)</span>
+                                <span>Frontend Embed Setup</span>
                             </h4>
                             <button
                                 type="button"
-                                @click="copyText(guideIframeCode, 'guide_iframe')"
+                                @click="copyText(activeFrontendTab === 'ssr' ? guideIframeCode : guideSpaSnippet, activeFrontendTab === 'ssr' ? 'guide_iframe' : 'guide_spa')"
                                 class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-xs font-semibold shrink-0 transition cursor-pointer"
                             >
-                                {{ copiedRef === 'guide_iframe' ? '✓ Copied Iframe Code' : 'Copy Iframe Code' }}
+                                {{ (activeFrontendTab === 'ssr' ? copiedRef === 'guide_iframe' : copiedRef === 'guide_spa') ? '✓ Copied Code' : 'Copy Code' }}
                             </button>
                         </div>
                         <p class="text-xs text-gray-600">
-                            Supply the dynamic <code class="font-mono text-xs bg-cream-200 text-gray-800 px-1 py-0.5 rounded">iframe_url</code> returned from Step 1 into the iframe's <code class="font-mono text-xs bg-cream-200 text-gray-800 px-1 py-0.5 rounded">src</code> attribute:
+                            Choose your frontend architecture:
                         </p>
-                        <pre class="bg-gray-900 text-emerald-300 p-3.5 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed select-all shadow-inner border border-gray-800"><code>{{ guideIframeCode }}</code></pre>
+
+                        <!-- Frontend Tabs -->
+                        <div class="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-gray-200">
+                            <button
+                                type="button"
+                                @click="activeFrontendTab = 'ssr'"
+                                :class="[
+                                    'px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer',
+                                    activeFrontendTab === 'ssr'
+                                        ? 'bg-forest-900 text-white shadow-xs'
+                                        : 'text-gray-600 hover:text-gray-900 hover:bg-cream-200/60'
+                                ]"
+                            >
+                                Server-Rendered / HTML (Blade, Jinja, EJS, CMS)
+                            </button>
+                            <button
+                                type="button"
+                                @click="activeFrontendTab = 'spa'"
+                                :class="[
+                                    'px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer',
+                                    activeFrontendTab === 'spa'
+                                        ? 'bg-forest-900 text-white shadow-xs'
+                                        : 'text-gray-600 hover:text-gray-900 hover:bg-cream-200/60'
+                                ]"
+                            >
+                                Single Page App (React, Vue, Svelte, Angular)
+                            </button>
+                        </div>
+
+                        <pre v-if="activeFrontendTab === 'ssr'" class="bg-gray-900 text-emerald-300 p-3.5 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed select-all shadow-inner border border-gray-800"><code>{{ guideIframeCode }}</code></pre>
+                        <pre v-else class="bg-gray-900 text-emerald-300 p-3.5 rounded-xl text-xs font-mono overflow-x-auto leading-relaxed select-all shadow-inner border border-gray-800"><code>{{ guideSpaSnippet }}</code></pre>
                     </div>
 
                     <!-- 3. Responsive Wrapper -->
