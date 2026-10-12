@@ -69,6 +69,7 @@ const defaultSchemaTemplate = {
     },
     fields: [
         {
+            _uid: 'uid_overall_rating',
             id: 'overall_rating',
             particular: 'Overall exercise rating',
             type: 'radio',
@@ -88,6 +89,20 @@ const defaultSchemaTemplate = {
     ],
 };
 
+let uidCounter = 0;
+const getUniqueFieldKey = () => `field_uid_${Date.now()}_${++uidCounter}`;
+
+const ensureFieldUids = (fields) => {
+    if (!Array.isArray(fields)) return;
+    const seen = new Set();
+    fields.forEach((field) => {
+        if (!field._uid || seen.has(field._uid)) {
+            field._uid = getUniqueFieldKey();
+        }
+        seen.add(field._uid);
+    });
+};
+
 const formConfig = useForm({
     event_id: '',
     schema: JSON.parse(JSON.stringify(defaultSchemaTemplate)),
@@ -101,9 +116,12 @@ const toSnakeCase = (str) => {
         .replace(/^_+|_+$/g, '');
 };
 
-const onParticularInput = (field) => {
+const onParticularBlur = (field) => {
     if (!field.manualId && field.particular) {
-        field.id = toSnakeCase(field.particular) || (field.type === 'section' ? `section_${field.weight}` : `field_${field.weight}`);
+        const isDefaultPlaceholder = !field.id || /^(question|section|field)_\d+$/.test(field.id);
+        if (isDefaultPlaceholder) {
+            field.id = toSnakeCase(field.particular) || (field.type === 'section' ? `section_${field.weight}` : `field_${field.weight}`);
+        }
     }
 };
 
@@ -257,6 +275,7 @@ const initializeModal = () => {
         formConfig.schema.description = 'Please complete this evaluation questionnaire to help us improve future activities.';
     }
 
+    ensureFieldUids(formConfig.schema.fields);
     reindexWeights();
     jsonSchemaString.value = JSON.stringify(formConfig.schema, null, 2);
 };
@@ -288,6 +307,7 @@ const onEventSelectionChange = () => {
             show_section_numbers: true,
         };
     }
+    ensureFieldUids(formConfig.schema.fields);
     reindexWeights();
 };
 
@@ -297,6 +317,7 @@ const resetToDefaultSchema = () => {
         if (currentSelectedEvent.value?.name) {
             formConfig.schema.title = `${currentSelectedEvent.value.name} Evaluation`;
         }
+        ensureFieldUids(formConfig.schema.fields);
         activeFieldIdx.value = 0;
         reindexWeights();
         jsonParseError.value = '';
@@ -314,6 +335,7 @@ const addQuestionAt = (afterIdx = -1) => {
     const nextWeight = insertIdx + 1;
 
     const newField = {
+        _uid: getUniqueFieldKey(),
         id: `question_${Date.now().toString().slice(-4)}`,
         particular: 'Untitled Question',
         type: 'radio',
@@ -350,6 +372,7 @@ const addSectionAt = (afterIdx = -1) => {
     const count = sectionList.value.length + 1;
 
     const newSection = {
+        _uid: getUniqueFieldKey(),
         id: `section_${Date.now().toString().slice(-4)}`,
         particular: `Section ${count}`,
         type: 'section',
@@ -381,6 +404,7 @@ const duplicateField = (idx) => {
     if (!formConfig.schema?.fields?.[idx]) return;
     const original = formConfig.schema.fields[idx];
     const copy = JSON.parse(JSON.stringify(original));
+    copy._uid = getUniqueFieldKey();
     copy.id = `${original.id}_copy_${Date.now().toString().slice(-4)}`;
     copy.particular = `${original.particular} (Copy)`;
     copy.manualId = true;
@@ -516,6 +540,7 @@ const syncJsonToInteractive = () => {
         if (!formConfig.schema.pagination) {
             formConfig.schema.pagination = { enabled: false, progress_bar: true, show_section_numbers: true };
         }
+        ensureFieldUids(formConfig.schema.fields);
         reindexWeights();
         jsonParseError.value = '';
         return true;
@@ -671,6 +696,7 @@ const applyImportedFields = (strategy) => {
     if (selected.length === 0) return;
 
     const formatted = selected.map((cand) => ({
+        _uid: getUniqueFieldKey(),
         id: cand.id,
         particular: cand.particular,
         type: cand.type,
@@ -992,7 +1018,7 @@ onUnmounted(() => {
                     <div class="space-y-4">
                         <div
                             v-for="(field, idx) in formConfig.schema.fields"
-                            :key="field.id || idx"
+                            :key="field._uid || (field._uid = getUniqueFieldKey())"
                             :id="`schema_field_${idx}`"
                             class="transition-all duration-200"
                         >
@@ -1058,7 +1084,7 @@ onUnmounted(() => {
                                     <div class="space-y-2">
                                         <input
                                             v-model="field.particular"
-                                            @input="onParticularInput(field)"
+                                            @blur="onParticularBlur(field)"
                                             type="text"
                                             placeholder="Section Title"
                                             class="w-full text-lg font-bold text-gray-900 border-b border-cream-300 focus:border-indigo-600 focus:outline-none pb-1 placeholder-gray-400"
@@ -1190,7 +1216,7 @@ onUnmounted(() => {
                                         <div class="flex-1">
                                             <input
                                                 v-model="field.particular"
-                                                @input="onParticularInput(field)"
+                                                @blur="onParticularBlur(field)"
                                                 type="text"
                                                 placeholder="Question"
                                                 class="w-full text-base font-semibold text-gray-900 bg-cream-50/60 border-b-2 border-cream-400 focus:border-forest-900 focus:bg-white rounded-t-lg px-3 py-2 focus:outline-none transition"

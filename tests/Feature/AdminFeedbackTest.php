@@ -1002,17 +1002,18 @@ class AdminFeedbackTest extends TestCase
             ]);
         }
 
-        // Request page 1
-        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+        // Request page 1 with tab=compiled (or default when event_id is given)
+        $compiledResponse = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'compiled',
             'event_id' => $event->id,
             'page' => 1,
         ]));
 
-        $response->assertOk();
-        $response->assertInertia(fn ($page) => $page
-            // Table is paginated to 15 items on page 1
-            ->has('submissions.data', 15)
-            // But compiled responses reflect all 20 records
+        $compiledResponse->assertOk();
+        $compiledResponse->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'compiled')
+            ->where('submissions', null)
+            // But compiled responses reflect all 20 records, not pagination
             ->where('compiledResponseMeta.total_filtered_submissions', 20)
             ->where('compiledResponses.0.answered_count', 20)
             ->where('compiledResponses.0.total_submissions', 20)
@@ -1022,6 +1023,199 @@ class AdminFeedbackTest extends TestCase
             ->where('compiledResponses.0.options.1.value', 'low')
             ->where('compiledResponses.0.options.1.count', 5)
             ->where('compiledResponses.0.options.1.percentage', fn ($val) => (float) $val === 25.0)
+        );
+
+        // When requesting individual tab, table is paginated to 15 items on page 1
+        $individualResponse = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'individual',
+            'event_id' => $event->id,
+            'page' => 1,
+        ]));
+
+        $individualResponse->assertOk();
+        $individualResponse->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'individual')
+            ->has('submissions.data', 15)
+            ->where('compiledResponses', null)
+            ->where('compiledResponseMeta', null)
+        );
+    }
+
+    public function test_admin_feedback_submissions_tab_default_and_fallback_handling(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        // 1. Without tab and without event_id: defaults to 'individual'
+        $resNoEvent = $this->actingAs($admin)->get(route('admin.feedback.submissions'));
+        $resNoEvent->assertOk();
+        $resNoEvent->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'individual')
+            ->where('filters.tab', 'individual')
+            ->has('submissions.data')
+            ->where('compiledResponses', null)
+        );
+
+        // 2. Without tab and with event_id: defaults to 'compiled'
+        $resWithEvent = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'event_id' => $event->id,
+        ]));
+        $resWithEvent->assertOk();
+        $resWithEvent->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'compiled')
+            ->where('filters.tab', 'compiled')
+            ->where('submissions', null)
+        );
+
+        // 3. Invalid tab value with event_id: falls back safely to 'compiled'
+        $resInvalidWithEvent = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'invalid_mode',
+            'event_id' => $event->id,
+        ]));
+        $resInvalidWithEvent->assertOk();
+        $resInvalidWithEvent->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'compiled')
+            ->where('filters.tab', 'compiled')
+            ->where('submissions', null)
+        );
+
+        // 4. Invalid tab value without event_id: falls back safely to 'individual'
+        $resInvalidNoEvent = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'invalid_mode',
+        ]));
+        $resInvalidNoEvent->assertOk();
+        $resInvalidNoEvent->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'individual')
+            ->where('filters.tab', 'individual')
+            ->has('submissions.data')
+            ->where('compiledResponses', null)
+        );
+    }
+
+    public function test_admin_feedback_submissions_compiled_tab_does_not_load_table_data(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+        $feedback = Feedback::factory()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'rating',
+                        'particular' => 'Rating',
+                        'type' => 'radio',
+                        'options' => [['value' => 'good', 'label' => 'Good']],
+                    ],
+                ],
+            ],
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['rating' => 'good'],
+        ]);
+
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'compiled',
+            'event_id' => $event->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'compiled')
+            ->where('submissions', null)
+            ->where('compiledResponseMeta.total_filtered_submissions', 1)
+            ->where('compiledResponses.0.answered_count', 1)
+        );
+    }
+
+    public function test_admin_feedback_submissions_individual_tab_retains_paginated_submissions(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+        $feedback = Feedback::factory()->create(['event_id' => $event->id]);
+        $participant = FbParticipant::factory()->create(['name' => 'Maria Santos']);
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'participant_id' => $participant->id,
+            'data' => ['remarks' => 'Great program'],
+        ]);
+
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'individual',
+            'event_id' => $event->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'individual')
+            ->has('submissions.data', 1)
+            ->where('submissions.data.0.participant.name', 'Maria Santos')
+            ->where('compiledResponses', null)
+            ->where('compiledResponseMeta', null)
+        );
+    }
+
+    public function test_admin_feedback_submissions_filters_persist_across_tabs(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+        $function = FbFunction::factory()->create();
+
+        // Check compiled tab with demographic filters
+        $resCompiled = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'compiled',
+            'event_id' => $event->id,
+            'function_id' => $function->id,
+            'agency' => 'DICT',
+            'designation' => 'Developer',
+        ]));
+
+        $resCompiled->assertOk();
+        $resCompiled->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'compiled')
+            ->where('filters.tab', 'compiled')
+            ->where('filters.event_id', (string) $event->id)
+            ->where('filters.function_id', (string) $function->id)
+            ->where('filters.agency', 'DICT')
+            ->where('filters.designation', 'Developer')
+        );
+
+        // Check individual tab with demographic and search filters
+        $resIndividual = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'individual',
+            'event_id' => $event->id,
+            'function_id' => $function->id,
+            'agency' => 'DICT',
+            'designation' => 'Developer',
+            'search' => 'Juan',
+        ]));
+
+        $resIndividual->assertOk();
+        $resIndividual->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'individual')
+            ->where('filters.tab', 'individual')
+            ->where('filters.event_id', (string) $event->id)
+            ->where('filters.function_id', (string) $function->id)
+            ->where('filters.agency', 'DICT')
+            ->where('filters.designation', 'Developer')
+            ->where('filters.search', 'Juan')
+        );
+    }
+
+    public function test_admin_feedback_submissions_compiled_tab_only_aggregates_when_event_is_selected(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'compiled',
+        ]));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->where('activeTab', 'compiled')
+            ->where('compiledResponses', null)
+            ->where('compiledResponseMeta', null)
+            ->where('submissions', null)
         );
     }
 

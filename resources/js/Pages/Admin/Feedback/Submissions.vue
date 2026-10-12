@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { Head, Link, router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
@@ -7,7 +7,11 @@ import AdminNav from '@/Components/AdminNav.vue';
 const props = defineProps({
     submissions: {
         type: Object,
-        required: true,
+        default: null,
+    },
+    activeTab: {
+        type: String,
+        default: 'individual',
     },
     filterEvents: {
         type: Array,
@@ -47,8 +51,59 @@ const filterForm = ref({
     search: props.filters.search || '',
 });
 
+const currentTab = computed(() => {
+    if (props.activeTab === 'compiled' || props.activeTab === 'individual') {
+        return props.activeTab;
+    }
+    return filterForm.value.event_id ? 'compiled' : 'individual';
+});
+
+watch(() => props.filters, (newFilters) => {
+    if (newFilters) {
+        filterForm.value.event_id = newFilters.event_id || '';
+        filterForm.value.function_id = newFilters.function_id || '';
+        filterForm.value.agency = newFilters.agency || '';
+        filterForm.value.designation = newFilters.designation || '';
+        filterForm.value.search = newFilters.search || '';
+    }
+}, { deep: true });
+
+const tabCompiledRef = ref(null);
+const tabIndividualRef = ref(null);
+
+const onTabKeydown = (event, targetTab) => {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        switchTab(targetTab);
+        if (targetTab === 'compiled') {
+            tabCompiledRef.value?.focus();
+        } else {
+            tabIndividualRef.value?.focus();
+        }
+    }
+};
+
+const switchTab = (tab) => {
+    if (tab === currentTab.value) return;
+
+    closeDetailModal();
+
+    router.get(route('admin.feedback.submissions'), {
+        ...filterForm.value,
+        tab,
+        page: 1,
+    }, {
+        preserveState: true,
+        preserveScroll: true,
+    });
+};
+
 const applyFilters = () => {
-    router.get(route('admin.feedback.submissions'), filterForm.value, {
+    router.get(route('admin.feedback.submissions'), {
+        ...filterForm.value,
+        tab: currentTab.value,
+        page: 1,
+    }, {
         preserveState: true,
         preserveScroll: true,
     });
@@ -62,7 +117,14 @@ const resetFilters = () => {
         designation: '',
         search: '',
     };
-    applyFilters();
+    router.get(route('admin.feedback.submissions'), {
+        ...filterForm.value,
+        tab: currentTab.value,
+        page: 1,
+    }, {
+        preserveState: true,
+        preserveScroll: true,
+    });
 };
 
 // Response Detail Modal
@@ -131,9 +193,86 @@ const getOptionDisplayLabel = (field, val) => {
 
         <div class="py-6">
             <div class="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8">
+                <!-- Accessible Tab Switcher -->
+                <div class="mb-5 flex items-center justify-between flex-wrap gap-4">
+                    <div
+                        role="tablist"
+                        aria-label="Feedback Submissions View Modes"
+                        class="inline-flex p-1.5 bg-cream-200/90 rounded-2xl border border-cream-500/60 shadow-xs"
+                    >
+                        <button
+                            ref="tabCompiledRef"
+                            type="button"
+                            role="tab"
+                            id="tab-compiled"
+                            aria-controls="panel-compiled"
+                            :aria-selected="currentTab === 'compiled'"
+                            @click="switchTab('compiled')"
+                            @keydown="onTabKeydown($event, 'individual')"
+                            class="inline-flex items-center space-x-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-xl text-xs font-bold transition duration-200 focus:outline-hidden focus:ring-2 focus:ring-forest-600"
+                            :class="currentTab === 'compiled'
+                                ? 'bg-forest-900 text-white shadow-sm'
+                                : 'text-forest-900 hover:bg-cream-300/80 hover:text-forest-950'"
+                        >
+                            <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+                            </svg>
+                            <span>Compiled Responses</span>
+                            <span
+                                v-if="compiledResponseMeta?.total_filtered_submissions !== undefined"
+                                class="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                                :class="currentTab === 'compiled' ? 'bg-white/20 text-cream-100' : 'bg-cream-300 text-forest-900'"
+                            >
+                                {{ compiledResponseMeta.total_filtered_submissions }}
+                            </span>
+                        </button>
+
+                        <button
+                            ref="tabIndividualRef"
+                            type="button"
+                            role="tab"
+                            id="tab-individual"
+                            aria-controls="panel-individual"
+                            :aria-selected="currentTab === 'individual'"
+                            @click="switchTab('individual')"
+                            @keydown="onTabKeydown($event, 'compiled')"
+                            class="inline-flex items-center space-x-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-xl text-xs font-bold transition duration-200 focus:outline-hidden focus:ring-2 focus:ring-forest-600"
+                            :class="currentTab === 'individual'
+                                ? 'bg-forest-900 text-white shadow-sm'
+                                : 'text-forest-900 hover:bg-cream-300/80 hover:text-forest-950'"
+                        >
+                            <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 17.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                            </svg>
+                            <span>Individual Responses</span>
+                            <span
+                                v-if="submissions?.total !== undefined"
+                                class="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                                :class="currentTab === 'individual' ? 'bg-white/20 text-cream-100' : 'bg-cream-300 text-forest-900'"
+                            >
+                                {{ submissions.total }}
+                            </span>
+                        </button>
+                    </div>
+
+                    <div class="text-xs text-gray-500 hidden sm:block">
+                        <span v-if="currentTab === 'compiled'">
+                            Viewing aggregated percentage breakdowns across all matching submissions
+                        </span>
+                        <span v-else>
+                            Viewing paginated participant responses and submission records
+                        </span>
+                    </div>
+                </div>
+
                 <!-- Filters Bar -->
                 <div class="bg-cream-200 p-4 rounded-2xl border border-cream-500/50 shadow-xs mb-6">
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    <div
+                        class="grid gap-3"
+                        :class="currentTab === 'individual'
+                            ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-5'
+                            : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-5'"
+                    >
                         <div>
                             <label class="block text-[11px] font-bold text-forest-900 uppercase tracking-wider mb-1">Filter by Event</label>
                             <select
@@ -190,7 +329,8 @@ const getOptionDisplayLabel = (field, val) => {
                             </select>
                         </div>
 
-                        <div>
+                        <!-- Search for Individual Tab -->
+                        <div v-if="currentTab === 'individual'">
                             <label class="block text-[11px] font-bold text-forest-900 uppercase tracking-wider mb-1">Search Keyword</label>
                             <div class="flex space-x-1.5">
                                 <input
@@ -218,235 +358,266 @@ const getOptionDisplayLabel = (field, val) => {
                                 </button>
                             </div>
                         </div>
-                    </div>
-                </div>
 
-                <!-- Compiled Responses Analytics Section -->
-                <!-- Empty State (No Event Selected) -->
-                <div v-if="!compiledResponseMeta" class="bg-cream-200/90 p-8 rounded-2xl border border-cream-500/60 shadow-xs mb-6 text-center">
-                    <div class="size-14 rounded-2xl bg-forest-900/10 text-forest-900 flex items-center justify-center mx-auto mb-3 shadow-inner">
-                        <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
-                        </svg>
-                    </div>
-                    <h3 class="text-base font-bold text-gray-900">Select an Event to View Compiled Responses</h3>
-                    <p class="text-xs text-gray-600 max-w-lg mx-auto mt-1 leading-relaxed">
-                        Feedback questionnaires and schema fields are configured per event. Select an event in the filter dropdown above to compile response totals, percentage breakdowns, and charts.
-                    </p>
-                </div>
-
-                <!-- Aggregated Analytics Cards (Event Selected) -->
-                <div v-else class="mb-6 space-y-4">
-                    <!-- Analytics Header Banner -->
-                    <div class="bg-forest-900 text-white p-5 rounded-2xl shadow-sm border border-forest-950 flex flex-wrap items-center justify-between gap-4">
-                        <div>
-                            <div class="flex items-center space-x-2">
-                                <span class="size-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                                <h3 class="text-base font-bold tracking-tight">Compiled Response Analytics</h3>
-                            </div>
-                            <p class="text-xs text-cream-200 mt-0.5">
-                                Form: <strong class="text-white">{{ compiledResponseMeta?.event_name }}</strong>
-                            </p>
-                        </div>
-                        <div class="flex items-center flex-wrap gap-2 text-xs">
-                            <span class="px-3 py-1 bg-white/10 rounded-xl font-semibold border border-white/10">
-                                {{ compiledResponseMeta?.total_filtered_submissions }} Total Submissions
-                            </span>
-                            <span class="px-3 py-1 bg-white/10 rounded-xl font-semibold border border-white/10">
-                                {{ compiledResponses?.length || 0 }} Questions Compiled
-                            </span>
-                            <span v-if="filterForm.function_id || filterForm.agency || filterForm.designation" class="px-2.5 py-1 bg-amber-400/20 text-amber-200 rounded-xl font-semibold border border-amber-300/30">
-                                Filtered Population
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Empty Questions State -->
-                    <div v-if="!compiledResponses || compiledResponses.length === 0" class="bg-cream-200 p-8 rounded-2xl border border-cream-500/50 text-center">
-                        <p v-if="!compiledResponseMeta?.has_schema" class="text-xs font-semibold text-gray-600">
-                            No feedback form schema configured for this event.
-                        </p>
-                        <p v-else class="text-xs font-semibold text-gray-600">
-                            No question fields configured for this event's feedback form schema.
-                        </p>
-                    </div>
-
-                    <!-- Question Analytics Grid -->
-                    <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <div
-                            v-for="q in compiledResponses"
-                            :key="q.id"
-                            class="bg-[#fffef9] rounded-2xl border border-cream-400/80 p-5 shadow-xs flex flex-col justify-between"
-                        >
-                            <div>
-                                <!-- Card Header -->
-                                <div class="flex items-start justify-between gap-3 mb-3">
-                                    <h4 class="text-xs font-bold text-gray-900 leading-snug">
-                                        {{ q.particular }}
-                                    </h4>
-                                    <span class="px-2 py-0.5 text-[10px] font-bold rounded-md uppercase tracking-wider shrink-0 bg-cream-200 text-forest-900 border border-cream-400/70">
-                                        {{ q.type }}
-                                    </span>
-                                </div>
-
-                                <!-- Participation Subheader -->
-                                <div class="flex items-center justify-between text-[11px] text-gray-500 pb-3 mb-3 border-b border-cream-300/80">
-                                    <span>
-                                        Answered: <strong class="text-gray-900 font-semibold">{{ q.answered_count }}</strong>
-                                        <span class="text-gray-400"> / {{ q.total_submissions }}</span>
-                                    </span>
-                                    <span>
-                                        {{ q.total_submissions > 0 ? Math.round((q.answered_count / q.total_submissions) * 100) : 0 }}% response rate
-                                    </span>
-                                </div>
-
-                                <!-- Multi-select note -->
-                                <p v-if="q.is_multiselect" class="text-[10px] text-forest-800 bg-forest-50/80 px-2.5 py-1 rounded-lg mb-3 border border-forest-200/60">
-                                    ℹ Multi-select question: Percentages represent respondents who selected each option out of total respondents who answered (sum may exceed 100%).
-                                </p>
-
-                                <!-- Choice Question: Horizontal Bar Charts -->
-                                <div v-if="q.is_choice" class="space-y-3">
-                                    <div v-if="q.options.length === 0" class="text-xs text-gray-400 italic py-2">
-                                        No options configured.
-                                    </div>
-                                    <div
-                                        v-for="opt in q.options"
-                                        :key="opt.value"
-                                        class="space-y-1"
-                                    >
-                                        <div class="flex items-center justify-between text-xs gap-2">
-                                            <span class="font-medium text-gray-800 truncate" :title="opt.label">
-                                                {{ opt.label }}
-                                            </span>
-                                            <span class="font-bold text-forest-900 shrink-0 font-mono text-[11px]">
-                                                {{ opt.percentage }}%
-                                                <span class="text-gray-500 font-normal font-sans text-[10px]">({{ opt.count }})</span>
-                                            </span>
-                                        </div>
-                                        <!-- Bar -->
-                                        <div class="w-full bg-cream-200 rounded-full h-2.5 overflow-hidden">
-                                            <div
-                                                class="bg-forest-900 h-2.5 rounded-full transition-all duration-500"
-                                                :style="{ width: `${Math.min(100, Math.max(0, opt.percentage))}%` }"
-                                            ></div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Free-text / Qualitative Question Card -->
-                                <div v-else class="p-3 bg-cream-100/70 rounded-xl border border-cream-300 text-xs text-gray-600 space-y-1">
-                                    <div class="font-semibold text-gray-800">Qualitative Text Response</div>
-                                    <p class="text-[11px] text-gray-500">
-                                        Free-text answers are not charted by percentage. You can read individual participant submissions in the table below.
-                                    </p>
-                                </div>
-                            </div>
+                        <!-- Clear filters button for Compiled Tab -->
+                        <div v-else-if="currentTab === 'compiled'" class="flex items-end">
+                            <button
+                                v-if="filterForm.event_id || filterForm.function_id || filterForm.agency || filterForm.designation"
+                                type="button"
+                                @click="resetFilters"
+                                class="w-full px-3 py-2 bg-cream-300 hover:bg-cream-400 text-forest-900 border border-cream-400 rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition"
+                                title="Clear all filters"
+                            >
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                                <span>Clear Filters</span>
+                            </button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Submissions Table -->
-                <div class="bg-cream-200 rounded-2xl border border-cream-500/50 shadow-xs overflow-hidden">
-                    <div v-if="submissions.data.length === 0" class="p-12 text-center">
-                        <div class="size-16 rounded-full bg-cream-100 text-gray-400 flex items-center justify-center mx-auto mb-4">
-                            <svg class="size-8" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+                <!-- Tab Panel 1: Compiled Responses -->
+                <div
+                    v-if="currentTab === 'compiled'"
+                    id="panel-compiled"
+                    role="tabpanel"
+                    aria-labelledby="tab-compiled"
+                >
+                    <!-- Empty State (No Event Selected) -->
+                    <div v-if="!compiledResponseMeta" class="bg-cream-200/90 p-8 rounded-2xl border border-cream-500/60 shadow-xs mb-6 text-center">
+                        <div class="size-14 rounded-2xl bg-forest-900/10 text-forest-900 flex items-center justify-center mx-auto mb-3 shadow-inner">
+                            <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
                             </svg>
                         </div>
-                        <h3 class="text-base font-bold text-gray-900">No Feedback Submissions Found</h3>
-                        <p class="text-xs text-gray-500 max-w-sm mx-auto mt-1">
-                            No submissions recorded matching your filter parameters.
+                        <h3 class="text-base font-bold text-gray-900">Select an Event to View Compiled Responses</h3>
+                        <p class="text-xs text-gray-600 max-w-lg mx-auto mt-1 leading-relaxed">
+                            Feedback questionnaires and schema fields are configured per event. Select an event in the filter dropdown above to compile response totals, percentage breakdowns, and charts.
                         </p>
                     </div>
 
-                    <div v-else class="overflow-x-auto">
-                        <table class="w-full text-left text-xs">
-                            <thead class="bg-cream-300 text-forest-900 font-bold uppercase tracking-wider text-[11px] border-b border-cream-500/50">
-                                <tr>
-                                    <th class="px-5 py-3.5">Participant</th>
-                                    <th class="px-5 py-3.5">Function & Agency</th>
-                                    <th class="px-5 py-3.5">Designation</th>
-                                    <th class="px-5 py-3.5">Event</th>
-                                    <th class="px-5 py-3.5">Submitted At</th>
-                                    <th class="px-5 py-3.5 text-right">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-cream-500/30">
-                                <tr v-for="s in submissions.data" :key="s.id" class="hover:bg-cream-100 transition">
-                                    <td class="px-5 py-3.5">
-                                        <span v-if="s.participant?.name" class="font-bold text-gray-900 block">
-                                            {{ s.participant.name }}
-                                        </span>
-                                        <span v-else class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-300">
-                                            👤 Anonymous
-                                        </span>
-                                    </td>
-                                    <td class="px-5 py-3.5">
-                                        <div class="font-semibold text-forest-900">
-                                            {{ s.participant?.function?.function || 'Unassigned Role' }}
-                                        </div>
-                                        <div class="text-gray-500 text-[11px]">
-                                            {{ s.participant?.agency || '—' }}
-                                        </div>
-                                    </td>
-                                    <td class="px-5 py-3.5 text-gray-700">
-                                        {{ s.participant?.designation || '—' }}
-                                        <span v-if="s.participant?.years_in_designation" class="text-gray-400 text-[10px] block">
-                                            ({{ s.participant.years_in_designation }} yrs)
-                                        </span>
-                                    </td>
-                                    <td class="px-5 py-3.5 text-gray-800 font-medium">
-                                        {{ s.feedback?.event?.name || 'Archived Event #' + s.feedback?.event_id }}
-                                    </td>
-                                    <td class="px-5 py-3.5 text-gray-600 whitespace-nowrap">
-                                        {{ formatDate(s.created_at) }}
-                                    </td>
-                                    <td class="px-5 py-3.5 text-right">
-                                        <button
-                                            @click="viewSubmission(s)"
-                                            class="inline-flex items-center px-3 py-1.5 bg-forest-900 hover:bg-forest-950 text-white rounded-xl text-xs font-semibold shadow-xs transition"
-                                        >
-                                            <svg class="size-3.5 me-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                            </svg>
-                                            View Answers
-                                        </button>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <!-- Pagination Links -->
-                    <div v-if="submissions.links && submissions.links.length > 3" class="p-4 border-t border-cream-500/40 flex items-center justify-between">
-                        <div class="text-xs text-gray-500">
-                            Showing {{ submissions.from }} to {{ submissions.to }} of {{ submissions.total }} submissions
+                    <!-- Aggregated Analytics Cards (Event Selected) -->
+                    <div v-else class="mb-6 space-y-4">
+                        <!-- Analytics Header Banner -->
+                        <div class="bg-forest-900 text-white p-5 rounded-2xl shadow-sm border border-forest-950 flex flex-wrap items-center justify-between gap-4">
+                            <div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="size-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                    <h3 class="text-base font-bold tracking-tight">Compiled Response Analytics</h3>
+                                </div>
+                                <p class="text-xs text-cream-200 mt-0.5">
+                                    Form: <strong class="text-white">{{ compiledResponseMeta?.event_name }}</strong>
+                                </p>
+                            </div>
+                            <div class="flex items-center flex-wrap gap-2 text-xs">
+                                <span class="px-3 py-1 bg-white/10 rounded-xl font-semibold border border-white/10">
+                                    {{ compiledResponseMeta?.total_filtered_submissions }} Total Submissions
+                                </span>
+                                <span class="px-3 py-1 bg-white/10 rounded-xl font-semibold border border-white/10">
+                                    {{ compiledResponses?.length || 0 }} Questions Compiled
+                                </span>
+                                <span v-if="filterForm.function_id || filterForm.agency || filterForm.designation" class="px-2.5 py-1 bg-amber-400/20 text-amber-200 rounded-xl font-semibold border border-amber-300/30">
+                                    Filtered Population
+                                </span>
+                            </div>
                         </div>
-                        <div class="flex items-center space-x-1">
-                            <template v-for="(link, i) in submissions.links" :key="i">
-                                <Link
-                                    v-if="link.url"
-                                    :href="link.url"
-                                    class="px-3 py-1 text-xs rounded-lg transition"
-                                    :class="link.active ? 'bg-forest-900 text-white font-bold' : 'bg-cream-100 hover:bg-cream-300 text-gray-700'"
-                                    v-html="link.label"
-                                />
-                                <span
-                                    v-else
-                                    class="px-3 py-1 text-xs text-gray-400"
-                                    v-html="link.label"
-                                />
-                            </template>
+
+                        <!-- Empty Questions State -->
+                        <div v-if="!compiledResponses || compiledResponses.length === 0" class="bg-cream-200 p-8 rounded-2xl border border-cream-500/50 text-center">
+                            <p v-if="!compiledResponseMeta?.has_schema" class="text-xs font-semibold text-gray-600">
+                                No feedback form schema configured for this event.
+                            </p>
+                            <p v-else class="text-xs font-semibold text-gray-600">
+                                No question fields configured for this event's feedback form schema.
+                            </p>
+                        </div>
+
+                        <!-- Question Analytics Grid -->
+                        <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div
+                                v-for="q in compiledResponses"
+                                :key="q.id"
+                                class="bg-[#fffef9] rounded-2xl border border-cream-400/80 p-5 shadow-xs flex flex-col justify-between"
+                            >
+                                <div>
+                                    <!-- Card Header -->
+                                    <div class="flex items-start justify-between gap-3 mb-3">
+                                        <h4 class="text-xs font-bold text-gray-900 leading-snug">
+                                            {{ q.particular }}
+                                        </h4>
+                                        <span class="px-2 py-0.5 text-[10px] font-bold rounded-md uppercase tracking-wider shrink-0 bg-cream-200 text-forest-900 border border-cream-400/70">
+                                            {{ q.type }}
+                                        </span>
+                                    </div>
+
+                                    <!-- Participation Subheader -->
+                                    <div class="flex items-center justify-between text-[11px] text-gray-500 pb-3 mb-3 border-b border-cream-300/80">
+                                        <span>
+                                            Answered: <strong class="text-gray-900 font-semibold">{{ q.answered_count }}</strong>
+                                            <span class="text-gray-400"> / {{ q.total_submissions }}</span>
+                                        </span>
+                                        <span>
+                                            {{ q.total_submissions > 0 ? Math.round((q.answered_count / q.total_submissions) * 100) : 0 }}% response rate
+                                        </span>
+                                    </div>
+
+                                    <!-- Multi-select note -->
+                                    <p v-if="q.is_multiselect" class="text-[10px] text-forest-800 bg-forest-50/80 px-2.5 py-1 rounded-lg mb-3 border border-forest-200/60">
+                                        ℹ Multi-select question: Percentages represent respondents who selected each option out of total respondents who answered (sum may exceed 100%).
+                                    </p>
+
+                                    <!-- Choice Question: Horizontal Bar Charts -->
+                                    <div v-if="q.is_choice" class="space-y-3">
+                                        <div v-if="q.options.length === 0" class="text-xs text-gray-400 italic py-2">
+                                            No options configured.
+                                        </div>
+                                        <div
+                                            v-for="opt in q.options"
+                                            :key="opt.value"
+                                            class="space-y-1"
+                                        >
+                                            <div class="flex items-center justify-between text-xs gap-2">
+                                                <span class="font-medium text-gray-800 truncate" :title="opt.label">
+                                                    {{ opt.label }}
+                                                </span>
+                                                <span class="font-bold text-forest-900 shrink-0 font-mono text-[11px]">
+                                                    {{ opt.percentage }}%
+                                                    <span class="text-gray-500 font-normal font-sans text-[10px]">({{ opt.count }})</span>
+                                                </span>
+                                            </div>
+                                            <!-- Bar -->
+                                            <div class="w-full bg-cream-200 rounded-full h-2.5 overflow-hidden">
+                                                <div
+                                                    class="bg-forest-900 h-2.5 rounded-full transition-all duration-500"
+                                                    :style="{ width: `${Math.min(100, Math.max(0, opt.percentage))}%` }"
+                                                ></div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Free-text / Qualitative Question Card -->
+                                    <div v-else class="p-3 bg-cream-100/70 rounded-xl border border-cream-300 text-xs text-gray-600 space-y-1">
+                                        <div class="font-semibold text-gray-800">Qualitative Text Response</div>
+                                        <p class="text-[11px] text-gray-500">
+                                            Free-text answers are not charted by percentage. You can read individual participant submissions in the Individual Responses tab.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Panel 2: Individual Responses -->
+                <div
+                    v-if="currentTab === 'individual'"
+                    id="panel-individual"
+                    role="tabpanel"
+                    aria-labelledby="tab-individual"
+                >
+                    <!-- Submissions Table -->
+                    <div class="bg-cream-200 rounded-2xl border border-cream-500/50 shadow-xs overflow-hidden">
+                        <div v-if="!submissions || !submissions.data || submissions.data.length === 0" class="p-12 text-center">
+                            <div class="size-16 rounded-full bg-cream-100 text-gray-400 flex items-center justify-center mx-auto mb-4">
+                                <svg class="size-8" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+                                </svg>
+                            </div>
+                            <h3 class="text-base font-bold text-gray-900">No Feedback Submissions Found</h3>
+                            <p class="text-xs text-gray-500 max-w-sm mx-auto mt-1">
+                                No submissions recorded matching your filter parameters.
+                            </p>
+                        </div>
+
+                        <div v-else class="overflow-x-auto">
+                            <table class="w-full text-left text-xs">
+                                <thead class="bg-cream-300 text-forest-900 font-bold uppercase tracking-wider text-[11px] border-b border-cream-500/50">
+                                    <tr>
+                                        <th class="px-5 py-3.5">Participant</th>
+                                        <th class="px-5 py-3.5">Function & Agency</th>
+                                        <th class="px-5 py-3.5">Designation</th>
+                                        <th class="px-5 py-3.5">Event</th>
+                                        <th class="px-5 py-3.5">Submitted At</th>
+                                        <th class="px-5 py-3.5 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-cream-500/30">
+                                    <tr v-for="s in submissions.data" :key="s.id" class="hover:bg-cream-100 transition">
+                                        <td class="px-5 py-3.5">
+                                            <span v-if="s.participant?.name" class="font-bold text-gray-900 block">
+                                                {{ s.participant.name }}
+                                            </span>
+                                            <span v-else class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-300">
+                                                👤 Anonymous
+                                            </span>
+                                        </td>
+                                        <td class="px-5 py-3.5">
+                                            <div class="font-semibold text-forest-900">
+                                                {{ s.participant?.function?.function || 'Unassigned Role' }}
+                                            </div>
+                                            <div class="text-gray-500 text-[11px]">
+                                                {{ s.participant?.agency || '—' }}
+                                            </div>
+                                        </td>
+                                        <td class="px-5 py-3.5 text-gray-700">
+                                            {{ s.participant?.designation || '—' }}
+                                            <span v-if="s.participant?.years_in_designation" class="text-gray-400 text-[10px] block">
+                                                ({{ s.participant.years_in_designation }} yrs)
+                                            </span>
+                                        </td>
+                                        <td class="px-5 py-3.5 text-gray-800 font-medium">
+                                            {{ s.feedback?.event?.name || 'Archived Event #' + s.feedback?.event_id }}
+                                        </td>
+                                        <td class="px-5 py-3.5 text-gray-600 whitespace-nowrap">
+                                            {{ formatDate(s.created_at) }}
+                                        </td>
+                                        <td class="px-5 py-3.5 text-right">
+                                            <button
+                                                @click="viewSubmission(s)"
+                                                class="inline-flex items-center px-3 py-1.5 bg-forest-900 hover:bg-forest-950 text-white rounded-xl text-xs font-semibold shadow-xs transition"
+                                            >
+                                                <svg class="size-3.5 me-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                                </svg>
+                                                View Answers
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Pagination Links -->
+                        <div v-if="submissions && submissions.links && submissions.links.length > 3" class="p-4 border-t border-cream-500/40 flex items-center justify-between">
+                            <div class="text-xs text-gray-500">
+                                Showing {{ submissions.from }} to {{ submissions.to }} of {{ submissions.total }} submissions
+                            </div>
+                            <div class="flex items-center space-x-1">
+                                <template v-for="(link, i) in submissions.links" :key="i">
+                                    <Link
+                                        v-if="link.url"
+                                        :href="link.url"
+                                        class="px-3 py-1 text-xs rounded-lg transition"
+                                        :class="link.active ? 'bg-forest-900 text-white font-bold' : 'bg-cream-100 hover:bg-cream-300 text-gray-700'"
+                                        v-html="link.label"
+                                    />
+                                    <span
+                                        v-else
+                                        class="px-3 py-1 text-xs text-gray-400"
+                                        v-html="link.label"
+                                    />
+                                </template>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Submission Detail Review Modal -->
-        <div v-if="showDetailModal && selectedSubmission" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <!-- Submission Detail Review Modal (Individual Tab Only) -->
+        <div v-if="currentTab === 'individual' && showDetailModal && selectedSubmission" class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/60 backdrop-blur-xs flex items-center justify-center p-4">
             <div class="bg-cream-200 rounded-3xl max-w-2xl w-full shadow-2xl p-6 border border-cream-500/60 max-h-[90vh] flex flex-col">
                 <div class="flex items-center justify-between pb-4 border-b border-cream-500/40 shrink-0">
                     <div>

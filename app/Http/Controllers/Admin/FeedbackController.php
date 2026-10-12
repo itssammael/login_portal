@@ -78,6 +78,13 @@ class FeedbackController extends Controller
      */
     public function submissions(Request $request): Response
     {
+        $tabParam = $request->query('tab');
+        if (in_array($tabParam, ['compiled', 'individual'], true)) {
+            $activeTab = $tabParam;
+        } else {
+            $activeTab = $request->filled('event_id') ? 'compiled' : 'individual';
+        }
+
         $baseQuery = FbSubmission::query();
 
         if ($request->filled('event_id')) {
@@ -100,28 +107,32 @@ class FeedbackController extends Controller
             $baseQuery->whereHas('participant', fn ($q) => $q->where('designation', $designation));
         }
 
-        $tableQuery = (clone $baseQuery)
-            ->with([
-                'feedback.event' => fn ($q) => $q->withTrashed(),
-                'participant.function',
-            ]);
+        $submissions = null;
 
-        if ($request->filled('search')) {
-            $search = (string) $request->input('search');
-            $tableQuery->whereHas('participant', function ($q) use ($search): void {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('agency', 'like', "%{$search}%")
-                    ->orWhere('designation', 'like', "%{$search}%")
-                    ->orWhere('location', 'like', "%{$search}%");
-            });
+        if ($activeTab === 'individual') {
+            $tableQuery = (clone $baseQuery)
+                ->with([
+                    'feedback.event' => fn ($q) => $q->withTrashed(),
+                    'participant.function',
+                ]);
+
+            if ($request->filled('search')) {
+                $search = (string) $request->input('search');
+                $tableQuery->whereHas('participant', function ($q) use ($search): void {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('agency', 'like', "%{$search}%")
+                        ->orWhere('designation', 'like', "%{$search}%")
+                        ->orWhere('location', 'like', "%{$search}%");
+                });
+            }
+
+            $submissions = $tableQuery->latest()->paginate(15)->withQueryString();
         }
-
-        $submissions = $tableQuery->latest()->paginate(15)->withQueryString();
 
         $compiledResponses = null;
         $compiledResponseMeta = null;
 
-        if ($request->filled('event_id')) {
+        if ($activeTab === 'compiled' && $request->filled('event_id')) {
             $eventId = (int) $request->input('event_id');
             $event = FbEvent::withTrashed()->find($eventId);
             $feedback = Feedback::where('event_id', $eventId)->first();
@@ -271,11 +282,15 @@ class FeedbackController extends Controller
 
         return Inertia::render('Admin/Feedback/Submissions', [
             'submissions' => $submissions,
+            'activeTab' => $activeTab,
             'filterEvents' => $filterEvents,
             'filterFunctions' => $filterFunctions,
             'filterAgencies' => $filterAgencies,
             'filterDesignations' => $filterDesignations,
-            'filters' => $request->only(['event_id', 'function_id', 'agency', 'designation', 'search']),
+            'filters' => array_merge(
+                $request->only(['event_id', 'function_id', 'agency', 'designation', 'search']),
+                ['tab' => $activeTab]
+            ),
             'compiledResponses' => $compiledResponses,
             'compiledResponseMeta' => $compiledResponseMeta,
         ]);
