@@ -537,7 +537,7 @@ const getOtherFieldError = (fieldId) => {
                 </div>
                 <h3 class="text-base font-bold text-gray-900">Feedback Form Unavailable</h3>
                 <p class="text-xs text-gray-600 max-w-sm mx-auto mt-1">
-                    This evaluation form is currently unavailable or has already been submitted.
+                    This feedback form is currently unavailable or has already been submitted.
                 </p>
             </div>
 
@@ -560,7 +560,7 @@ const getOtherFieldError = (fieldId) => {
                         class="inline-flex items-center px-3 py-1 rounded-lg text-[11px] font-black uppercase tracking-wider shadow-xs mb-3"
                         style="background-color: #fde047; color: #1b4332;"
                     >
-                        Evaluation Form
+                        Feedback Form
                     </span>
                     <h1 class="text-2xl sm:text-3xl font-black tracking-tight" style="color: #ffffff;">
                         {{ event.name }}
