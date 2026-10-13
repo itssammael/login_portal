@@ -1007,7 +1007,7 @@ onUnmounted(() => {
                                             v-model="formConfig.schema.pagination.enabled"
                                             class="sr-only peer"
                                         />
-                                        <div class="w-11 h-6 bg-cream-400 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-forest-900"></div>
+                                        <div class="w-11 h-6 bg-cream-400 border border-cream-500/80 peer-focus:outline-none rounded-full peer peer-checked:bg-forest-900 peer-checked:border-forest-900 transition-colors duration-200 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-xs peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
                                     </label>
                                 </div>
                             </div>
@@ -1467,17 +1467,24 @@ onUnmounted(() => {
                                         <div class="h-5 w-px bg-cream-400"></div>
 
                                         <!-- Required Toggle -->
-                                        <div class="flex items-center space-x-2">
-                                            <span class="text-xs font-semibold text-gray-800">Required</span>
-                                            <label class="relative inline-flex items-center cursor-pointer">
+                                        <label class="inline-flex items-center space-x-2.5 cursor-pointer select-none">
+                                            <span
+                                                class="text-xs transition-colors duration-150"
+                                                :class="field.required ? 'font-bold text-forest-900' : 'font-semibold text-gray-700'"
+                                            >
+                                                Required
+                                            </span>
+                                            <div class="relative inline-flex items-center">
                                                 <input
                                                     type="checkbox"
                                                     v-model="field.required"
                                                     class="sr-only peer"
                                                 />
-                                                <div class="w-8 h-4.5 bg-cream-400 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-forest-900"></div>
-                                            </label>
-                                        </div>
+                                                <div
+                                                    class="w-9 h-5 bg-gray-200 border border-gray-300 rounded-full peer peer-focus:outline-none peer-checked:bg-forest-900 peer-checked:border-forest-900 transition-colors duration-200 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all after:duration-200 after:shadow-xs peer-checked:after:border-white peer-checked:after:translate-x-full"
+                                                ></div>
+                                            </div>
+                                        </label>
 
                                         <!-- Three Dots Menu (⋮) -->
                                         <div class="relative inline-block text-left">
