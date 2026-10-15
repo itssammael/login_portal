@@ -1,6 +1,7 @@
 /**
  * SSO Step-by-Step Integration Documentation Generator & PDF Exporter
- * Provides customized integration guides and AI Agent prompts for every supported framework/language.
+ * Provides customized integration guides, AI Agent prompts, and troubleshooting tips
+ * for every supported framework/language.
  */
 
 export const FRAMEWORK_OPTIONS = [
@@ -262,8 +263,9 @@ class SsoClientController extends Controller
         }
 
         if ($response->failed()) {
-            Log::error('SSO token exchange failed', ['status' => $response->status()]);
-            return redirect()->route('login')->withErrors(['email' => 'SSO authentication failed at provider.']);
+            $errorDetail = $response->json('error_description') ?: 'SSO authentication failed at provider.';
+            Log::error('SSO token exchange failed', ['status' => $response->status(), 'response' => $response->json()]);
+            return redirect()->route('login')->withErrors(['email' => $errorDetail]);
         }
 
         $userData = $response->json('user');
@@ -272,29 +274,38 @@ class SsoClientController extends Controller
         }
 
         // 4. Safe User Matching & Provisioning
-        // Primary match: verified Login Portal User ID
-        $user = User::where('login_portal_user_id', $userData['id'])->first();
+        // Match 1: Primary match by bound_user_id (if account was bound via Connected Systems)
+        $user = null;
+        if (! empty($userData['bound_user_id'])) {
+            $user = User::find($userData['bound_user_id']);
+        }
 
-        if (! $user) {
-            // Secondary match: existing local account by verified email
+        // Match 2: Match by login_portal_user_id
+        if (! $user && ! empty($userData['id'])) {
+            $user = User::where('login_portal_user_id', $userData['id'])->first();
+        }
+
+        // Match 3: Match by verified local email address
+        if (! $user && ! empty($userData['email'])) {
             $user = User::where('email', $userData['email'])->first();
-
             if ($user) {
-                // Link existing local account to Login Portal identity
+                // Link local account to Login Portal identity
                 $user->forceFill([
                     'login_portal_user_id' => $userData['id'],
                     'sso_provider' => 'login_portal',
                 ])->save();
-            } else {
-                // Auto-provision new local user with unguessable random password
-                $user = User::create([
-                    'name' => $userData['name'] ?? explode('@', $userData['email'])[0],
-                    'email' => $userData['email'],
-                    'login_portal_user_id' => $userData['id'],
-                    'sso_provider' => 'login_portal',
-                    'password' => Hash::make(Str::random(32)),
-                ]);
             }
+        }
+
+        // Fallback: Auto-provision new user with unguessable random password
+        if (! $user) {
+            $user = User::create([
+                'name' => $userData['name'] ?? explode('@', $userData['email'])[0],
+                'email' => $userData['email'],
+                'login_portal_user_id' => $userData['id'],
+                'sso_provider' => 'login_portal',
+                'password' => Hash::make(Str::random(32)),
+            ]);
         }
 
         // 5. Establish Local Session with Fixation Protection
@@ -332,6 +343,38 @@ class SsoClientController extends Controller
                     },
                     {
                         stepNumber: 6,
+                        title: 'Optional: Connected Systems Account Binding Endpoint',
+                        description: 'To enable portal users to link their existing account under the Portal\'s "Connected Systems" page, register this credential verification route in routes/api.php:',
+                        filename: 'routes/api.php',
+                        language: 'php',
+                        code: `use App\\Models\\User;
+use Illuminate\\Http\\Request;
+use Illuminate\\Support\\Facades\\Hash;
+
+Route::post('/sso/verify-credentials', function (Request $request) {
+    if ($request->input('client_secret') !== config('services.login_portal.client_secret')) {
+        return response()->json(['success' => false, 'message' => 'Unauthorized client secret.'], 401);
+    }
+
+    $login = $request->input('username');
+    $user = User::where('email', $login)->orWhere('name', $login)->first();
+
+    if (! $user || ! Hash::check($request->input('password'), $user->password)) {
+        return response()->json(['success' => false, 'message' => 'Invalid username or password.'], 400);
+    }
+
+    return response()->json([
+        'success' => true,
+        'user' => [
+            'id' => (string) $user->id,
+            'username' => $user->name,
+            'email' => $user->email,
+        ],
+    ]);
+});`,
+                    },
+                    {
+                        stepNumber: 7,
                         title: 'Write Automated Feature Tests (Mocked HTTP)',
                         description: 'Create tests verifying redirect URL, state validation, authorization code exchange, user creation/matching, session regeneration, and local login preservation without depending on a live Login Portal server.',
                         filename: 'tests/Feature/SsoIntegrationTest.php',
@@ -390,7 +433,7 @@ class SsoIntegrationTest extends TestCase
                 'token_type' => 'Bearer',
                 'expires_in' => 3600,
                 'user' => [
-                    'id' => 999,
+                    'id' => '999',
                     'name' => 'Jane Portal User',
                     'email' => 'jane@example.com',
                 ],
@@ -443,17 +486,27 @@ LOGIN_PORTAL_REDIRECT_URI=${cfg.redirectUri}
                     },
                     {
                         stepNumber: 2,
-                        title: 'Add Identity Mapping Columns',
-                        description: 'Create migration: php artisan make:migration add_sso_columns_to_users_table --table=users and add login_portal_user_id and sso_provider:',
-                        filename: 'database/migrations/xxxx_add_sso_columns_to_users_table.php',
+                        title: 'Add Identity Mapping Columns & Update Fillable',
+                        description: 'Create migration: php artisan make:migration add_sso_columns_to_users_table --table=users and add login_portal_user_id and sso_provider. Update $fillable in App\\Models\\User.',
+                        filename: 'database/migrations/xxxx_add_sso_columns_to_users_table.php & App/Models/User.php',
                         language: 'php',
-                        code: `public function up(): void
+                        code: `// In migration:
+public function up(): void
 {
     Schema::table('users', function (Blueprint $table) {
         $table->unsignedBigInteger('login_portal_user_id')->nullable()->unique()->after('id');
         $table->string('sso_provider')->nullable()->default('login_portal')->after('login_portal_user_id');
     });
-}`,
+}
+
+// In App\\Models\\User:
+protected $fillable = [
+    'name',
+    'email',
+    'password',
+    'login_portal_user_id',
+    'sso_provider',
+];`,
                     },
                     {
                         stepNumber: 3,
@@ -471,6 +524,7 @@ use Illuminate\\Http\\Request;
 use Illuminate\\Support\\Facades\\Auth;
 use Illuminate\\Support\\Facades\\Hash;
 use Illuminate\\Support\\Facades\\Http;
+use Illuminate\\Support\\Facades\\Log;
 use Illuminate\\Support\\Str;
 
 class SsoClientController extends Controller
@@ -494,7 +548,7 @@ class SsoClientController extends Controller
     {
         $savedState = $request->session()->pull('sso_state');
         if (! $savedState || ! hash_equals($savedState, $request->query('state', ''))) {
-            return redirect()->route('login')->withErrors(['email' => 'Invalid SSO state.']);
+            return redirect()->route('login')->withErrors(['email' => 'Invalid or expired SSO state session.']);
         }
 
         $code = $request->query('code');
@@ -502,23 +556,51 @@ class SsoClientController extends Controller
             return redirect()->route('login')->withErrors(['email' => 'Authorization code missing.']);
         }
 
-        $response = Http::asForm()->post(rtrim(config('services.login_portal.url'), '/') . '/api/sso/token', [
-            'grant_type' => 'authorization_code',
-            'client_id' => config('services.login_portal.client_id'),
-            'client_secret' => config('services.login_portal.client_secret'),
-            'redirect_uri' => config('services.login_portal.redirect_uri'),
-            'code' => $code,
-        ]);
+        try {
+            $response = Http::asForm()->timeout(15)->post(rtrim(config('services.login_portal.url'), '/') . '/api/sso/token', [
+                'grant_type' => 'authorization_code',
+                'client_id' => config('services.login_portal.client_id'),
+                'client_secret' => config('services.login_portal.client_secret'),
+                'redirect_uri' => config('services.login_portal.redirect_uri'),
+                'code' => $code,
+            ]);
+        } catch (\\Exception $e) {
+            Log::error('SSO network failure', ['message' => $e->getMessage()]);
+            return redirect()->route('login')->withErrors(['email' => 'Unable to connect to Login Portal.']);
+        }
 
         if ($response->failed()) {
-            return redirect()->route('login')->withErrors(['email' => 'SSO Token Exchange failed.']);
+            return redirect()->route('login')->withErrors(['email' => $response->json('error_description') ?: 'SSO Token Exchange failed.']);
         }
 
         $userData = $response->json('user');
-        $user = User::where('login_portal_user_id', $userData['id'])
-            ->orWhere('email', $userData['email'])
-            ->first();
+        if (empty($userData['id']) || empty($userData['email'])) {
+            return redirect()->route('login')->withErrors(['email' => 'Invalid user data received from portal.']);
+        }
 
+        // Match 1: bound_user_id (if bound on Connected Systems)
+        $user = null;
+        if (! empty($userData['bound_user_id'])) {
+            $user = User::find($userData['bound_user_id']);
+        }
+
+        // Match 2: login_portal_user_id
+        if (! $user) {
+            $user = User::where('login_portal_user_id', $userData['id'])->first();
+        }
+
+        // Match 3: verified email
+        if (! $user) {
+            $user = User::where('email', $userData['email'])->first();
+            if ($user) {
+                $user->forceFill([
+                    'login_portal_user_id' => $userData['id'],
+                    'sso_provider' => 'login_portal',
+                ])->save();
+            }
+        }
+
+        // Auto-provision if missing
         if (! $user) {
             $user = User::create([
                 'name' => $userData['name'] ?? 'SSO User',
@@ -527,11 +609,9 @@ class SsoClientController extends Controller
                 'sso_provider' => 'login_portal',
                 'password' => Hash::make(Str::random(32)),
             ]);
-        } else {
-            $user->update(['login_portal_user_id' => $userData['id']]);
         }
 
-        Auth::login($user, true);
+        Auth::login($user, remember: true);
         $request->session()->regenerate();
 
         return redirect()->intended('/dashboard');
@@ -564,7 +644,7 @@ class SsoClientController extends Controller
 {
     session(['sso_state' => 'test_state']);
     Http::fake([
-        '*/api/sso/token' => Http::response(['user' => ['id' => 10, 'email' => 'user@example.com', 'name' => 'User']], 200)
+        '*/api/sso/token' => Http::response(['user' => ['id' => '10', 'email' => 'user@example.com', 'name' => 'User']], 200)
     ]);
 
     $res = $this->get('/sso/callback?code=valid_code&state=test_state');
@@ -592,6 +672,18 @@ define('SSO_PORTAL_URL', getenv('LOGIN_PORTAL_URL') ?: '${cfg.portalUrl}');
 define('SSO_CLIENT_ID', getenv('LOGIN_PORTAL_CLIENT_ID') ?: '${cfg.clientId}');
 define('SSO_CLIENT_SECRET', getenv('LOGIN_PORTAL_CLIENT_SECRET') ?: '${cfg.clientSecret}');
 define('SSO_REDIRECT_URI', getenv('LOGIN_PORTAL_REDIRECT_URI') ?: '${cfg.redirectUri}');
+
+// Database connection helper (PDO)
+function getDbConnection(): PDO {
+    $host = getenv('DB_HOST') ?: '127.0.0.1';
+    $db   = getenv('DB_DATABASE') ?: 'my_app_db';
+    $user = getenv('DB_USERNAME') ?: 'root';
+    $pass = getenv('DB_PASSWORD') ?: '';
+    return new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+}
 ?>`,
                     },
                     {
@@ -645,7 +737,8 @@ if (! $code) {
 }
 
 // 2. Server-side token exchange via cURL
-$ch = curl_init(rtrim(SSO_PORTAL_URL, '/') . '/api/sso/token');
+$tokenUrl = rtrim(SSO_PORTAL_URL, '/') . '/api/sso/token';
+$ch = curl_init($tokenUrl);
 curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_POSTFIELDS => http_build_query([
@@ -661,29 +754,64 @@ curl_setopt_array($ch, [
 
 $responseBody = curl_exec($ch);
 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curlErr = curl_error($ch);
 curl_close($ch);
 
-$tokenData = json_decode($responseBody, true);
-if ($httpCode !== 200 || empty($tokenData['user']['id'])) {
+if ($responseBody === false || $httpCode !== 200) {
+    error_log("SSO Token Exchange Error (HTTP $httpCode): $curlErr");
     header('Location: /login.php?error=sso_token_exchange_failed');
     exit;
 }
 
-$userData = $tokenData['user'];
+$tokenData = json_decode($responseBody, true);
+$userData = $tokenData['user'] ?? null;
+if (! $userData || empty($userData['id']) || empty($userData['email'])) {
+    header('Location: /login.php?error=invalid_identity');
+    exit;
+}
 
-// 3. User mapping / provisioning via PDO (Example)
-// Match existing user by login_portal_user_id or email, else insert new record
-// Establish authenticated session with session fixation defense
-session_regenerate_id(true);
-$_SESSION['auth_user'] = [
-    'id' => $userData['id'],
-    'name' => $userData['name'],
-    'email' => $userData['email'],
-    'sso_provider' => 'login_portal',
-];
+// 3. User mapping / provisioning via PDO
+try {
+    $pdo = getDbConnection();
+    
+    // Look up by bound_user_id, then login_portal_user_id, then email
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE login_portal_user_id = ? OR email = ? LIMIT 1");
+    $stmt->execute([$userData['id'], $userData['email']]);
+    $localUser = $stmt->fetch();
 
-header('Location: /dashboard.php');
-exit;
+    if ($localUser) {
+        // Update login_portal_user_id if not linked
+        if (empty($localUser['login_portal_user_id'])) {
+            $upd = $pdo->prepare("UPDATE users SET login_portal_user_id = ?, sso_provider = 'login_portal' WHERE id = ?");
+            $upd->execute([$userData['id'], $localUser['id']]);
+        }
+        $userId = $localUser['id'];
+        $userName = $localUser['name'];
+    } else {
+        // Auto-provision new user
+        $ins = $pdo->prepare("INSERT INTO users (name, email, password, login_portal_user_id, sso_provider) VALUES (?, ?, ?, ?, 'login_portal')");
+        $randomPass = password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT);
+        $ins->execute([$userData['name'] ?? $userData['email'], $userData['email'], $randomPass, $userData['id']]);
+        $userId = $pdo->lastInsertId();
+        $userName = $userData['name'] ?? $userData['email'];
+    }
+
+    // 4. Regenerate session to protect against session fixation
+    session_regenerate_id(true);
+    $_SESSION['auth_user'] = [
+        'id' => $userId,
+        'name' => $userName,
+        'email' => $userData['email'],
+        'login_portal_user_id' => $userData['id'],
+    ];
+
+    header('Location: /dashboard.php');
+    exit;
+} catch (Exception $e) {
+    error_log("Database error during SSO login: " . $e->getMessage());
+    header('Location: /login.php?error=db_error');
+    exit;
+}
 ?>`,
                     },
                     {
@@ -751,7 +879,8 @@ router.get('/sso/redirect', (req, res) => {
     const state = crypto.randomBytes(32).toString('hex');
     req.session.ssoState = state;
 
-    const authUrl = new URL(rtrim(config.portalUrl, '/') + '/sso/authorize');
+    const portalBase = config.portalUrl.replace(/\\/+$/, '');
+    const authUrl = new URL(portalBase + '/sso/authorize');
     authUrl.searchParams.set('client_id', config.clientId);
     authUrl.searchParams.set('redirect_uri', config.redirectUri);
     authUrl.searchParams.set('response_type', 'code');
@@ -774,9 +903,10 @@ router.get('/sso/callback', async (req, res) => {
     }
 
     try {
+        const portalBase = config.portalUrl.replace(/\\/+$/, '');
         // Backchannel token exchange
         const tokenResponse = await axios.post(
-            rtrim(config.portalUrl, '/') + '/api/sso/token',
+            portalBase + '/api/sso/token',
             new URLSearchParams({
                 grant_type: 'authorization_code',
                 client_id: config.clientId,
@@ -792,8 +922,14 @@ router.get('/sso/callback', async (req, res) => {
             return res.redirect('/login?error=invalid_user_data');
         }
 
-        // Match or provision local user
-        let user = await User.findOne({ where: { login_portal_user_id: userData.id } });
+        // Match by bound_user_id first, then login_portal_user_id, then email
+        let user = null;
+        if (userData.bound_user_id) {
+            user = await User.findByPk(userData.bound_user_id);
+        }
+        if (!user) {
+            user = await User.findOne({ where: { login_portal_user_id: userData.id } });
+        }
         if (!user) {
             user = await User.findOne({ where: { email: userData.email } });
             if (user) {
@@ -804,7 +940,7 @@ router.get('/sso/callback', async (req, res) => {
                     email: userData.email,
                     login_portal_user_id: userData.id,
                     sso_provider: 'login_portal',
-                    password: crypto.randomBytes(32).toString('hex'), // Secure random local password
+                    password: crypto.randomBytes(32).toString('hex'),
                 });
             }
         }
@@ -813,15 +949,15 @@ router.get('/sso/callback', async (req, res) => {
         req.session.regenerate((err) => {
             if (err) return res.redirect('/login?error=session_error');
             req.session.user = { id: user.id, email: user.email, name: user.name };
-            res.redirect('/dashboard');
+            req.session.save(() => {
+                res.redirect('/dashboard');
+            });
         });
     } catch (error) {
-        console.error('SSO callback failed:', error.message);
+        console.error('SSO callback failed:', error.response?.data || error.message);
         res.redirect('/login?error=sso_failed');
     }
 });
-
-function rtrim(str, ch) { return str.endsWith(ch) ? str.slice(0, -1) : str; }
 
 module.exports = router;`,
                     },
@@ -886,7 +1022,7 @@ LOGIN_PORTAL_REDIRECT_URI = os.getenv('LOGIN_PORTAL_REDIRECT_URI', '${cfg.redire
 from django.db import models
 
 class User(AbstractUser):
-    login_portal_user_id = models.BigIntegerField(null=True, blank=True, unique=True)
+    login_portal_user_id = models.CharField(max_length=100, null=True, blank=True, unique=True)
     sso_provider = models.CharField(max_length=50, default='login_portal', blank=True)`,
                     },
                     {
@@ -939,18 +1075,25 @@ def sso_callback(request):
         }, timeout=15)
         resp.raise_for_status()
         token_data = resp.json()
-    except Exception:
+    except Exception as e:
         return redirect('/accounts/login/?error=token_exchange_failed')
 
     user_info = token_data.get('user', {})
-    portal_user_id = user_info.get('id')
+    portal_user_id = str(user_info.get('id', ''))
+    bound_user_id = user_info.get('bound_user_id')
     email = user_info.get('email')
 
     if not portal_user_id or not email:
         return redirect('/accounts/login/?error=invalid_user_data')
 
-    # Match or provision local user
-    user = User.objects.filter(login_portal_user_id=portal_user_id).first()
+    # Match 1: bound_user_id
+    user = None
+    if bound_user_id:
+        user = User.objects.filter(pk=bound_user_id).first()
+    # Match 2: login_portal_user_id
+    if not user:
+        user = User.objects.filter(login_portal_user_id=portal_user_id).first()
+    # Match 3: email
     if not user:
         user = User.objects.filter(email=email).first()
         if user:
@@ -958,9 +1101,8 @@ def sso_callback(request):
             user.sso_provider = 'login_portal'
             user.save(update_fields=['login_portal_user_id', 'sso_provider'])
         else:
-            username = email.split('@')[0]
-            # Ensure unique username
-            base_username = username
+            base_username = email.split('@')[0]
+            username = base_username
             counter = 1
             while User.objects.filter(username=username).exists():
                 username = f"{base_username}_{counter}"
@@ -974,6 +1116,8 @@ def sso_callback(request):
                 password=secrets.token_urlsafe(32),
             )
 
+    # Note: Explicitly attach ModelBackend to prevent ValueError when logging in without authenticate()
+    user.backend = 'django.contrib.auth.backends.ModelBackend'
     login(request, user)
     request.session.cycle_key() # Session fixation protection
     return redirect('/dashboard/')`,
@@ -999,7 +1143,7 @@ def sso_callback(request):
             return {
                 title: `${clientName} — SSO Integration Guide for ASP.NET Core (C#)`,
                 framework: meta,
-                overview: 'OAuth 2.0 Authorization Code Single Sign-On implementation in ASP.NET Core (.NET 8/9) using Cookie Authentication, IHttpClientFactory, secure cryptographic state validation, and EF Core.',
+                overview: 'OAuth 2.0 Authorization Code Single Sign-On implementation in ASP.NET Core (.NET 8/9) using Cookie Authentication, Session Middleware, IHttpClientFactory, secure cryptographic state validation, and EF Core.',
                 steps: [
                     {
                         stepNumber: 1,
@@ -1018,12 +1162,42 @@ def sso_callback(request):
                     },
                     {
                         stepNumber: 2,
+                        title: 'Configure Program.cs (Session & Cookie Auth)',
+                        description: 'Enable Session and Cookie Authentication in Program.cs. Both are required for OAuth state tracking and session establishment:',
+                        filename: 'Program.cs',
+                        language: 'csharp',
+                        code: `builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout = TimeSpan.FromMinutes(20);
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+});
+
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/Account/Login";
+        options.Cookie.SameSite = SameSiteMode.Lax;
+    });
+
+builder.Services.AddHttpClient();
+
+// In Middleware Pipeline:
+app.UseSession();
+app.UseAuthentication();
+app.UseAuthorization();`,
+                    },
+                    {
+                        stepNumber: 3,
                         title: 'Implement SsoController.cs',
                         description: 'Handle authorization redirection, session-based state checking, backchannel token exchange with grant_type=authorization_code, user mapping, and Cookie Authentication:',
                         filename: 'Controllers/SsoController.cs',
                         language: 'csharp',
                         code: `using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -1089,11 +1263,16 @@ public class SsoController : Controller
         // Establish Cookie Authentication Session
         var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, result.User.Id.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, result.User.Id ?? ""),
             new Claim(ClaimTypes.Name, result.User.Name ?? result.User.Email),
             new Claim(ClaimTypes.Email, result.User.Email),
             new Claim("sso_provider", "login_portal")
         };
+
+        if (!string.IsNullOrEmpty(result.User.BoundUserId))
+        {
+            claims.Add(new Claim("bound_user_id", result.User.BoundUserId));
+        }
 
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
@@ -1104,18 +1283,28 @@ public class SsoController : Controller
 
 public class LoginPortalTokenResponse
 {
+    [JsonPropertyName("user")]
     public LoginPortalUser? User { get; set; }
 }
 
 public class LoginPortalUser
 {
-    public long Id { get; set; }
+    // String type prevents JsonException when portal returns integer ID as string
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("bound_user_id")]
+    public string? BoundUserId { get; set; }
+
+    [JsonPropertyName("name")]
     public string? Name { get; set; }
+
+    [JsonPropertyName("email")]
     public string? Email { get; set; }
 }`,
                     },
                     {
-                        stepNumber: 3,
+                        stepNumber: 4,
                         title: 'Insert Button into Login View (Login.cshtml)',
                         description: 'Add the SSO login button into your ASP.NET Core MVC or Razor Pages login view:',
                         filename: 'Views/Account/Login.cshtml',
@@ -1149,6 +1338,34 @@ public class LoginPortalUser
                     },
                     {
                         stepNumber: 2,
+                        title: 'Configure Spring Security (SecurityConfig.java)',
+                        description: 'Permit public access to /sso/redirect, /sso/callback, and /login so Spring Security does not intercept the OAuth flow:',
+                        filename: 'src/main/java/com/example/config/SecurityConfig.java',
+                        language: 'java',
+                        code: `package com.example.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/sso/**", "/login", "/css/**", "/js/**").permitAll()
+                .anyRequest().authenticated()
+            )
+            .formLogin(form -> form.loginPage("/login").permitAll());
+        return http.build();
+    }
+}`,
+                    },
+                    {
+                        stepNumber: 3,
                         title: 'Create SsoController.java',
                         description: 'Implement /sso/redirect and /sso/callback with state validation, token exchange with grant_type=authorization_code, and Spring Security session creation:',
                         filename: 'src/main/java/com/example/controller/SsoController.java',
@@ -1167,6 +1384,7 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
 import java.security.SecureRandom;
@@ -1205,7 +1423,7 @@ public class SsoController {
         session.removeAttribute("sso_state");
 
         if (savedState == null || !savedState.equals(state) || code == null) {
-            return "redirect:/login?error=invalid_sso";
+            return "redirect:/login?error=invalid_sso_state";
         }
 
         RestTemplate restTemplate = new RestTemplate();
@@ -1219,25 +1437,29 @@ public class SsoController {
         body.add("redirect_uri", redirectUri);
         body.add("code", code);
 
-        ResponseEntity<Map> resp = restTemplate.postForEntity(
-                portalUrl.replaceAll("/$", "") + "/api/sso/token",
-                new HttpEntity<>(body, headers),
-                Map.class
-        );
+        try {
+            ResponseEntity<Map> resp = restTemplate.postForEntity(
+                    portalUrl.replaceAll("/$", "") + "/api/sso/token",
+                    new HttpEntity<>(body, headers),
+                    Map.class
+            );
 
-        if (resp.getStatusCode() != HttpStatus.OK || resp.getBody() == null) {
-            return "redirect:/login?error=sso_failed";
+            if (resp.getStatusCode() != HttpStatus.OK || resp.getBody() == null) {
+                return "redirect:/login?error=sso_failed";
+            }
+
+            Map<String, Object> userMap = (Map<String, Object>) resp.getBody().get("user");
+            String email = (String) userMap.get("email");
+
+            // Authenticate in Spring Security Context and rotate session
+            var auth = new UsernamePasswordAuthenticationToken(email, null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
+            SecurityContextHolder.getContext().setAuthentication(auth);
+            request.changeSessionId(); // Protect against session fixation
+
+            return "redirect:/dashboard";
+        } catch (HttpStatusCodeException e) {
+            return "redirect:/login?error=sso_token_failed";
         }
-
-        Map<String, Object> userMap = (Map<String, Object>) resp.getBody().get("user");
-        String email = (String) userMap.get("email");
-
-        // Authenticate in Spring Security Context and rotate session
-        var auth = new UsernamePasswordAuthenticationToken(email, null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
-        SecurityContextHolder.getContext().setAuthentication(auth);
-        request.changeSessionId(); // Protect against session fixation
-
-        return "redirect:/dashboard";
     }
 }`,
                     },
@@ -1268,7 +1490,7 @@ public class SsoController {
                     {
                         stepNumber: 2,
                         title: 'Server Redirect Endpoint (server/api/auth/sso/login.get.ts)',
-                        description: 'Generate secure state token, store in HTTP-only cookie, and redirect to authorization endpoint:',
+                        description: 'Generate secure state token, store in HTTP-only cookie with sameSite: "lax", and redirect to authorization endpoint:',
                         filename: 'server/api/auth/sso/login.get.ts',
                         language: 'typescript',
                         code: `import crypto from 'crypto'
@@ -1277,7 +1499,12 @@ export default defineEventHandler((event) => {
   const config = useRuntimeConfig()
   const state = crypto.randomBytes(32).toString('hex')
 
-  setCookie(event, 'sso_state', state, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 300 })
+  setCookie(event, 'sso_state', state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 300,
+  })
 
   const params = new URLSearchParams({
     client_id: config.ssoClientId,
@@ -1308,13 +1535,14 @@ export default defineEventHandler((event) => {
   try {
     const tokenData = await $fetch<any>(\`\${config.ssoPortalUrl.replace(/\\/$/, '')}/api/sso/token\`, {
       method: 'POST',
-      body: {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
         grant_type: 'authorization_code',
         client_id: config.ssoClientId,
         client_secret: config.ssoClientSecret,
         redirect_uri: config.ssoRedirectUri,
-        code: query.code,
-      }
+        code: String(query.code),
+      }).toString()
     })
 
     if (!tokenData?.user?.id) {
@@ -1322,7 +1550,7 @@ export default defineEventHandler((event) => {
     }
 
     // Set authenticated session cookie
-    setCookie(event, 'auth_user', JSON.stringify(tokenData.user), { httpOnly: true, secure: true, sameSite: 'lax' })
+    setCookie(event, 'auth_user', JSON.stringify(tokenData.user), { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' })
     return sendRedirect(event, '/dashboard')
   } catch (err) {
     return sendRedirect(event, '/login?error=sso_failed')
@@ -1353,21 +1581,21 @@ export default defineEventHandler((event) => {
             return {
                 title: `${clientName} — SSO Integration Guide for Vue.js / React (SPA with Backend Proxy)`,
                 framework: meta,
-                overview: 'Client-side Single Page Application architecture. IMPORTANT: Client secrets must NEVER be exposed in frontend JavaScript. This guide details how the SPA initiates the flow and relies on its backend API proxy for secure token exchange.',
+                overview: 'Client-side Single Page Application architecture. IMPORTANT: Client secrets must NEVER be exposed in frontend JavaScript. This guide details how the SPA initiates the flow and provides the complete backend API token exchange proxy implementation.',
                 steps: [
                     {
                         stepNumber: 1,
-                        title: 'Security Architecture Notice: Backend API Proxy Required',
+                        title: 'Security Architecture: Backend API Proxy Required',
                         description: 'OAuth 2.0 Authorization Code exchange with client_secret MUST occur on a backend service. Never embed client_secret inside browser JavaScript or SPA bundles.',
                         filename: 'Architecture Specification',
                         language: 'bash',
                         code: `[Browser / SPA] ─── 1. Redirect to /sso/authorize ───► [Login Portal]
 [Browser / SPA] ◄── 2. Callback with Code & State ──── [Login Portal]
-[Browser / SPA] ─── 3. POST /api/auth/sso/callback ──► [Your Backend API]
+[Browser / SPA] ─── 3. POST /api/auth/sso/callback ──► [Your Backend API Proxy]
                                                          │ (client_secret)
                                                          ▼
 [Your Backend API] ─── 4. POST /api/sso/token ───────► [Login Portal]
-[Browser / SPA] ◄── 5. Set Auth Cookie / Session ───── [Your Backend API]`,
+[Browser / SPA] ◄── 5. Set HTTP-Only Session Cookie ── [Your Backend API Proxy]`,
                     },
                     {
                         stepNumber: 2,
@@ -1394,7 +1622,7 @@ export default defineEventHandler((event) => {
                     {
                         stepNumber: 3,
                         title: 'SPA Callback Route (src/views/SsoCallback.vue)',
-                        description: 'Receive the authorization code, verify state from sessionStorage, forward code to your backend proxy for token exchange, and handle session establishment:',
+                        description: 'Receive authorization code, verify state from sessionStorage, forward code to your backend proxy for token exchange, and handle session establishment:',
                         filename: 'src/views/SsoCallback.vue',
                         language: 'javascript',
                         code: `<script setup>
@@ -1414,7 +1642,7 @@ onMounted(async () => {
     return;
   }
 
-  // Forward authorization code to your backend service to securely exchange for session
+  // Forward authorization code to your backend proxy (client_secret stays strictly on backend)
   const res = await fetch('/api/auth/sso/callback', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1431,6 +1659,47 @@ onMounted(async () => {
                     },
                     {
                         stepNumber: 4,
+                        title: 'Backend API Proxy Implementation (Express / Node.js example)',
+                        description: 'Implement the server-side proxy route that securely exchanges code with the Login Portal and establishes session:',
+                        filename: 'server/routes/authProxy.js',
+                        language: 'javascript',
+                        code: `const express = require('express');
+const axios = require('axios');
+const router = express.Router();
+
+router.post('/api/auth/sso/callback', async (req, res) => {
+    const { code } = req.body;
+    if (!code) {
+        return res.status(400).json({ error: 'Authorization code is required' });
+    }
+
+    try {
+        const portalUrl = '${cfg.portalUrl}'.replace(/\\/+$/, '');
+        const response = await axios.post(portalUrl + '/api/sso/token', new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: '${cfg.clientId}',
+            client_secret: process.env.LOGIN_PORTAL_CLIENT_SECRET, // strictly backend secret
+            redirect_uri: '${cfg.redirectUri}',
+            code: code,
+        }), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 15000,
+        });
+
+        const userData = response.data.user;
+        // Establish your application session / issue JWT token
+        req.session.user = userData;
+        return res.json({ success: true, user: userData });
+    } catch (err) {
+        console.error('Backend proxy token exchange failed:', err.response?.data || err.message);
+        return res.status(401).json({ error: 'SSO token exchange failed' });
+    }
+});
+
+module.exports = router;`,
+                    },
+                    {
+                        stepNumber: 5,
                         title: 'Insert Button into SPA Login Component',
                         description: 'Add the SSO button into your login view component:',
                         filename: 'src/views/Login.vue',
@@ -1462,8 +1731,8 @@ onMounted(async () => {
                         code: `GET ${cfg.portalUrl}/sso/authorize?client_id=${cfg.clientId}&redirect_uri=${encodeURIComponent(cfg.redirectUri)}&response_type=code&state=CRYPTOGRAPHIC_RANDOM_STATE
 
 # Required Query Parameters:
-# client_id: Registered public client identifier
-# redirect_uri: Registered callback endpoint URL
+# client_id: Registered public client identifier (${cfg.clientId})
+# redirect_uri: Registered callback endpoint URL (${cfg.redirectUri})
 # response_type: Must be strictly "code"
 # state: Cryptographically secure random CSRF token (stored in session)`,
                     },
@@ -1489,24 +1758,27 @@ grant_type=authorization_code&client_id=${cfg.clientId}&client_secret=${cfg.clie
   "token_type": "Bearer",
   "expires_in": 3600,
   "user": {
-    "id": 42,
+    "id": "42",
+    "bound_user_id": "105",
+    "bound_username": "juan.delacruz",
     "name": "Juan Dela Cruz",
     "email": "juan@bayawancity.gov.ph",
-    "role": "admin"
+    "profile_photo_url": "https://..."
   }
 }`,
                     },
                     {
                         stepNumber: 4,
                         title: 'User Provisioning & Session Lifecycle',
-                        description: 'Match user by login_portal_user_id or verified email. Provision new account if not found with an unguessable password. Establish native authenticated session and regenerate session ID to prevent session fixation.',
+                        description: 'Match user by bound_user_id, login_portal_user_id, or verified email. Provision new account if not found with an unguessable password. Establish native authenticated session and regenerate session ID to prevent session fixation.',
                         filename: 'Integration Logic',
                         language: 'bash',
-                        code: `1. Check database for local user with login_portal_user_id == user.id.
-2. If absent, check for user with email == user.email.
-3. If absent, provision new local record with random password.
-4. Establish local session and regenerate session ID.
-5. Redirect user to intended application dashboard.`,
+                        code: `1. Check database for local user with id == user.bound_user_id (if bound).
+2. If absent, check database for user with login_portal_user_id == user.id.
+3. If absent, check database for user with email == user.email.
+4. If absent, provision new local record with random password.
+5. Establish local session and regenerate session ID.
+6. Redirect user to intended application dashboard.`,
                     },
                     {
                         stepNumber: 5,
@@ -1527,6 +1799,362 @@ grant_type=authorization_code&client_id=${cfg.clientId}&client_secret=${cfg.clie
                 ],
             };
     }
+}
+
+/**
+ * Generate framework-tailored Troubleshooting Tips for common failure modes.
+ */
+export function getTroubleshootingTips(frameworkKey, {
+    clientId = 'your_client_id',
+    clientSecret = 'your_client_secret',
+    redirectUri = 'https://your-app.example/sso/callback',
+    portalUrl = 'https://your-login-portal.example',
+} = {}) {
+    const cfg = resolveConfigValues({ clientId, clientSecret, redirectUri, portalUrl });
+
+    // Universal OAuth 2.0 tips applicable to all stacks
+    const universalTips = [
+        {
+            id: 'redirect_uri_mismatch',
+            title: 'Redirect URI Mismatch (invalid_redirect_uri)',
+            category: 'OAuth 2.0 Protocol',
+            badge: 'HTTP 400',
+            badgeColor: 'bg-red-100 text-red-800 border-red-200',
+            problem: 'The Login Portal returns: {"error":"invalid_redirect_uri","error_description":"The provided redirect_uri does not match registered client configuration."}',
+            cause: 'The redirect_uri sent during /sso/authorize or /api/sso/token does not strictly match the registered URI in the Admin Panel. Common culprits: http vs https, trailing slash differences, port discrepancies (e.g. 8000 vs 8001), or domain name differences.',
+            solution: `Ensure the redirect URI parameter in your code exactly matches "${cfg.redirectUri}". In local testing, ensure scheme (http) and port match the client configuration in the Admin Panel.`,
+            codeSnippet: `// Verify in .env:
+LOGIN_PORTAL_REDIRECT_URI=${cfg.redirectUri}`,
+        },
+        {
+            id: 'invalid_client_secret',
+            title: 'Client Authentication Failed (invalid_client)',
+            category: 'Credentials',
+            badge: 'HTTP 401',
+            badgeColor: 'bg-red-100 text-red-800 border-red-200',
+            problem: 'The Login Portal returns: {"error":"invalid_client","error_description":"Client authentication failed."}',
+            cause: 'The client_id or client_secret does not match the active database record. Common causes include rotating the secret in the Admin Panel without updating the client application .env, trailing whitespace, or the SSO client being disabled.',
+            solution: 'Re-copy the Client Secret from the Admin Panel. Ensure the client toggle is set to "Active". Clear application configuration cache to reload .env values.',
+            codeSnippet: `# Re-check in .env:
+LOGIN_PORTAL_CLIENT_ID=${cfg.clientId}
+LOGIN_PORTAL_CLIENT_SECRET=${cfg.clientSecret}`,
+        },
+        {
+            id: 'expired_or_replayed_code',
+            title: 'Authorization Code Expired or Reused (invalid_grant)',
+            category: 'OAuth 2.0 Grant',
+            badge: 'HTTP 400',
+            badgeColor: 'bg-amber-100 text-amber-800 border-amber-200',
+            problem: 'The Login Portal returns: {"error":"invalid_grant","error_description":"Authorization code has already been used."} or "...has expired."',
+            cause: 'Login Portal authorization codes are single-use and expire within 2 minutes. If a page refresh occurs on the callback URL, or if frontend dev tooling (like React StrictMode or double-mounted effects) triggers the callback twice, the second request fails.',
+            solution: 'Initiate a fresh login from /sso/redirect. In client code, ensure the callback handler immediately invalidates the code and performs the token exchange only once.',
+            codeSnippet: `// Codes expire in 120 seconds. Always exchange immediately upon receiving the callback request.`,
+        },
+        {
+            id: 'unbound_account_notice',
+            title: 'Account Not Linked / Connected Systems Warning',
+            category: 'Account Linking',
+            badge: 'HTTP 302',
+            badgeColor: 'bg-blue-100 text-blue-800 border-blue-200',
+            problem: 'When logging in, the user is redirected to the Portal\'s Connected Systems page with: "This application is not linked to your LGUNET Portal account. Please bind your account first."',
+            cause: 'The portal requires users to bind their client application account to their Login Portal account under Connected Systems.',
+            solution: 'The user must link their account once in the Login Portal dashboard by entering their username/password for the client system. Alternatively, client applications can implement the optional /api/sso/verify-credentials endpoint so the portal can verify user credentials automatically.',
+            codeSnippet: `// User action: Visit Login Portal -> Connected Systems -> Click "Connect" for your application.`,
+        },
+        {
+            id: 'csrf_state_mismatch',
+            title: 'SSO State Validation Failed (CSRF State Mismatch)',
+            category: 'Security',
+            badge: 'Warning',
+            badgeColor: 'bg-amber-100 text-amber-800 border-amber-200',
+            problem: 'Your application displays: "Invalid or expired SSO state session. Please try again."',
+            cause: 'The state token saved in session before the redirect to the portal was lost or does not match the returned query parameter. Common causes: Session cookie SameSite=Strict blocking cookie transmission on external redirects, cookie domain mismatches, or opening multiple tabs.',
+            solution: 'Configure session cookies with SameSite=Lax. Verify that session cookies are persisted across redirects and that your session storage driver (redis/file/database) is operational.',
+            codeSnippet: `// Ensure cookie SameSite configuration is set to 'lax':
+SESSION_SAME_SITE=lax`,
+        },
+        {
+            id: 'ssl_tls_verification_error',
+            title: 'cURL / SSL Certificate Problem (cURL error 60)',
+            category: 'Network & TLS',
+            badge: 'Network',
+            badgeColor: 'bg-purple-100 text-purple-800 border-purple-200',
+            problem: 'Server logs show: "cURL error 60: SSL certificate problem: self signed certificate" or "unable to get local issuer certificate".',
+            cause: 'In development or internal intranet environments, the portal may run on HTTPS with a self-signed certificate, causing cURL or HTTP clients to reject the connection.',
+            solution: 'In development, configure your HTTP client to use a local CA bundle or disable peer verification temporarily for local dev only. In production, always install a valid trusted TLS certificate.',
+            codeSnippet: `// In Laravel (development only):
+$response = Http::withoutVerifying()->asForm()->post($tokenUrl, [ ... ]);`,
+        },
+    ];
+
+    // Framework-specific troubleshooting items
+    let stackTips = [];
+
+    switch (frameworkKey) {
+        case 'laravel_inertia':
+        case 'laravel_livewire':
+        case 'laravel_blade':
+            stackTips = [
+                {
+                    id: 'laravel_config_cached',
+                    title: 'Stale Environment Configuration Cached',
+                    category: 'Laravel Cache',
+                    badge: 'Laravel',
+                    badgeColor: 'bg-red-100 text-red-800 border-red-200',
+                    problem: 'Changes to .env credentials or portal URLs are not reflected, causing 401 or 400 errors.',
+                    cause: 'Laravel caches config via "php artisan config:cache", so direct changes to .env will not be picked up.',
+                    solution: 'Run "php artisan config:clear" and "php artisan optimize:clear" whenever modifying SSO credentials.',
+                    codeSnippet: `php artisan config:clear
+php artisan cache:clear`,
+                },
+                {
+                    id: 'laravel_fillable_error',
+                    title: 'MassAssignmentException on login_portal_user_id',
+                    category: 'Eloquent ORM',
+                    badge: 'Laravel',
+                    badgeColor: 'bg-red-100 text-red-800 border-red-200',
+                    problem: 'User creation or updating fails with: "Add [login_portal_user_id] to fillable property to allow mass assignment".',
+                    cause: 'The login_portal_user_id or sso_provider column was added to the database migration but omitted from the $fillable array in App\\Models\\User.',
+                    solution: 'Add login_portal_user_id and sso_provider to $fillable in User.php or use $user->forceFill([...])->save().',
+                    codeSnippet: `// In App\\Models\\User:
+protected $fillable = [
+    'name', 'email', 'password', 'login_portal_user_id', 'sso_provider',
+];`,
+                },
+            ];
+            break;
+
+        case 'php_vanilla':
+            stackTips = [
+                {
+                    id: 'php_session_not_started',
+                    title: '$_SESSION["sso_state"] is Null or Empty',
+                    category: 'PHP Session',
+                    badge: 'PHP Native',
+                    badgeColor: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+                    problem: 'SSO callback always fails with "invalid_state".',
+                    cause: 'session_start() was not invoked before accessing $_SESSION, or headers were already sent before session initiation.',
+                    solution: 'Ensure session_start() is called at the very top of sso_redirect.php and sso_callback.php before any output.',
+                    codeSnippet: `if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}`,
+                },
+                {
+                    id: 'php_curl_extension_missing',
+                    title: 'Call to undefined function curl_init()',
+                    category: 'PHP Extensions',
+                    badge: 'PHP Native',
+                    badgeColor: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+                    problem: 'Fatal error: Uncaught Error: Call to undefined function curl_init().',
+                    cause: 'The PHP cURL extension is not enabled in php.ini.',
+                    solution: 'Enable extension=curl in your php.ini and restart your web server (Apache/Nginx/PHP-FPM).',
+                    codeSnippet: `# In php.ini:
+extension=curl`,
+                },
+            ];
+            break;
+
+        case 'node_express':
+            stackTips = [
+                {
+                    id: 'express_session_race_condition',
+                    title: 'User Logged Out After Successful SSO Callback',
+                    category: 'Express Session',
+                    badge: 'Node.js',
+                    badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                    problem: 'User authenticates at the portal, redirects to dashboard, but dashboard reports unauthenticated session.',
+                    cause: 'In express-session, res.redirect() was called before the session store finished persisting the regenerated session.',
+                    solution: 'Call req.session.save(() => res.redirect("/dashboard")) inside the req.session.regenerate() callback.',
+                    codeSnippet: `req.session.regenerate((err) => {
+    req.session.user = userData;
+    req.session.save(() => {
+        res.redirect('/dashboard');
+    });
+});`,
+                },
+                {
+                    id: 'express_secure_cookie_dev',
+                    title: 'Session Cookies Not Stored Over HTTP in Development',
+                    category: 'Express Cookies',
+                    badge: 'Node.js',
+                    badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                    problem: 'Session state is lost on every request when developing on http://localhost.',
+                    cause: 'cookie.secure was set to true on plain HTTP connections, which prevents browsers from saving the cookie.',
+                    solution: 'Set cookie.secure: process.env.NODE_ENV === "production" in your express-session configuration.',
+                    codeSnippet: `app.use(session({
+    secret: process.env.SESSION_SECRET,
+    cookie: { secure: process.env.NODE_ENV === 'production', sameSite: 'lax' }
+}));`,
+                },
+            ];
+            break;
+
+        case 'python_django':
+            stackTips = [
+                {
+                    id: 'django_login_backend_missing',
+                    title: 'ValueError: You have to specify a backend when using login()',
+                    category: 'Django Auth',
+                    badge: 'Django',
+                    badgeColor: 'bg-green-100 text-green-800 border-green-300',
+                    problem: 'Django crashes on login(request, user) with ValueError: You have to specify a backend when using login() with a user model that has multiple backends configured.',
+                    cause: 'Django requires the backend string to be attached to the user instance when login() is invoked without prior authenticate().',
+                    solution: 'Set user.backend = "django.contrib.auth.backends.ModelBackend" before calling login(request, user).',
+                    codeSnippet: `user.backend = 'django.contrib.auth.backends.ModelBackend'
+login(request, user)`,
+                },
+                {
+                    id: 'django_username_unique_error',
+                    title: 'IntegrityError: UNIQUE constraint failed on auth_user.username',
+                    category: 'Django ORM',
+                    badge: 'Django',
+                    badgeColor: 'bg-green-100 text-green-800 border-green-300',
+                    problem: 'Auto-provisioning a new user fails if another local user shares the same username prefix.',
+                    cause: 'Deriving username directly from email.split("@")[0] causes collisions if multiple users have identical local parts.',
+                    solution: 'Use a loop to verify uniqueness or append a numerical suffix before calling create_user().',
+                    codeSnippet: `counter = 1
+while User.objects.filter(username=username).exists():
+    username = f"{base_username}_{counter}"
+    counter += 1`,
+                },
+            ];
+            break;
+
+        case 'dotnet_core':
+            stackTips = [
+                {
+                    id: 'dotnet_json_long_conversion_error',
+                    title: 'JsonException: The JSON value could not be converted to System.Int64',
+                    category: '.NET Serialization',
+                    badge: 'ASP.NET Core',
+                    badgeColor: 'bg-blue-100 text-blue-800 border-blue-200',
+                    problem: 'ReadFromJsonAsync<LoginPortalTokenResponse>() throws JsonException during token exchange.',
+                    cause: 'The Login Portal returns user id as a string (e.g. "42"). Declaring public long Id in C# causes System.Text.Json to throw a type mismatch exception.',
+                    solution: 'Declare public string? Id { get; set; } in LoginPortalUser to support all string representations.',
+                    codeSnippet: `public class LoginPortalUser {
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+}`,
+                },
+                {
+                    id: 'dotnet_session_not_configured',
+                    title: 'InvalidOperationException: Session has not been configured',
+                    category: '.NET Middleware',
+                    badge: 'ASP.NET Core',
+                    badgeColor: 'bg-blue-100 text-blue-800 border-blue-200',
+                    problem: 'HttpContext.Session.SetString() throws InvalidOperationException.',
+                    cause: 'AddSession() and UseSession() were not registered in Program.cs.',
+                    solution: 'Add builder.Services.AddDistributedMemoryCache(), builder.Services.AddSession(), and app.UseSession() in Program.cs.',
+                    codeSnippet: `builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession();
+// Middleware:
+app.UseSession();`,
+                },
+            ];
+            break;
+
+        case 'spring_boot':
+            stackTips = [
+                {
+                    id: 'spring_http_client_exception',
+                    title: 'HttpClientErrorException: 400 Bad Request on RestTemplate',
+                    category: 'Spring RestTemplate',
+                    badge: 'Spring Boot',
+                    badgeColor: 'bg-teal-100 text-teal-800 border-teal-200',
+                    problem: 'Spring Boot server throws uncaught HttpClientErrorException during token exchange.',
+                    cause: 'Default RestTemplate throws exceptions on non-2xx status codes instead of returning response entities.',
+                    solution: 'Wrap the restTemplate.postForEntity() call in a try-catch block catching HttpStatusCodeException.',
+                    codeSnippet: `try {
+    ResponseEntity<Map> resp = restTemplate.postForEntity(tokenUrl, request, Map.class);
+} catch (HttpStatusCodeException e) {
+    return "redirect:/login?error=sso_failed";
+}`,
+                },
+                {
+                    id: 'spring_security_interception',
+                    title: 'Spring Security 403 / Redirect Loop on /sso/redirect',
+                    category: 'Spring Security',
+                    badge: 'Spring Boot',
+                    badgeColor: 'bg-teal-100 text-teal-800 border-teal-200',
+                    problem: 'Visiting /sso/redirect triggers Spring Security default login or returns 403 Forbidden.',
+                    cause: 'The /sso/** endpoints were not permitted in the SecurityFilterChain.',
+                    solution: 'Add .requestMatchers("/sso/**", "/login").permitAll() to your SecurityFilterChain.',
+                    codeSnippet: `http.authorizeHttpRequests(auth -> auth
+    .requestMatchers("/sso/**", "/login").permitAll()
+    .anyRequest().authenticated()
+);`,
+                },
+            ];
+            break;
+
+        case 'nuxt_node':
+            stackTips = [
+                {
+                    id: 'nuxt_state_cookie_lost',
+                    title: 'sso_state Cookie Missing on Callback in Nuxt',
+                    category: 'Nuxt Nitro Cookies',
+                    badge: 'Nuxt 3',
+                    badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                    problem: 'Callback route reports invalid_state because getCookie(event, "sso_state") is undefined.',
+                    cause: 'The state cookie was set without sameSite: "lax", causing browsers to omit it when navigating back from the external portal.',
+                    solution: 'Set sameSite: "lax" explicitly when setting the sso_state cookie in server/api/auth/sso/login.get.ts.',
+                    codeSnippet: `setCookie(event, 'sso_state', state, {
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 300,
+});`,
+                },
+            ];
+            break;
+
+        case 'vue_spa':
+            stackTips = [
+                {
+                    id: 'vue_client_secret_leak_hazard',
+                    title: 'CRITICAL: Never Embed client_secret in Frontend Bundles',
+                    category: 'Security Architecture',
+                    badge: 'Critical',
+                    badgeColor: 'bg-red-100 text-red-800 border-red-200',
+                    problem: 'Exposing client_secret in Vue/React environment variables (e.g. VITE_CLIENT_SECRET).',
+                    cause: 'Frontend environment variables are packaged into client-side JS bundles and visible to any user via DevTools.',
+                    solution: 'Always proxy the token exchange through your application backend service. The SPA only sends the authorization code to the backend proxy.',
+                    codeSnippet: `// NEVER: const secret = import.meta.env.VITE_LOGIN_PORTAL_CLIENT_SECRET;
+// INSTEAD: fetch('/api/auth/sso/callback', { method: 'POST', body: JSON.stringify({ code }) });`,
+                },
+                {
+                    id: 'vue_cors_proxy_issue',
+                    title: 'CORS Error Calling Login Portal from Browser',
+                    category: 'Browser Security',
+                    badge: 'CORS',
+                    badgeColor: 'bg-amber-100 text-amber-800 border-amber-200',
+                    problem: 'Fetch to /api/sso/token fails with: "Access-Control-Allow-Origin header is missing".',
+                    cause: 'Browser direct calls to the token endpoint are blocked by CORS. Token exchange is designed strictly for backchannel server-to-server communication.',
+                    solution: 'Send the code to your backend proxy endpoint; your backend makes the server-to-server HTTP POST request.',
+                    codeSnippet: `// Browser SPA -> Your Backend API Proxy -> Login Portal /api/sso/token`,
+                },
+            ];
+            break;
+
+        case 'generic_rest':
+        default:
+            stackTips = [
+                {
+                    id: 'content_type_mismatch',
+                    title: 'Token Exchange Content-Type Mismatch',
+                    category: 'HTTP Headers',
+                    badge: 'HTTP 400',
+                    badgeColor: 'bg-amber-100 text-amber-800 border-amber-200',
+                    problem: 'POST /api/sso/token fails with unsupported_grant_type or invalid_request.',
+                    cause: 'Sending parameters without the expected application/x-www-form-urlencoded or application/json header.',
+                    solution: 'Send parameters as application/x-www-form-urlencoded or application/json with grant_type=authorization_code.',
+                    codeSnippet: `Content-Type: application/x-www-form-urlencoded
+grant_type=authorization_code&client_id=...&client_secret=...&code=...`,
+                },
+            ];
+            break;
+    }
+
+    return [...universalTips, ...stackTips];
 }
 
 /**
@@ -1600,9 +2228,10 @@ You are an expert full-stack Laravel & Inertia.js engineer. Integrate OAuth 2.0 
      - Validate HTTP response. On failure, log safely (redacting secrets and tokens) and redirect to login with error.
      - Extract 'user' object from response. Verify required 'id' and 'email' attributes exist.
      - Match user:
-       1. Search for existing local user with matching 'login_portal_user_id'.
-       2. If not found, match by verified 'email'. Link 'login_portal_user_id' to the account.
-       3. If still not found, auto-provision a new local User with name, email, login_portal_user_id, sso_provider, and a secure random password (Hash::make(Str::random(32))).
+       1. Search for existing local user with matching 'bound_user_id' (if provided).
+       2. If not found, match by 'login_portal_user_id'.
+       3. If not found, match by verified 'email'. Link 'login_portal_user_id' to the account using forceFill()->save().
+       4. If still not found, auto-provision a new local User with name, email, login_portal_user_id, sso_provider, and a secure random password (Hash::make(Str::random(32))).
      - Call Auth::login($user, remember: true).
      - Protect against session fixation: call $request->session()->regenerate().
      - Redirect to intended destination: redirect()->intended('/dashboard').
@@ -1627,7 +2256,13 @@ You are an expert full-stack Laravel & Inertia.js engineer. Integrate OAuth 2.0 
      5. Test successful code exchange matches and links existing local user by email.
      6. Test token exchange failure redirects to login with error and preserves guest state.
      7. Test session ID regeneration upon successful login.
-     8. Never rely on a live Login Portal server during automated test execution.`;
+     8. Never rely on a live Login Portal server during automated test execution.
+
+### Troubleshooting & Defensive Guardrails
+- If "invalid_redirect_uri" error occurs: verify that config('services.login_portal.redirect_uri') strictly matches the registered URI in the portal.
+- If "invalid_grant" error occurs: remember that authorization codes are single-use and expire within 2 minutes.
+- If "invalid_client" occurs: ensure config cache is cleared via "php artisan config:clear".
+- If account binding is required: user must bind account under Connected Systems at the Portal.`;
 
         case 'laravel_livewire':
             return `Task: Integrate Single Sign-On (SSO) with Central Login Portal
@@ -1649,10 +2284,15 @@ You are an expert Laravel & Livewire engineer. Implement OAuth 2.0 Single Sign-O
 2. Create migration adding 'login_portal_user_id' (unsignedBigInteger, nullable, unique) and 'sso_provider' to 'users' table. Update User model fillable.
 3. Implement App\\Http\\Controllers\\Auth\\SsoClientController:
    - redirect(): generate random state Str::random(40), store in session('sso_state'), redirect to /sso/authorize with client_id, redirect_uri, response_type=code, state.
-   - callback(): validate returned state against session()->pull('sso_state'). Exchange code via Http::asForm()->post('/api/sso/token') with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Extract user payload, match by login_portal_user_id or email, provision new user if missing with Hash::make(Str::random(32)), login via Auth::login($user, true), call $request->session()->regenerate(), redirect to dashboard.
+   - callback(): validate returned state against session()->pull('sso_state'). Exchange code via Http::asForm()->timeout(15)->post('/api/sso/token') with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Extract user payload, match by bound_user_id, login_portal_user_id, or email, provision new user if missing with Hash::make(Str::random(32)), login via Auth::login($user, true), call $request->session()->regenerate(), redirect to dashboard.
 4. Register routes /sso/redirect and /sso/callback in routes/web.php.
 5. In resources/views/auth/login.blade.php: Insert button "Login with LGUNET Portal" linking to route('sso.redirect') while keeping local credentials form intact.
-6. Write feature tests in tests/Feature/SsoIntegrationTest.php with Http::fake() mocking token responses.`;
+6. Write feature tests in tests/Feature/SsoIntegrationTest.php with Http::fake() mocking token responses.
+
+### Troubleshooting & Defensive Guardrails
+- If invalid_redirect_uri occurs, check exact port, scheme, and trailing slash.
+- If invalid_grant occurs, verify the code was not replayed or expired (2-minute lifetime).
+- Run php artisan config:clear if secrets were rotated.`;
 
         case 'laravel_blade':
             return `Task: Integrate Single Sign-On (SSO) with Central Login Portal
@@ -1670,11 +2310,15 @@ You are an expert Laravel engineer. Integrate Central Login Portal Single Sign-O
 ### Instructions
 1. In .env, define LOGIN_PORTAL_URL, LOGIN_PORTAL_CLIENT_ID, LOGIN_PORTAL_CLIENT_SECRET, LOGIN_PORTAL_REDIRECT_URI.
 2. In config/services.php, register 'login_portal' configuration array.
-3. Run migration adding 'login_portal_user_id' (nullable, unique) and 'sso_provider' to users table.
-4. Implement SsoClientController handling state generation (Str::random(40)), session storage, state verification/invalidation on callback, server-side POST to /api/sso/token with grant_type=authorization_code, user matching/provisioning, Auth::login(), and session regeneration.
+3. Run migration adding 'login_portal_user_id' (nullable, unique) and 'sso_provider' to users table. Update User $fillable.
+4. Implement SsoClientController handling state generation (Str::random(40)), session storage, state verification/invalidation on callback, server-side POST to /api/sso/token with grant_type=authorization_code, user matching by bound_user_id/login_portal_user_id/email, provisioning, Auth::login(), and session regeneration.
 5. Register routes in routes/web.php.
 6. Add "Login with LGUNET Portal" button in resources/views/auth/login.blade.php preserving the existing login form.
-7. Add feature tests in tests/Feature/SsoTest.php using Http::fake().`;
+7. Add feature tests in tests/Feature/SsoTest.php using Http::fake().
+
+### Troubleshooting Tips
+- Clear configuration cache via "php artisan config:clear" after modifying credentials.
+- Ensure session cookie same_site is lax to prevent state mismatch.`;
 
         case 'php_vanilla':
             return `Task: Integrate Single Sign-On (SSO) in Native PHP Application
@@ -1702,11 +2346,15 @@ You are an expert PHP engineer. Integrate OAuth 2.0 Single Sign-On (SSO) into th
    - Read $_GET['code']. If missing, fail safely.
    - Execute cURL POST to SSO_PORTAL_URL . '/api/sso/token' with grant_type=authorization_code, client_id, client_secret, redirect_uri, and code.
    - Parse JSON response. Validate user ID and email.
-   - Match or provision user in local database via PDO.
+   - Match or provision user in local database via PDO prepared statements.
    - Call session_regenerate_id(true) to prevent session fixation.
    - Store authenticated user in $_SESSION and redirect to dashboard.php.
 4. In login.php: Add "Login with LGUNET Portal" button linking to sso_redirect.php while keeping local username/password form.
-5. Create test script verifying state rejection, code exchange, and session creation.`;
+
+### Troubleshooting Tips
+- Ensure session_start() is called before any HTML output.
+- Check that extension=curl and extension=pdo_mysql are enabled in php.ini.
+- For local dev with self-signed SSL, check curl_errno for SSL errors (cURL error 60).`;
 
         case 'node_express':
             return `Task: Integrate Single Sign-On (SSO) in Node.js / Express
@@ -1723,15 +2371,19 @@ You are an expert Node.js and Express backend engineer. Implement OAuth 2.0 Auth
 
 ### Instructions
 1. Load credentials from .env using dotenv into config/sso.js.
-2. Ensure express-session middleware is enabled.
+2. Ensure express-session middleware is enabled with cookie sameSite: 'lax'.
 3. In routes/auth.js:
    - GET /sso/redirect: Generate crypto.randomBytes(32).toString('hex'). Store in req.session.ssoState. Redirect to /sso/authorize with client_id, redirect_uri, response_type=code, state.
    - GET /sso/callback: Compare req.query.state with req.session.ssoState. Delete req.session.ssoState immediately.
    - Make backchannel POST request via Axios to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code.
    - Parse response.user. Find or provision local user with hashed random password.
-   - Call req.session.regenerate() to prevent session fixation, store authenticated user, and redirect to /dashboard.
+   - Call req.session.regenerate(), set req.session.user, and call req.session.save(() => res.redirect('/dashboard')) to prevent session loss.
 4. In login view template: Insert button "Login with LGUNET Portal" pointing to /sso/redirect.
-5. Add automated unit/integration tests with Jest & Supertest mocking Axios.`;
+5. Add automated unit/integration tests with Jest & Supertest mocking Axios.
+
+### Troubleshooting Tips
+- Always call req.session.save() before res.redirect() inside session.regenerate().
+- If testing on HTTP, ensure cookie: { secure: false } so browsers accept the cookie.`;
 
         case 'python_django':
             return `Task: Integrate Single Sign-On (SSO) in Python / Django
@@ -1748,13 +2400,17 @@ You are an expert Django engineer. Integrate Central Login Portal Single Sign-On
 
 ### Instructions
 1. In settings.py, configure LOGIN_PORTAL_URL, LOGIN_PORTAL_CLIENT_ID, LOGIN_PORTAL_CLIENT_SECRET, LOGIN_PORTAL_REDIRECT_URI.
-2. In User model (or profile model), add login_portal_user_id (BigIntegerField, unique, null=True) and sso_provider.
+2. In User model (or profile model), add login_portal_user_id (CharField, unique, null=True) and sso_provider.
 3. Implement views in accounts/views.py:
    - sso_redirect(request): Generate secrets.token_urlsafe(32), save in request.session['sso_state'], redirect to /sso/authorize with client_id, redirect_uri, response_type=code, state.
-   - sso_callback(request): Validate state with request.session.pop('sso_state', None). Send POST request using requests.post() to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Match user by login_portal_user_id or email. If not found, provision user with create_user() and random password. Log in using django.contrib.auth.login(request, user), call request.session.cycle_key() to prevent fixation, redirect to dashboard.
+   - sso_callback(request): Validate state with request.session.pop('sso_state', None). Send POST request using requests.post() to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Match user by bound_user_id, login_portal_user_id, or email. If not found, provision user with create_user() and random password. Set user.backend = 'django.contrib.auth.backends.ModelBackend' before calling login(request, user). Call request.session.cycle_key() to prevent fixation, redirect to dashboard.
 4. Wire URLs in urls.py for /sso/redirect and /sso/callback.
 5. In login.html: Add "Login with LGUNET Portal" button while preserving existing authentication form.
-6. Write tests using django.test.TestCase with unittest.mock.patch mocking requests.post.`;
+6. Write tests using django.test.TestCase with unittest.mock.patch mocking requests.post.
+
+### Troubleshooting Tips
+- Specify user.backend = 'django.contrib.auth.backends.ModelBackend' before login(request, user) to prevent ValueError.
+- Generate unique usernames when auto-provisioning to avoid IntegrityError on duplicate username.`;
 
         case 'dotnet_core':
             return `Task: Integrate Single Sign-On (SSO) in ASP.NET Core
@@ -1770,12 +2426,17 @@ You are an expert .NET Core engineer. Implement OAuth 2.0 Single Sign-On (SSO) u
 
 ### Instructions
 1. Configure LoginPortal section in appsettings.json and User Secrets.
-2. Update ApplicationUser model and EF Core migration with LoginPortalUserId and SsoProvider.
-3. In SsoController:
+2. In Program.cs: Register builder.Services.AddDistributedMemoryCache(), builder.Services.AddSession(options => { options.Cookie.SameSite = SameSiteMode.Lax; }), builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(...), and in pipeline add app.UseSession(), app.UseAuthentication(), app.UseAuthorization().
+3. Update ApplicationUser model and EF Core migration with LoginPortalUserId (string) and SsoProvider.
+4. In SsoController:
    - RedirectToPortal(): Generate 32-byte secure random state via RandomNumberGenerator, save in HttpContext.Session, redirect to /sso/authorize with client_id, redirect_uri, response_type=code, state.
-   - Callback(): Validate state against session, clear session state. Post FormUrlEncodedContent to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Extract user payload, match or provision local user, create ClaimsPrincipal, call HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme).
-4. Add "Login with LGUNET Portal" link in login view.
-5. Write integration tests using WebApplicationFactory mocking HttpMessageHandler.`;
+   - Callback(): Validate state against session, clear session state. Post FormUrlEncodedContent to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Extract user payload (declare string Id in response model to prevent JsonException), match or provision local user, create ClaimsPrincipal, call HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme).
+5. Add "Login with LGUNET Portal" link in login view.
+6. Write integration tests using WebApplicationFactory mocking HttpMessageHandler.
+
+### Troubleshooting Tips
+- Use public string? Id in LoginPortalUser model to prevent JsonException when portal returns integer IDs as string.
+- Ensure app.UseSession() is placed BEFORE app.UseAuthentication() in Program.cs.`;
 
         case 'spring_boot':
             return `Task: Integrate Single Sign-On (SSO) in Spring Boot
@@ -1791,12 +2452,17 @@ You are an expert Spring Boot engineer. Implement OAuth 2.0 Authorization Code S
 
 ### Instructions
 1. In application.yml, define loginportal properties (url, client-id, client-secret, redirect-uri).
-2. Update User entity with loginPortalUserId and ssoProvider.
-3. Implement SsoController:
+2. Configure SecurityConfig to permitAll() on /sso/** and /login so Spring Security does not intercept the OAuth endpoints.
+3. Update User entity with loginPortalUserId and ssoProvider.
+4. Implement SsoController:
    - /sso/redirect: Generate SecureRandom state, store in HttpSession, redirect to /sso/authorize.
-   - /sso/callback: Verify and invalidate session state. Execute RestTemplate/WebClient POST to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Match or provision User in database. Set SecurityContextHolder authentication, call request.changeSessionId(), redirect to /dashboard.
-4. Add "Login with LGUNET Portal" button in Thymeleaf login.html.
-5. Add automated tests with @WebMvcTest and MockRestServiceServer.`;
+   - /sso/callback: Verify and invalidate session state. Execute RestTemplate/WebClient POST to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Catch HttpStatusCodeException to handle token exchange errors. Match or provision User in database. Set SecurityContextHolder authentication, call request.changeSessionId(), redirect to /dashboard.
+5. Add "Login with LGUNET Portal" button in Thymeleaf login.html.
+6. Add automated tests with @WebMvcTest and MockRestServiceServer.
+
+### Troubleshooting Tips
+- Wrap restTemplate.postForEntity() in try-catch (HttpStatusCodeException) to prevent unhandled 500 crashes.
+- Permit /sso/** in SecurityFilterChain to prevent redirect loops.`;
 
         case 'nuxt_node':
             return `Task: Integrate Single Sign-On (SSO) in Nuxt 3 / Node.js
@@ -1813,10 +2479,14 @@ You are an expert Nuxt 3 & Node.js full-stack engineer. Implement OAuth 2.0 Sing
 
 ### Instructions
 1. Add environment variables to .env and runtimeConfig in nuxt.config.ts.
-2. Create server/api/auth/sso/login.get.ts to generate crypto.randomBytes(32), set secure HTTP-only sso_state cookie, and redirect to /sso/authorize with client_id, redirect_uri, response_type=code, state.
+2. Create server/api/auth/sso/login.get.ts to generate crypto.randomBytes(32), set secure HTTP-only sso_state cookie with sameSite: 'lax', and redirect to /sso/authorize with client_id, redirect_uri, response_type=code, state.
 3. Create server/routes/sso/callback.ts to check sso_state cookie, delete cookie, execute server-side $fetch POST to /api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, code. Set authenticated session cookie and redirect to /dashboard.
 4. In pages/login.vue: Insert button "Login with LGUNET Portal" linking to /api/auth/sso/login while keeping local form.
-5. Write Vitest tests with @nuxt/test-utils mocking the token endpoint.`;
+5. Write Vitest tests with @nuxt/test-utils mocking the token endpoint.
+
+### Troubleshooting Tips
+- Set sameSite: 'lax' on the state cookie so browsers send it during the incoming redirect.
+- Ensure the callback is under server/routes/sso/callback.ts matching the exact registered redirect URI path.`;
 
         case 'vue_spa':
             return `Task: Integrate Single Sign-On (SSO) in Vue.js / React Single Page Application (SPA)
@@ -1833,13 +2503,17 @@ Client secrets must NEVER be placed in frontend code. The SPA initiates redirect
    ${cfg.portalUrl}/sso/authorize?client_id=${cfg.clientId}&redirect_uri=${encodeURIComponent(cfg.redirectUri)}&response_type=code&state={state}
 2. Frontend callback route (/sso/callback):
    - Compare 'state' query param with sessionStorage state. Invalidate sessionStorage state.
-   - Send 'code' via POST to your application's backend API endpoint (e.g. /api/auth/sso/callback).
+   - Send 'code' via POST to your application's backend API proxy endpoint (e.g. /api/auth/sso/callback).
 3. Backend API Proxy:
    - Receives code from SPA.
    - Executes server-to-server POST to ${cfg.portalUrl}/api/sso/token with grant_type=authorization_code, client_id, client_secret, redirect_uri, and code.
    - Provisions local user and returns local session cookie / bearer token to SPA.
 4. In Login.vue: Add "Login with LGUNET Portal" button.
-5. Write unit tests verifying state validation and proxy dispatch.`;
+5. Write unit tests verifying state validation and proxy dispatch.
+
+### Troubleshooting Tips
+- Never bundle client_secret into frontend code (Vite/Webpack env variables).
+- Ensure backend proxy endpoints allow CORS or use the same domain reverse proxy.`;
 
         case 'generic_rest':
         default:
@@ -1866,14 +2540,19 @@ You are an expert software engineer. Implement RFC 6749 compliant OAuth 2.0 Auth
    POST ${cfg.portalUrl}/api/sso/token
    Content-Type: application/x-www-form-urlencoded
    grant_type=authorization_code&client_id=${cfg.clientId}&client_secret=${cfg.clientSecret}&redirect_uri=${encodeURIComponent(cfg.redirectUri)}&code={code}
-4. Step 3 (User Mapping & Session): Validate returned JSON response containing 'user'. Match existing local account by login_portal_user_id or verified email. Provision new account if not found with unguessable random password. Establish local session and regenerate session ID to prevent session fixation.
+4. Step 3 (User Mapping & Session): Validate returned JSON response containing 'user'. Match existing local account by bound_user_id, login_portal_user_id, or verified email. Provision new account if not found with unguessable random password. Establish local session and regenerate session ID to prevent session fixation.
 5. Step 4 (UI Integration): Insert "Login with LGUNET Portal" button in login form while preserving existing local credentials option.
-6. Step 5 (Automated Testing): Test flow using HTTP mocks for redirect URL generation, invalid state rejection, missing code rejection, token exchange, and local session creation.`;
+6. Step 5 (Automated Testing): Test flow using HTTP mocks for redirect URL generation, invalid state rejection, missing code rejection, token exchange, and local session creation.
+
+### Troubleshooting Tips
+- Check redirect URI exact match including protocol and port.
+- Code expires in 2 minutes and is strictly single-use.
+- Keep client secrets on server-side only.`;
     }
 }
 
 /**
- * Main entry point: build complete guide data with steps, metadata, and AI Agent prompt.
+ * Main entry point: build complete guide data with steps, metadata, AI Agent prompt, and troubleshooting tips.
  */
 export function getIntegrationGuide({
     clientName = 'My Application',
@@ -1902,6 +2581,13 @@ export function getIntegrationGuide({
         portalUrl,
     });
 
+    const troubleshooting = getTroubleshootingTips(frameworkKey, {
+        clientId,
+        clientSecret,
+        redirectUri,
+        portalUrl,
+    });
+
     return {
         ...content,
         clientName,
@@ -1911,6 +2597,7 @@ export function getIntegrationGuide({
         portalUrl,
         frameworkName: meta.name,
         aiPrompt,
+        troubleshooting,
     };
 }
 
@@ -1918,7 +2605,7 @@ export function getIntegrationGuide({
  * Print / Save as PDF via executive styled browser printable window.
  */
 export function printIntegrationGuide(docData) {
-    const printWindow = window.open('', '_blank', 'width=1000,height=950');
+    const printWindow = window.open('', '_blank', 'width=1050,height=950');
     if (!printWindow) {
         alert('Please allow pop-ups to print or save the integration guide as PDF.');
         return;
@@ -1926,6 +2613,13 @@ export function printIntegrationGuide(docData) {
 
     const aiPrompt = docData.aiPrompt || getAiPrompt(docData.framework?.key || 'laravel_inertia', {
         clientName: docData.clientName || 'My Application',
+        clientId: docData.clientId || 'your_client_id',
+        clientSecret: docData.clientSecret || 'your_client_secret',
+        redirectUri: docData.redirectUri || 'https://your-app.example/sso/callback',
+        portalUrl: docData.portalUrl || window?.location?.origin || 'https://your-login-portal.example',
+    });
+
+    const troubleshooting = docData.troubleshooting || getTroubleshootingTips(docData.framework?.key || 'laravel_inertia', {
         clientId: docData.clientId || 'your_client_id',
         clientSecret: docData.clientSecret || 'your_client_secret',
         redirectUri: docData.redirectUri || 'https://your-app.example/sso/callback',
@@ -1951,7 +2645,7 @@ export function printIntegrationGuide(docData) {
             -webkit-print-color-adjust: exact; print-color-adjust: exact;
         }
         .page-container {
-            max-width: 860px; margin: 0 auto; background: #ffffff; border-radius: 12px;
+            max-width: 880px; margin: 0 auto; background: #ffffff; border-radius: 12px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06); border: 1px solid #e2e8f0;
             overflow: hidden; padding: 36px 42px;
         }
@@ -1980,6 +2674,7 @@ export function printIntegrationGuide(docData) {
         }
         .badge-navy { background: #f1f5f9; color: #0f172a; border-color: #cbd5e1; }
         .badge-gold { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+        .badge-red { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
         .overview-box {
             background: #fdfbf7; border: 1px solid #e7dfd5; border-left: 4px solid #1b4332;
             padding: 14px 18px; border-radius: 6px; margin-bottom: 24px; font-size: 13.5px;
@@ -2023,6 +2718,10 @@ export function printIntegrationGuide(docData) {
             font-size: 11.5px; white-space: pre-wrap; word-break: break-all; line-height: 1.45; border: 1px solid #1e293b;
         }
         .ai-section { margin-top: 36px; page-break-before: always; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 22px; }
+        .troubleshooting-card {
+            background: #ffffff; border: 1px solid #fecaca; border-left: 4px solid #b91c1c;
+            border-radius: 8px; padding: 16px 20px; margin-bottom: 16px; page-break-inside: avoid;
+        }
         .checklist-box {
             background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #d97706;
             border-radius: 6px; padding: 16px 20px; margin-top: 28px; page-break-inside: avoid;
@@ -2039,6 +2738,7 @@ export function printIntegrationGuide(docData) {
             .no-print { display: none !important; }
             .step-card { page-break-inside: avoid; }
             .ai-section { page-break-before: always; }
+            .troubleshooting-section { page-break-before: always; }
             @page { size: A4 portrait; margin: 14mm 12mm 16mm 12mm; }
         }
     </style>
@@ -2075,7 +2775,9 @@ export function printIntegrationGuide(docData) {
             <div class="meta-badges">
                 <span class="badge">${escapeHtml(docData.framework?.name || docData.frameworkName)}</span>
                 <span class="badge badge-navy">OAuth 2.0 Auth Code Grant</span>
-                <span class="badge badge-gold">Part 1: Manual + Part 2: AI Agent</span>
+                <span class="badge badge-gold">Part 1: Manual Guide</span>
+                <span class="badge badge-red">Part 2: Troubleshooting</span>
+                <span class="badge badge-navy">Part 3: AI Agent</span>
             </div>
         </div>
 
@@ -2145,17 +2847,51 @@ export function printIntegrationGuide(docData) {
             <div class="checklist-item">• <strong>HTTPS / TLS Mandatory:</strong> Production environments MUST serve all redirect URIs and API calls over encrypted HTTPS.</div>
             <div class="checklist-item">• <strong>CSRF State Verification & Invalidation:</strong> Always generate a cryptographically secure random state token, store in protected session, verify on callback, and invalidate immediately.</div>
             <div class="checklist-item">• <strong>Server-Side Secret Protection:</strong> Client secret must NEVER be exposed to frontend browser JavaScript or committed to git. Perform token exchange server-side.</div>
-            <div class="checklist-item">• <strong>Safe Identity Mapping:</strong> Match returning users by login_portal_user_id first; fallback to verified email. Never silently merge unverified accounts.</div>
+            <div class="checklist-item">• <strong>Safe Identity Mapping:</strong> Match returning users by bound_user_id first, then login_portal_user_id; fallback to verified email. Never silently merge unverified accounts.</div>
             <div class="checklist-item">• <strong>Session Fixation Protection:</strong> Always regenerate the application session ID immediately upon authenticating the user locally.</div>
             <div class="checklist-item">• <strong>Safe Logging & Redaction:</strong> Never log client secrets, access tokens, or authorization codes in application or web server logs.</div>
             <div class="checklist-item">• <strong>Automated Test Isolation:</strong> Always mock Login Portal responses in automated test suites (e.g. Http::fake). Never depend on live portal servers in CI.</div>
             <div class="checklist-item">• <strong>Preserve Local Authentication:</strong> Ensure local username/password login remains available alongside SSO unless explicitly deprecated.</div>
         </div>
 
-        <!-- Part 2 Divider & AI Agent Section -->
+        <!-- Part 2 Divider: Troubleshooting Tips -->
+        <div class="troubleshooting-section" style="margin-top: 36px; page-break-before: always;">
+            <div class="section-divider" style="border-color: #b91c1c;">
+                <span class="section-badge" style="background: #b91c1c;">PART 2</span>
+                <h2 class="section-title">Troubleshooting & Diagnostic Guide</h2>
+            </div>
+            <p style="font-size: 13px; color: #475569; margin-bottom: 16px; line-height: 1.5;">
+                Common error codes, configuration pitfalls, and step-by-step diagnostic solutions for <strong>${escapeHtml(docData.frameworkName)}</strong>:
+            </p>
+
+            ${troubleshooting.map((tip, idx) => `
+                <div class="troubleshooting-card">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                        <span style="font-size: 13.5px; font-weight: 800; color: #991b1b;">
+                            ${idx + 1}. [${escapeHtml(tip.badge)}] ${escapeHtml(tip.title)}
+                        </span>
+                        <span style="font-size: 11px; font-weight: 700; color: #64748b; background: #f1f5f9; padding: 2px 8px; border-radius: 4px;">
+                            ${escapeHtml(tip.category)}
+                        </span>
+                    </div>
+                    <div style="font-size: 12.5px; line-height: 1.5; color: #334155; margin-bottom: 6px;">
+                        <strong style="color: #b91c1c;">Symptom:</strong> ${escapeHtml(tip.problem)}
+                    </div>
+                    <div style="font-size: 12.5px; line-height: 1.5; color: #334155; margin-bottom: 6px;">
+                        <strong style="color: #92400e;">Root Cause:</strong> ${escapeHtml(tip.cause)}
+                    </div>
+                    <div style="font-size: 12.5px; line-height: 1.5; color: #065f46; background: #ecfdf5; padding: 8px 12px; border-radius: 6px; border: 1px solid #a7f3d0;">
+                        <strong>Resolution:</strong> ${escapeHtml(tip.solution)}
+                    </div>
+                    ${tip.codeSnippet ? `<pre style="margin-top: 8px; background: #0f172a; color: #e2e8f0; padding: 10px 12px; border-radius: 6px; font-size: 11px; font-family: monospace; white-space: pre-wrap;"><code>${escapeHtml(tip.codeSnippet)}</code></pre>` : ''}
+                </div>
+            `).join('')}
+        </div>
+
+        <!-- Part 3 Divider: AI Agent Section -->
         <div class="ai-section">
             <div class="section-divider" style="margin-top: 0; border-color: #1e293b;">
-                <span class="section-badge" style="background: #1e293b;">PART 2</span>
+                <span class="section-badge" style="background: #1e293b;">PART 3</span>
                 <h2 class="section-title">Integration using AI Coding Agent</h2>
             </div>
             <p style="font-size: 13px; color: #475569; margin-bottom: 14px; line-height: 1.5;">
@@ -2199,9 +2935,11 @@ function escapeHtml(str) {
 /**
  * Pure JavaScript Vector PDF 1.4 Layout Engine (Zero External Dependencies)
  * Generates an executive-grade, multi-font, colored, paginated PDF document (.pdf).
- * Contains BOTH:
+ * Contains:
  *  1. Step-by-Step Manual Integration Guide
- *  2. Integration using AI Agent Prompt
+ *  2. Security & Verification Checklist
+ *  3. Troubleshooting & Diagnostic Guide
+ *  4. Integration using AI Agent Prompt
  */
 export class StructuredPdfBuilder {
     constructor(title = 'SSO Integration Guide') {
@@ -2287,7 +3025,7 @@ export class StructuredPdfBuilder {
 
     wrapText(text, maxWidth, charWidth) {
         const maxChars = Math.max(20, Math.floor(maxWidth / charWidth));
-        const words = (text || '').split(/\\s+/);
+        const words = (text || '').split(/\s+/);
         const lines = [];
         let currentLine = '';
 
@@ -2321,8 +3059,8 @@ export class StructuredPdfBuilder {
         this.addText(`Portal Base URL: ${portalUrl}  |  Protocol: OAuth 2.0 Auth Code  |  Confidential`, this.margin + 16, topY - 50, '/F1', 8, [0.82, 0.9, 0.82]);
         this.addText(`Date: ${new Date().toLocaleDateString()}`, this.margin + this.contentWidth - 16, topY - 50, '/F1', 8, [0.82, 0.9, 0.82], 'right');
 
-        this.addRect(this.margin + 16, botY + 7, 360, 14, [0.06, 0.18, 0.13], null);
-        this.addText('COMPLETE PACKAGE: PART 1 (MANUAL STEPS) & PART 2 (AI AGENT PROMPT)', this.margin + 22, botY + 11, '/F2', 6.8, [0.9, 0.96, 0.9]);
+        this.addRect(this.margin + 16, botY + 7, 440, 14, [0.06, 0.18, 0.13], null);
+        this.addText('COMPLETE PACKAGE: PART 1 (MANUAL) • PART 2 (TROUBLESHOOTING) • PART 3 (AI AGENT)', this.margin + 22, botY + 11, '/F2', 6.8, [0.9, 0.96, 0.9]);
 
         this.y = botY - 12;
     }
@@ -2466,9 +3204,57 @@ export class StructuredPdfBuilder {
         }
     }
 
+    drawTroubleshootingSection(tips) {
+        if (!tips || tips.length === 0) return;
+        this.startNewPage();
+        this.drawSectionHeading('PART 2', 'SSO TROUBLESHOOTING & DIAGNOSTIC GUIDE', [0.72, 0.15, 0.15]);
+
+        const introText = 'Common error codes, configuration pitfalls, and step-by-step diagnostic solutions for ' + this.title + ':';
+        const wrappedIntro = this.wrapText(introText, this.contentWidth - 20, 8 * 0.52);
+
+        wrappedIntro.forEach(l => {
+            this.addText(l, this.margin + 6, this.y, '/F1', 8, [0.2, 0.2, 0.25]);
+            this.y -= 10.5;
+        });
+        this.y -= 6;
+
+        tips.forEach((tip, idx) => {
+            const titleText = `${idx + 1}. [${tip.badge}] ${tip.title}`;
+            const problemLines = this.wrapText('Symptom: ' + tip.problem, this.contentWidth - 28, 7.5 * 0.52);
+            const causeLines = this.wrapText('Root Cause: ' + tip.cause, this.contentWidth - 28, 7.5 * 0.52);
+            const solutionLines = this.wrapText('Resolution: ' + tip.solution, this.contentWidth - 28, 7.5 * 0.52);
+
+            const cardH = 26 + ((problemLines.length + causeLines.length + solutionLines.length) * 9.5);
+            this.ensureSpace(cardH + 10);
+
+            const botY = this.y - cardH;
+            this.addRect(this.margin, botY, this.contentWidth, cardH, [0.99, 0.98, 0.98], [0.9, 0.8, 0.8], 0.75);
+            this.addRect(this.margin, this.y - 16, this.contentWidth, 16, [0.96, 0.9, 0.9], null);
+            this.addRect(this.margin, botY, 3.5, cardH, [0.72, 0.15, 0.15], null);
+
+            this.addText(titleText, this.margin + 8, this.y - 11, '/F2', 7.5, [0.65, 0.1, 0.1]);
+
+            let curY = this.y - 25;
+            problemLines.forEach(pl => {
+                this.addText(pl, this.margin + 8, curY, '/F1', 7.2, [0.35, 0.15, 0.15]);
+                curY -= 9.5;
+            });
+            causeLines.forEach(cl => {
+                this.addText(cl, this.margin + 8, curY, '/F1', 7.2, [0.3, 0.3, 0.3]);
+                curY -= 9.5;
+            });
+            solutionLines.forEach(sl => {
+                this.addText(sl, this.margin + 8, curY, '/F2', 7.2, [0.08, 0.38, 0.15]);
+                curY -= 9.5;
+            });
+
+            this.y = botY - 10;
+        });
+    }
+
     drawAiPromptSection(aiPrompt) {
         this.startNewPage();
-        this.drawSectionHeading('PART 2', 'INTEGRATION USING AI CODING AGENT', [0.15, 0.23, 0.38]);
+        this.drawSectionHeading('PART 3', 'INTEGRATION USING AI CODING AGENT', [0.15, 0.23, 0.38]);
 
         const introText = 'You can pass this structured prompt directly to an autonomous AI coding assistant (Google Antigravity, Claude Code, Cursor, GitHub Copilot) to automatically inspect your codebase, create necessary controllers, register routes, and wire the OAuth 2.0 flow.';
         const wrappedIntro = this.wrapText(introText, this.contentWidth - 20, 8 * 0.52);
@@ -2512,7 +3298,7 @@ export class StructuredPdfBuilder {
 
             if (lineIdx < promptLines.length) {
                 this.startNewPage();
-                this.addText('PART 2: AI AGENT PROMPT (CONTINUED)', this.margin + 8, this.y, '/F2', 8.5, [0.15, 0.23, 0.38]);
+                this.addText('PART 3: AI AGENT PROMPT (CONTINUED)', this.margin + 8, this.y, '/F2', 8.5, [0.15, 0.23, 0.38]);
                 this.y -= 14;
             }
         }
@@ -2532,7 +3318,7 @@ export class StructuredPdfBuilder {
             '1. HTTPS Requirement: Production environments MUST serve all redirect URIs and API calls over encrypted HTTPS/TLS.',
             '2. CSRF State Token: Always generate a cryptographically secure state token before redirecting; verify and invalidate on callback.',
             '3. Client Secret Storage: Never expose client_secret to browser JS or commit to git. Store strictly in server environment (.env).',
-            '4. Safe Identity Mapping: Match returning users by login_portal_user_id first; fallback to verified email. Never merge unsafely.',
+            '4. Safe Identity Mapping: Match returning users by bound_user_id first, then login_portal_user_id; fallback to email.',
             '5. Session Fixation Defense: Always regenerate application session ID immediately after authenticating local user session.',
             '6. Safe Logging: Redact client secrets, authorization codes, and access tokens from all application and web server logs.',
             '7. Mocked Automated Tests: Test the full SSO flow using HTTP mocks (e.g. Http::fake). Never depend on live portal servers in CI.',
@@ -2644,9 +3430,11 @@ function escapePdfText(str) {
 
 /**
  * Generate a standalone publication-quality binary PDF file (.pdf) directly in browser.
- * Contains BOTH:
+ * Contains:
  *  1. Step-by-Step Manual Integration Guide
- *  2. Integration using AI Agent Prompt
+ *  2. Security & Verification Checklist
+ *  3. Troubleshooting & Diagnostic Guide
+ *  4. Integration using AI Agent Prompt
  */
 export function downloadIntegrationPdf(docData) {
     try {
@@ -2656,6 +3444,13 @@ export function downloadIntegrationPdf(docData) {
 
         const aiPrompt = docData.aiPrompt || getAiPrompt(docData.framework?.key || 'laravel_inertia', {
             clientName,
+            clientId: docData.clientId || 'your_client_id',
+            clientSecret: docData.clientSecret || 'your_client_secret',
+            redirectUri: docData.redirectUri || 'https://your-app.example/sso/callback',
+            portalUrl,
+        });
+
+        const troubleshooting = docData.troubleshooting || getTroubleshootingTips(docData.framework?.key || 'laravel_inertia', {
             clientId: docData.clientId || 'your_client_id',
             clientSecret: docData.clientSecret || 'your_client_secret',
             redirectUri: docData.redirectUri || 'https://your-app.example/sso/callback',
@@ -2678,6 +3473,7 @@ export function downloadIntegrationPdf(docData) {
         }
 
         builder.drawVerificationNotes();
+        builder.drawTroubleshootingSection(troubleshooting);
         builder.drawAiPromptSection(aiPrompt);
 
         const pdfBlob = builder.compile();

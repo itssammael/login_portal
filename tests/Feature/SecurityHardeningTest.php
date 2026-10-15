@@ -252,4 +252,28 @@ class SecurityHardeningTest extends TestCase
         $response->assertJson(['status' => 'success']);
         $this->assertEquals('API Test Event', $response->json('data.event.name'));
     }
+
+    public function test_trusted_proxy_correctly_detects_https_and_http_schemes(): void
+    {
+        // 1. When accessed via Cloudflare Tunnel / reverse proxy with X-Forwarded-Proto: https
+        $responseHttps = $this->withHeaders([
+            'X-Forwarded-Proto' => 'https',
+            'X-Forwarded-Host' => 'widespread-forbes-lat-precious.trycloudflare.com',
+            'X-Forwarded-Port' => '443',
+        ])->get('/login');
+
+        $responseHttps->assertOk();
+        $this->assertTrue(request()->isSecure());
+        $this->assertEquals('https', request()->getScheme());
+        $responseHttps->assertSee('upgrade-insecure-requests', false);
+
+        // 2. When accessed directly via local HTTP (e.g. http://lguportal/login)
+        $this->flushHeaders();
+        $responseHttp = $this->get('http://lguportal/login');
+
+        $responseHttp->assertOk();
+        $this->assertFalse(request()->isSecure());
+        $this->assertEquals('http', request()->getScheme());
+        $responseHttp->assertDontSee('upgrade-insecure-requests');
+    }
 }

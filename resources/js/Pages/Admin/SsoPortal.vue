@@ -63,8 +63,8 @@ const showDocsModal = ref(false);
 const docsClient = ref(null);
 const selectedDocsFramework = ref('laravel_inertia');
 const showModalDocsPreview = ref(false);
-const docsModalTab = ref('steps'); // 'steps' | 'ai_agent'
-const modalPreviewTab = ref('steps'); // 'steps' | 'ai_agent'
+const docsModalTab = ref('steps'); // 'steps' | 'troubleshooting' | 'ai_agent'
+const modalPreviewTab = ref('steps'); // 'steps' | 'troubleshooting' | 'ai_agent'
 const copiedAiPromptKey = ref(null);
 
 const form = useForm({
@@ -912,12 +912,12 @@ const printDocsPdf = (docData) => {
                                     @click.prevent="downloadDocsPdf(activeModalDocData)"
                                     type="button"
                                     class="px-2.5 py-1 text-[11px] font-semibold text-forest-900 bg-white hover:bg-forest-50 rounded-lg border border-forest-300/80 transition flex items-center space-x-1 cursor-pointer"
-                                    title="Download PDF containing BOTH Step-by-Step Instructions & AI Agent Prompt"
+                                    title="Download Complete PDF containing Step-by-Step Instructions, Troubleshooting Tips & AI Agent Prompt"
                                 >
                                     <svg class="size-3 text-forest-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                                     </svg>
-                                    <span>Download PDF (Step-by-Step + AI Prompt)</span>
+                                    <span>Download PDF (All 3 Parts)</span>
                                 </button>
                                 <button
                                     @click.prevent="showModalDocsPreview = !showModalDocsPreview"
@@ -931,8 +931,8 @@ const printDocsPdf = (docData) => {
 
                         <!-- Expanded Content with Mode Switcher -->
                         <div v-if="showModalDocsPreview && activeModalDocData" class="mt-3.5 pt-3.5 border-t border-cream-300 space-y-3">
-                            <!-- Tabs: Steps vs AI Agent -->
-                            <div class="flex items-center space-x-2 bg-cream-200/90 p-1 rounded-xl border border-cream-300/80 w-fit">
+                            <!-- Tabs: Steps vs AI Agent vs Troubleshooting -->
+                            <div class="flex items-center space-x-2 bg-cream-200/90 p-1 rounded-xl border border-cream-300/80 w-fit flex-wrap gap-1">
                                 <button
                                     @click.prevent="modalPreviewTab = 'steps'"
                                     type="button"
@@ -940,6 +940,15 @@ const printDocsPdf = (docData) => {
                                     :class="modalPreviewTab === 'steps' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:bg-cream-100'"
                                 >
                                     📋 Step-by-Step Instructions
+                                </button>
+                                <button
+                                    @click.prevent="modalPreviewTab = 'troubleshooting'"
+                                    type="button"
+                                    class="px-3 py-1.5 text-xs font-semibold rounded-lg transition flex items-center space-x-1.5 cursor-pointer"
+                                    :class="modalPreviewTab === 'troubleshooting' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-700 hover:bg-cream-100'"
+                                >
+                                    <span>🛠️</span>
+                                    <span>Troubleshooting Tips</span>
                                 </button>
                                 <button
                                     @click.prevent="modalPreviewTab = 'ai_agent'"
@@ -977,7 +986,42 @@ const printDocsPdf = (docData) => {
                                 </div>
                             </div>
 
-                            <!-- Option 2: AI Agent Prompt -->
+                            <!-- Option 2: Troubleshooting Tips -->
+                            <div v-else-if="modalPreviewTab === 'troubleshooting'" class="space-y-3">
+                                <div
+                                    v-for="(tip, tIdx) in activeModalDocData.troubleshooting"
+                                    :key="tip.id || tIdx"
+                                    class="bg-white rounded-xl border border-cream-300 p-3.5 shadow-2xs space-y-2"
+                                >
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center space-x-2">
+                                            <span class="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded border" :class="tip.badgeColor || 'bg-amber-100 text-amber-800 border-amber-200'">
+                                                {{ tip.badge }}
+                                            </span>
+                                            <span class="text-xs font-bold text-gray-900">{{ tip.title }}</span>
+                                        </div>
+                                        <span class="text-[10.5px] text-gray-500 font-medium">{{ tip.category }}</span>
+                                    </div>
+
+                                    <div class="text-[11px] space-y-1">
+                                        <div class="text-gray-700">
+                                            <strong class="text-red-700">Symptom:</strong> {{ tip.problem }}
+                                        </div>
+                                        <div class="text-gray-700">
+                                            <strong class="text-amber-800">Cause:</strong> {{ tip.cause }}
+                                        </div>
+                                        <div class="text-gray-800 bg-emerald-50/70 p-2 rounded-lg border border-emerald-200/80">
+                                            <strong class="text-emerald-900">Solution:</strong> {{ tip.solution }}
+                                        </div>
+                                    </div>
+
+                                    <div v-if="tip.codeSnippet" class="relative mt-1.5">
+                                        <pre class="bg-gray-900 text-gray-100 text-[10.5px] font-mono p-2 rounded-lg overflow-x-auto select-all leading-relaxed whitespace-pre-wrap"><code>{{ tip.codeSnippet }}</code></pre>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Option 3: AI Agent Prompt -->
                             <div v-else-if="modalPreviewTab === 'ai_agent'" class="space-y-3">
                                 <div class="bg-white rounded-xl border border-cream-300 p-4 shadow-2xs space-y-3">
                                     <div class="flex items-center justify-between">
@@ -1196,12 +1240,12 @@ const printDocsPdf = (docData) => {
                             @click="downloadDocsPdf(activeClientDocData)"
                             type="button"
                             class="inline-flex items-center px-3 py-1.5 text-xs font-semibold text-white bg-forest-900 hover:bg-forest-950 rounded-xl shadow-xs transition cursor-pointer"
-                            title="Download PDF containing BOTH Step-by-Step Instructions and AI Agent Prompt"
+                            title="Download PDF containing Step-by-Step Instructions, Troubleshooting Tips, and AI Agent Prompt"
                         >
                             <svg class="size-3.5 me-1.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                             </svg>
-                            Download Complete PDF (Both Parts)
+                            Download Complete PDF (All 3 Parts)
                         </button>
                         <button
                             @click="printDocsPdf(activeClientDocData)"
@@ -1237,9 +1281,9 @@ const printDocsPdf = (docData) => {
                     </button>
                 </div>
 
-                <!-- Guide Option Switcher: Step-by-Step vs AI Agent -->
+                <!-- Guide Option Switcher: Step-by-Step vs Troubleshooting vs AI Agent -->
                 <div class="px-6 py-2.5 bg-cream-100/90 border-b border-cream-400/60 flex flex-wrap items-center justify-between gap-3 shrink-0">
-                    <div class="flex items-center space-x-2">
+                    <div class="flex items-center space-x-2 flex-wrap gap-1">
                         <button
                             @click="docsModalTab = 'steps'"
                             type="button"
@@ -1248,6 +1292,15 @@ const printDocsPdf = (docData) => {
                         >
                             <span>📋</span>
                             <span>Step-by-Step Manual Guide</span>
+                        </button>
+                        <button
+                            @click="docsModalTab = 'troubleshooting'"
+                            type="button"
+                            class="px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center space-x-1.5 cursor-pointer"
+                            :class="docsModalTab === 'troubleshooting' ? 'bg-forest-900 text-white shadow-xs' : 'bg-cream-200 text-gray-700 hover:bg-cream-300 border border-cream-300'"
+                        >
+                            <span>🛠️</span>
+                            <span>Troubleshooting Tips</span>
                         </button>
                         <button
                             @click="docsModalTab = 'ai_agent'"
@@ -1347,7 +1400,67 @@ const printDocsPdf = (docData) => {
                         </div>
                     </div>
 
-                    <!-- Option 2: AI Agent Prompt -->
+                    <!-- Option 2: Troubleshooting Tips -->
+                    <div v-else-if="docsModalTab === 'troubleshooting'" class="space-y-4">
+                        <div class="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-950 flex items-start space-x-2.5">
+                            <span class="text-base leading-none">🛠️</span>
+                            <div class="leading-relaxed">
+                                Diagnostic and remediation guide for common SSO authentication issues, network timeouts, single-use code expiry, account binding requirements, and SSL verification traps specific to <strong>{{ activeClientDocData.frameworkName }}</strong>.
+                            </div>
+                        </div>
+
+                        <div
+                            v-for="(tip, tIdx) in activeClientDocData.troubleshooting"
+                            :key="tip.id || tIdx"
+                            class="bg-cream-100 rounded-xl border border-cream-400/80 p-5 space-y-3 shadow-2xs"
+                        >
+                            <div class="flex items-center justify-between flex-wrap gap-2">
+                                <div class="flex items-center space-x-2.5">
+                                    <span class="px-2.5 py-1 text-xs font-bold uppercase tracking-wider rounded-lg border shadow-2xs" :class="tip.badgeColor || 'bg-amber-100 text-amber-800 border-amber-300'">
+                                        {{ tip.badge }}
+                                    </span>
+                                    <h4 class="text-sm font-bold text-gray-900">{{ tip.title }}</h4>
+                                </div>
+                                <span class="text-xs font-semibold px-2 py-0.5 bg-white text-gray-600 rounded-md border border-cream-300">
+                                    {{ tip.category }}
+                                </span>
+                            </div>
+
+                            <div class="text-xs space-y-2 leading-relaxed">
+                                <div class="p-2.5 bg-red-50/80 rounded-lg border border-red-200 text-red-950">
+                                    <strong class="font-bold text-red-800">Symptom / Error:</strong> {{ tip.problem }}
+                                </div>
+                                <div class="p-2.5 bg-amber-50/80 rounded-lg border border-amber-200 text-amber-950">
+                                    <strong class="font-bold text-amber-800">Root Cause:</strong> {{ tip.cause }}
+                                </div>
+                                <div class="p-2.5 bg-emerald-50/90 rounded-lg border border-emerald-300 text-emerald-950">
+                                    <strong class="font-bold text-emerald-900">Recommended Resolution:</strong> {{ tip.solution }}
+                                </div>
+                            </div>
+
+                            <div v-if="tip.codeSnippet" class="relative mt-2">
+                                <div class="flex items-center justify-between mb-1">
+                                    <span class="text-[10px] font-bold text-gray-500 uppercase tracking-wider font-mono">Suggested Fix Snippet</span>
+                                    <button
+                                        @click="copyCodeToClipboard(tip.codeSnippet, 'doc_tip_' + tIdx)"
+                                        type="button"
+                                        class="text-xs font-semibold text-forest-800 hover:text-forest-950 flex items-center space-x-1 cursor-pointer"
+                                    >
+                                        <svg v-if="copiedCodeKey === 'doc_tip_' + tIdx" class="size-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                                        </svg>
+                                        <svg v-else class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
+                                        </svg>
+                                        <span>{{ copiedCodeKey === 'doc_tip_' + tIdx ? 'Copied Snippet!' : 'Copy Snippet' }}</span>
+                                    </button>
+                                </div>
+                                <pre class="bg-gray-900 text-gray-100 text-xs font-mono p-3.5 rounded-xl overflow-x-auto select-all leading-relaxed whitespace-pre-wrap"><code>{{ tip.codeSnippet }}</code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Option 3: AI Agent Prompt -->
                     <div v-else-if="docsModalTab === 'ai_agent'" class="space-y-4">
                         <div class="bg-cream-100 rounded-xl border border-cream-400/80 p-5 space-y-4 shadow-2xs">
                             <div class="flex items-center justify-between">
@@ -1399,7 +1512,7 @@ const printDocsPdf = (docData) => {
                 <!-- Modal Footer -->
                 <div class="p-4 sm:p-5 bg-cream-300/60 border-t border-cream-400 flex flex-wrap items-center justify-between gap-3 shrink-0">
                     <span class="text-xs text-gray-700">
-                        📄 The exported PDF contains <strong>BOTH</strong> the <strong>Step-by-Step Manual Instructions</strong> and the <strong>AI Agent Prompt</strong>.
+                        📄 The exported PDF contains <strong>all 3 parts</strong>: <strong>Step-by-Step Manual Instructions</strong>, <strong>Troubleshooting Tips</strong>, and <strong>AI Agent Prompt</strong>.
                     </span>
                     <div class="flex items-center space-x-3">
                         <button
@@ -1417,7 +1530,7 @@ const printDocsPdf = (docData) => {
                             <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                             </svg>
-                            <span>Download Complete PDF (Step-by-Step + AI Agent)</span>
+                            <span>Download Complete PDF (All 3 Parts)</span>
                         </button>
                     </div>
                 </div>
