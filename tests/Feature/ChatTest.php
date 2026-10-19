@@ -2,12 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Events\MessageSent;
 use App\Models\Conversation;
 use App\Models\ConversationParticipant;
 use App\Models\Message;
 use App\Models\User;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -159,6 +163,29 @@ class ChatTest extends TestCase
             'id' => $message->id,
             'is_deleted' => true,
             'body' => null,
+        ]);
+
+        // Verify attachment deletion removes file from disk
+        Storage::fake('local');
+        $filePath = 'chat_attachments/test_delete_attachment.pdf';
+        Storage::disk('local')->put($filePath, 'encrypted content');
+
+        $attachmentMsg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => null,
+            'type' => 'file',
+            'attachment_path' => $filePath,
+            'attachment_name' => 'test_delete_attachment.pdf',
+        ]);
+
+        $this->actingAs($sender)->delete(route('chat.delete-message', $attachmentMsg));
+
+        Storage::disk('local')->assertMissing($filePath);
+        $this->assertDatabaseHas('messages', [
+            'id' => $attachmentMsg->id,
+            'is_deleted' => true,
+            'attachment_path' => null,
         ]);
     }
 
@@ -345,5 +372,269 @@ class ChatTest extends TestCase
             ->where('conversations', fn ($convs): bool => ! collect($convs)->contains('title', 'Alpha Team Chat')
             )
         );
+    }
+
+    public function test_user_can_paginate_messages_with_cursor(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        // Create 60 messages
+        for ($i = 1; $i <= 60; $i++) {
+            Message::create([
+                'conversation_id' => $conversation->id,
+                'sender_id' => $user1->id,
+                'body' => "Message number {$i}",
+                'type' => 'text',
+            ]);
+        }
+
+        // Initial chat page load returns latest 50 messages
+        $response = $this->actingAs($user1)->get(route('chat.index', ['conversation' => $conversation->id]));
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->has('activeConversation.messages', 50)
+            ->where('activeConversation.has_more', true)
+            ->where('activeConversation.messages.49.body', 'Message number 60')
+        );
+
+        $firstPageOldestId = $conversation->messages()->orderByDesc('id')->take(50)->get()->last()->id;
+
+        // Fetch older messages using cursor endpoint
+        $paginationResponse = $this->actingAs($user1)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+            'before_id' => $firstPageOldestId,
+        ]));
+
+        $paginationResponse->assertOk();
+        $paginationResponse->assertJsonStructure([
+            'messages',
+            'has_more',
+            'oldest_id',
+        ]);
+
+        $responseData = $paginationResponse->json();
+        $this->assertCount(10, $responseData['messages']);
+        $this->assertFalse($responseData['has_more']);
+        $this->assertEquals('Message number 1', $responseData['messages'][0]['body']);
+
+        // Non-participant gets 403 Forbidden
+        $outsider = User::factory()->create();
+        $forbiddenResponse = $this->actingAs($outsider)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+        ]));
+        $forbiddenResponse->assertForbidden();
+    }
+
+    public function test_lazy_contact_search_endpoint_returns_filtered_results(): void
+    {
+        $currentUser = User::factory()->create(['name' => 'John Doe', 'email' => 'john@example.com']);
+        $userA = User::factory()->create(['name' => 'Alice Wonderland', 'email' => 'alice@example.com']);
+        $userB = User::factory()->create(['name' => 'Bob Builder', 'email' => 'bob@example.com']);
+        $banned = User::factory()->banned()->create(['name' => 'Alice Banned', 'email' => 'banned@example.com']);
+
+        // Unauthenticated user is redirected to login
+        $guestResponse = $this->getJson(route('chat.contacts'));
+        $guestResponse->assertUnauthorized();
+
+        // Search for 'Alice'
+        $response = $this->actingAs($currentUser)->getJson(route('chat.contacts', ['query' => 'Alice']));
+        $response->assertOk();
+        $response->assertJsonStructure([
+            'users' => [
+                '*' => ['id', 'name', 'email', 'profile_photo_url', 'is_online'],
+            ],
+        ]);
+
+        $users = $response->json('users');
+        $this->assertCount(1, $users);
+        $this->assertEquals($userA->id, $users[0]['id']);
+
+        // Current user should never be in contacts
+        $selfSearch = $this->actingAs($currentUser)->getJson(route('chat.contacts', ['query' => 'John']));
+        $selfSearch->assertOk();
+        $this->assertCount(0, $selfSearch->json('users'));
+    }
+
+    public function test_message_sent_event_broadcasts_on_private_channels_only(): void
+    {
+        $sender = User::factory()->create();
+        $recipient = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $recipient->id]);
+
+        $event = new MessageSent('Test text', $conversation->id, ['id' => 10], 'created');
+        $channels = $event->broadcastOn();
+
+        // No public-chat channel in broadcast channels
+        foreach ($channels as $channel) {
+            $this->assertInstanceOf(PrivateChannel::class, $channel);
+            $this->assertNotEquals('public-chat', $channel->name);
+        }
+
+        $channelNames = array_map(fn ($c) => $c->name, $channels);
+        $this->assertContains('private-chat.conversation.'.$conversation->id, $channelNames);
+        $this->assertContains('private-App.Models.User.'.$sender->id, $channelNames);
+        $this->assertContains('private-App.Models.User.'.$recipient->id, $channelNames);
+
+        $payload = $event->broadcastWith();
+        $this->assertEquals($conversation->id, $payload['conversation_id']);
+        $this->assertEquals('created', $payload['action']);
+        $this->assertContains($sender->id, $payload['participant_ids']);
+        $this->assertContains($recipient->id, $payload['participant_ids']);
+    }
+
+    public function test_sidebar_conversations_do_not_load_all_messages_and_show_accurate_previews(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user2->id,
+            'body' => 'Latest visible hello',
+            'type' => 'text',
+        ]);
+
+        $response = $this->actingAs($user1)->get(route('chat.index'));
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->where('conversations', function ($convs): bool {
+                $directConv = collect($convs)->firstWhere('type', 'direct');
+
+                return $directConv !== null
+                    && $directConv['latest_message']['body'] === 'Latest visible hello'
+                    && $directConv['unread_count'] === 1;
+            })
+            ->where('availableUsers', [])
+        );
+    }
+
+    public function test_send_message_broadcasts_full_conversation_preview_payload(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $recipient = User::factory()->create(['name' => 'Bob']);
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $recipient->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $conversation), [
+            'body' => 'Hello preview check',
+        ]);
+
+        Event::assertDispatched(MessageSent::class, function (MessageSent $event): bool {
+            $conv = $event->messageData['conversation'] ?? [];
+
+            return isset($conv['title'], $conv['type'], $conv['other_user'], $conv['unread_count']);
+        });
+
+        // Create an attachment that predates the 50-message page
+        $attachmentMessage = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => null,
+            'type' => 'file',
+            'attachment_path' => 'chat_attachments/old_shared_doc.pdf',
+            'attachment_name' => 'old_shared_doc.pdf',
+            'created_at' => now()->subHours(2),
+        ]);
+
+        // Create 52 newer messages so $attachmentMessage is pushed out of the latest 50 messages
+        for ($i = 1; $i <= 52; $i++) {
+            Message::create([
+                'conversation_id' => $conversation->id,
+                'sender_id' => $sender->id,
+                'body' => "Newer message {$i}",
+                'type' => 'text',
+                'created_at' => now()->subHour()->addMinutes($i),
+            ]);
+        }
+
+        $chatResponse = $this->actingAs($recipient)->get(route('chat.index', ['conversation' => $conversation->id]));
+        $chatResponse->assertOk();
+        $chatResponse->assertInertia(fn ($page) => $page
+            ->where('activeConversation.messages', function ($messages) use ($attachmentMessage): bool {
+                // Ensure the assertion cannot pass merely because the attachment appears on the latest page
+                return ! collect($messages)->contains('id', $attachmentMessage->id);
+            })
+            ->where('activeConversation.shared_attachments', function ($attachments): bool {
+                return collect($attachments)->contains('name', 'old_shared_doc.pdf');
+            })
+        );
+    }
+
+    public function test_delete_message_preserves_attachment_path_if_disk_deletion_fails(): void
+    {
+        $sender = User::factory()->create();
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+
+        $filePath = 'chat_attachments/cannot_delete.pdf';
+        $attachmentMsg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => null,
+            'type' => 'file',
+            'attachment_path' => $filePath,
+            'attachment_name' => 'cannot_delete.pdf',
+        ]);
+
+        $mockDisk = \Mockery::mock(Filesystem::class);
+        $mockDisk->shouldReceive('exists')->with($filePath)->andReturn(true);
+        $mockDisk->shouldReceive('delete')->with($filePath)->andReturn(false);
+
+        Storage::set('local', $mockDisk);
+
+        $this->actingAs($sender)->delete(route('chat.delete-message', $attachmentMsg));
+
+        $this->assertDatabaseHas('messages', [
+            'id' => $attachmentMsg->id,
+            'is_deleted' => true,
+            'attachment_path' => $filePath,
+        ]);
+    }
+
+    public function test_delete_message_preserves_attachment_path_if_disk_throws_exception(): void
+    {
+        $sender = User::factory()->create();
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+
+        $filePath = 'chat_attachments/throwing_delete.pdf';
+        $attachmentMsg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => null,
+            'type' => 'file',
+            'attachment_path' => $filePath,
+            'attachment_name' => 'throwing_delete.pdf',
+        ]);
+
+        $mockDisk = \Mockery::mock(Filesystem::class);
+        $mockDisk->shouldReceive('exists')->with($filePath)->andReturn(true);
+        $mockDisk->shouldReceive('delete')->with($filePath)->andThrow(new \RuntimeException('Disk error'));
+
+        Storage::set('local', $mockDisk);
+
+        $this->actingAs($sender)->delete(route('chat.delete-message', $attachmentMsg));
+
+        $this->assertDatabaseHas('messages', [
+            'id' => $attachmentMsg->id,
+            'is_deleted' => true,
+            'attachment_path' => $filePath,
+        ]);
     }
 }

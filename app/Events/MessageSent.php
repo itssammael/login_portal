@@ -31,9 +31,7 @@ class MessageSent implements ShouldBroadcastNow
      */
     public function broadcastOn(): array
     {
-        $channels = [
-            new Channel('public-chat'),
-        ];
+        $channels = [];
 
         if ($this->conversationId) {
             $channels[] = new PrivateChannel('chat.conversation.'.$this->conversationId);
@@ -45,6 +43,8 @@ class MessageSent implements ShouldBroadcastNow
             foreach ($participantIds as $participantId) {
                 $channels[] = new PrivateChannel('App.Models.User.'.$participantId);
             }
+        } elseif (auth()->check()) {
+            $channels[] = new PrivateChannel('App.Models.User.'.auth()->id());
         }
 
         return $channels;

@@ -1,6 +1,7 @@
 <script setup>
-import { ref, computed, watch, nextTick, onMounted } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
+import axios from 'axios';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import DialogModal from '@/Components/DialogModal.vue';
 
@@ -20,19 +21,41 @@ const props = defineProps({
 });
 
 const page = usePage();
+const currentUser = computed(() => page.props.auth?.user || {});
+
 const searchQuery = ref('');
 const showNewChatModal = ref(false);
 const newChatSearch = ref('');
 const messagesContainer = ref(null);
+const composerTextarea = ref(null);
 const fileInput = ref(null);
 const selectedFile = ref(null);
 const selectedFilePreview = ref(null);
+const fileValidationError = ref('');
 const showEmojiPicker = ref(false);
-const soundEnabled = ref(true);
-const activeReactionMessageId = ref(null);
+const activeMessageMenuId = ref(null);
 const showInfoPanel = ref(false);
 
+// Local state for sidebar conversations list
+const conversationsList = ref([...props.conversations]);
+watch(() => props.conversations, (newVal) => {
+    conversationsList.value = [...(newVal || [])];
+}, { deep: true });
+
+// Local state for active conversation messages and pagination cursor
+const activeMessages = ref([...(props.activeConversation?.messages || [])]);
+const hasMoreMessages = ref(!!props.activeConversation?.has_more);
+const isLoadingOlder = ref(false);
+
 const pendingMessages = ref([]);
+const hasNewMessagesBelow = ref(false);
+const newIncomingCount = ref(0);
+
+// Lazy contacts state for New Chat modal
+const contacts = ref([]);
+const isLoadingContacts = ref(false);
+const selectedGroupUsers = ref([]);
+let searchDebounceTimeout = null;
 
 const emojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👏', '🙏', '💯', '✨', '🚀'];
 const reactionMap = {
@@ -52,7 +75,7 @@ const messageForm = useForm({
 // All messages combined (server messages + local pending messages)
 const allMessages = computed(() => {
     if (!props.activeConversation) return [];
-    const serverMsgs = props.activeConversation.messages || [];
+    const serverMsgs = activeMessages.value || [];
     const activePending = pendingMessages.value.filter(
         p => p.conversation_id === props.activeConversation.id
     );
@@ -60,25 +83,30 @@ const allMessages = computed(() => {
     return [...serverMsgs, ...activePending];
 });
 
-// Filter conversations based on search
+// Filter conversations based on sidebar search
 const filteredConversations = computed(() => {
-    if (!searchQuery.value.trim()) return props.conversations;
+    if (!searchQuery.value.trim()) return conversationsList.value;
     const q = searchQuery.value.toLowerCase();
-    return props.conversations.filter(c => 
+    return conversationsList.value.filter(c => 
         (c.title && c.title.toLowerCase().includes(q)) ||
-        (c.other_user && c.other_user.name.toLowerCase().includes(q)) ||
+        (c.other_user && c.other_user.name && c.other_user.name.toLowerCase().includes(q)) ||
         (c.participants && c.participants.some(p => p.name && p.name.toLowerCase().includes(q)))
     );
 });
 
-// Filter available users for starting new chat
-const filteredUsers = computed(() => {
-    if (!newChatSearch.value.trim()) return props.availableUsers;
-    const q = newChatSearch.value.toLowerCase();
-    return props.availableUsers.filter(u => 
-        u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
-    );
-});
+// Check if message container scroll is near bottom
+const isNearBottom = () => {
+    if (!messagesContainer.value) return true;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainer.value;
+    return scrollHeight - scrollTop - clientHeight <= 120;
+};
+
+const onMessagesScroll = () => {
+    if (isNearBottom()) {
+        hasNewMessagesBelow.value = false;
+        newIncomingCount.value = 0;
+    }
+};
 
 // Scroll messages to bottom
 const scrollToBottom = (smooth = true) => {
@@ -92,30 +120,93 @@ const scrollToBottom = (smooth = true) => {
     });
 };
 
+const scrollToNewest = () => {
+    hasNewMessagesBelow.value = false;
+    newIncomingCount.value = 0;
+    scrollToBottom(true);
+};
+
+// Load older messages with cursor while preserving scroll position
+const loadOlderMessages = async () => {
+    if (isLoadingOlder.value || !hasMoreMessages.value || !props.activeConversation) return;
+
+    isLoadingOlder.value = true;
+    const container = messagesContainer.value;
+    const prevScrollHeight = container ? container.scrollHeight : 0;
+    const prevScrollTop = container ? container.scrollTop : 0;
+
+    const firstMsg = activeMessages.value[0];
+    const beforeId = firstMsg ? firstMsg.id : null;
+
+    try {
+        const response = await axios.get(route('chat.messages', props.activeConversation.id), {
+            params: { before_id: beforeId },
+        });
+
+        if (response.data && Array.isArray(response.data.messages)) {
+            activeMessages.value = [...response.data.messages, ...activeMessages.value];
+            hasMoreMessages.value = !!response.data.has_more;
+
+            await nextTick();
+            if (container) {
+                container.scrollTop = container.scrollHeight - prevScrollHeight + prevScrollTop;
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load older messages:', error);
+    } finally {
+        isLoadingOlder.value = false;
+    }
+};
+
+// Drag and drop state
 const isDragging = ref(false);
 const dragCounter = ref(0);
 
+// File validation constraints
+const allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'txt', 'zip'];
+const maxFileSize = 10 * 1024 * 1024; // 10 MB
+
+const validateAndProcessFile = (file) => {
+    fileValidationError.value = '';
+    if (!file) return;
+
+    if (file.size > maxFileSize) {
+        fileValidationError.value = `"${file.name}" exceeds the 10 MB maximum upload limit.`;
+        return;
+    }
+
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (!ext || !allowedExtensions.includes(ext)) {
+        fileValidationError.value = `File format .${ext || 'unknown'} is not supported. Please upload an image, PDF, DOC, DOCX, TXT, or ZIP file.`;
+        return;
+    }
+
+    processFile(file);
+};
+
 const processFile = (file) => {
     if (!file) return;
+
+    // Revoke previous object URL if any
+    if (selectedFilePreview.value) {
+        URL.revokeObjectURL(selectedFilePreview.value);
+        selectedFilePreview.value = null;
+    }
 
     selectedFile.value = file;
     messageForm.attachment = file;
 
     if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            selectedFilePreview.value = e.target.result;
-        };
-        reader.readAsDataURL(file);
-    } else {
-        selectedFilePreview.value = null;
+        selectedFilePreview.value = URL.createObjectURL(file);
     }
 };
 
-// Handle file selection
 const onFileSelected = (event) => {
     const file = event.target.files[0];
-    processFile(file);
+    if (file) {
+        validateAndProcessFile(file);
+    }
 };
 
 const handleDragEnter = (e) => {
@@ -154,14 +245,18 @@ const handleDrop = (e) => {
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
-        processFile(file);
+        validateAndProcessFile(file);
     }
 };
 
 const clearSelectedFile = () => {
+    if (selectedFilePreview.value) {
+        URL.revokeObjectURL(selectedFilePreview.value);
+        selectedFilePreview.value = null;
+    }
     selectedFile.value = null;
-    selectedFilePreview.value = null;
     messageForm.attachment = null;
+    fileValidationError.value = '';
     if (fileInput.value) {
         fileInput.value.value = '';
     }
@@ -170,9 +265,41 @@ const clearSelectedFile = () => {
 const insertEmoji = (emoji) => {
     messageForm.body += emoji;
     showEmojiPicker.value = false;
+    nextTick(() => {
+        resizeComposer();
+        focusComposer();
+    });
 };
 
-// Helper to format date matching server format (e.g. Sep 23, 1:50 am)
+// Auto-growing composer textarea
+const resizeComposer = () => {
+    const el = composerTextarea.value;
+    if (!el) return;
+    el.style.height = 'auto';
+    const maxHeight = 160;
+    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+};
+
+watch(() => messageForm.body, () => {
+    nextTick(resizeComposer);
+});
+
+const focusComposer = () => {
+    if (composerTextarea.value) {
+        composerTextarea.value.focus();
+    }
+};
+
+// Enter key sends; Shift+Enter creates a new line
+const onComposerKeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+};
+
+// Helper to format date matching server format
 const formatCurrentTime = () => {
     const now = new Date();
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -207,18 +334,15 @@ const sendPendingMessage = (pendingMsg) => {
                     if (idx !== -1) {
                         pendingMessages.value.splice(idx, 1);
                     }
-                    scrollToBottom(true);
                 });
             },
             onError: (err) => {
                 console.error('Send message error:', err);
                 pendingMsg.status = 'failed';
-                scrollToBottom(true);
             },
             onFinish: () => {
                 if (!isSuccess && pendingMsg.status === 'sending') {
                     pendingMsg.status = 'failed';
-                    scrollToBottom(true);
                 }
             },
         }
@@ -241,17 +365,17 @@ const sendMessage = () => {
     const conversationId = props.activeConversation.id;
 
     const tempId = 'pending-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
-    const currentUser = page.props.auth?.user || {};
+    const user = currentUser.value;
 
     const pendingMsg = ref({
         id: tempId,
         conversation_id: conversationId,
-        sender_id: currentUser.id,
+        sender_id: user.id,
         sender: {
-            id: currentUser.id,
-            name: currentUser.name,
-            email: currentUser.email,
-            profile_photo_url: currentUser.profile_photo_url,
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            profile_photo_url: user.profile_photo_url,
         },
         body: bodyText,
         type: fileObj ? (fileObj.type.startsWith('image/') ? 'image' : 'file') : 'text',
@@ -268,11 +392,48 @@ const sendMessage = () => {
     pendingMessages.value.push(pendingMsg.value);
 
     messageForm.reset('body');
-    clearSelectedFile();
+    selectedFile.value = null;
+    selectedFilePreview.value = null;
+    messageForm.attachment = null;
+    fileValidationError.value = '';
+    if (fileInput.value) fileInput.value.value = '';
+    nextTick(resizeComposer);
+
     scrollToBottom(true);
+    hasNewMessagesBelow.value = false;
+    newIncomingCount.value = 0;
 
     sendPendingMessage(pendingMsg.value);
 };
+
+// Lazy contact search in modal
+const fetchContacts = async (query = '') => {
+    isLoadingContacts.value = true;
+    try {
+        const res = await axios.get(route('chat.contacts'), {
+            params: { query: query.trim() },
+        });
+        contacts.value = res.data.users || [];
+    } catch (err) {
+        console.error('Failed to fetch contacts:', err);
+    } finally {
+        isLoadingContacts.value = false;
+    }
+};
+
+const onContactSearchInput = () => {
+    if (searchDebounceTimeout) clearTimeout(searchDebounceTimeout);
+    searchDebounceTimeout = setTimeout(() => {
+        fetchContacts(newChatSearch.value);
+    }, 280);
+};
+
+watch(showNewChatModal, (isOpen) => {
+    if (isOpen) {
+        newChatSearch.value = '';
+        fetchContacts('');
+    }
+});
 
 // Start or select direct conversation
 const startDirectChat = (recipientId) => {
@@ -292,13 +453,25 @@ const groupForm = useForm({
     user_ids: [],
 });
 
-const toggleGroupUser = (userId) => {
-    const idx = groupForm.user_ids.indexOf(userId);
+const toggleGroupUser = (user) => {
+    const idx = groupForm.user_ids.indexOf(user.id);
     if (idx > -1) {
         groupForm.user_ids.splice(idx, 1);
+        const selIdx = selectedGroupUsers.value.findIndex(u => u.id === user.id);
+        if (selIdx > -1) selectedGroupUsers.value.splice(selIdx, 1);
     } else {
-        groupForm.user_ids.push(userId);
+        groupForm.user_ids.push(user.id);
+        if (!selectedGroupUsers.value.some(u => u.id === user.id)) {
+            selectedGroupUsers.value.push(user);
+        }
     }
+};
+
+const removeGroupUserById = (userId) => {
+    const idx = groupForm.user_ids.indexOf(userId);
+    if (idx > -1) groupForm.user_ids.splice(idx, 1);
+    const selIdx = selectedGroupUsers.value.findIndex(u => u.id === userId);
+    if (selIdx > -1) selectedGroupUsers.value.splice(selIdx, 1);
 };
 
 const createGroupChat = () => {
@@ -309,6 +482,7 @@ const createGroupChat = () => {
             showNewChatModal.value = false;
             newChatSearch.value = '';
             groupForm.reset();
+            selectedGroupUsers.value = [];
             newChatType.value = 'direct';
         },
     });
@@ -318,6 +492,8 @@ const createGroupChat = () => {
 const toggleReaction = (messageId, reactionKey) => {
     if (typeof messageId === 'string' && messageId.startsWith('pending-')) return;
     activeReactionMessageId.value = null;
+    activeMessageMenuId.value = null;
+
     router.post(route('chat.reaction', messageId), {
         reaction: reactionKey,
     }, {
@@ -330,6 +506,7 @@ const deletingMessageId = ref(null);
 
 const promptDeleteMessage = (messageId) => {
     deletingMessageId.value = messageId;
+    activeMessageMenuId.value = null;
 };
 
 const closeDeleteModal = () => {
@@ -352,45 +529,212 @@ const confirmDeleteMessage = () => {
     });
 };
 
-// Auto scroll on initial mount and when active conversation messages change
-onMounted(() => {
-    scrollToBottom(false);
+// Real-Time Echo Subscriptions & Targeted Local Updates
+let subscribedConversationId = null;
 
-    if (window.Echo) {
-        window.Echo.channel('public-chat')
-            .listen('.message.sent', (e) => {
-                console.log('[Reverb Echo] Broadcast message received:', e);
-                router.reload({ only: ['conversations', 'activeConversation', 'unread_messages_count'] });
+const setupEchoListeners = () => {
+    if (!window.Echo || !currentUser.value.id) return;
+
+    // 1. Listen on user channel for conversation previews and unread badges
+    window.Echo.private(`App.Models.User.${currentUser.value.id}`)
+        .listen('.message.sent', handleUserChannelEvent);
+
+    // 2. Listen on active conversation channel if open
+    updateConversationChannelSubscription(props.activeConversation?.id);
+};
+
+const updateConversationChannelSubscription = (newConvId) => {
+    if (!window.Echo) return;
+
+    if (subscribedConversationId && subscribedConversationId !== newConvId) {
+        window.Echo.leave(`chat.conversation.${subscribedConversationId}`);
+        subscribedConversationId = null;
+    }
+
+    if (newConvId && newConvId !== subscribedConversationId) {
+        subscribedConversationId = newConvId;
+        window.Echo.private(`chat.conversation.${newConvId}`)
+            .listen('.message.sent', handleConversationChannelEvent);
+    }
+};
+
+const handleUserChannelEvent = (e) => {
+    if (e.action === 'created') {
+        const convIndex = conversationsList.value.findIndex(c => c.id === e.conversation_id);
+        const senderId = e.data?.sender_id ?? e.data?.message?.sender_id;
+        const isFromOther = senderId && senderId !== currentUser.value.id;
+
+        if (convIndex !== -1) {
+            const conv = conversationsList.value[convIndex];
+            if (e.data?.conversation?.latest_message) {
+                conv.latest_message = e.data.conversation.latest_message;
+                conv.last_message_at = e.data.conversation.last_message_at;
+            }
+            if (props.activeConversation?.id !== e.conversation_id && isFromOther) {
+                conv.unread_count = (conv.unread_count || 0) + 1;
+            }
+            // Move conversation to top of list
+            conversationsList.value.splice(convIndex, 1);
+            conversationsList.value.unshift(conv);
+        } else if (e.data?.conversation) {
+            const newConv = { ...e.data.conversation };
+            if (props.activeConversation?.id === e.conversation_id || !isFromOther) {
+                newConv.unread_count = 0;
+            }
+            conversationsList.value.unshift(newConv);
+        }
+    } else if (e.action === 'group_created') {
+        if (e.data?.conversation && !conversationsList.value.some(c => c.id === e.data.conversation.id)) {
+            conversationsList.value.unshift(e.data.conversation);
+        }
+    } else if (e.action === 'deleted') {
+        const conv = conversationsList.value.find(c => c.id === e.conversation_id);
+        if (conv && conv.latest_message?.id === e.data?.message_id) {
+            conv.latest_message.body = 'This message was deleted';
+            conv.latest_message.is_deleted = true;
+        }
+    }
+};
+
+const handleConversationChannelEvent = (e) => {
+    if (!props.activeConversation || props.activeConversation.id !== e.conversation_id) return;
+
+    if (e.action === 'created') {
+        const msg = e.data?.message;
+        if (!msg) return;
+
+        const isMe = msg.sender_id === currentUser.value.id;
+
+        // Reconcile pending message if current user was sender
+        if (isMe) {
+            const pendingIndex = pendingMessages.value.findIndex(
+                p => p.conversation_id === e.conversation_id && (p.body === msg.body || p.status === 'sending' || p.status === 'sent')
+            );
+            if (pendingIndex !== -1) {
+                pendingMessages.value.splice(pendingIndex, 1);
+            }
+        }
+
+        // Avoid duplicate message appending
+        if (!activeMessages.value.some(m => m.id === msg.id)) {
+            activeMessages.value.push({
+                ...msg,
+                is_sender: isMe,
             });
+
+            if (isMe || isNearBottom()) {
+                scrollToBottom(true);
+            } else {
+                hasNewMessagesBelow.value = true;
+                newIncomingCount.value++;
+            }
+
+            if (!isMe) {
+                // Silently mark as read on server in background via Axios
+                axios.post(route('chat.mark-read', e.conversation_id)).catch(() => {});
+            }
+        }
+    } else if (e.action === 'reaction_toggled') {
+        const messageId = e.data?.message_id;
+        const reactions = e.data?.reactions;
+        if (messageId && Array.isArray(reactions)) {
+            const targetMsg = activeMessages.value.find(m => m.id === messageId);
+            if (targetMsg) {
+                targetMsg.reactions = reactions.map(r => ({
+                    ...r,
+                    reacted_by_me: r.user_ids ? r.user_ids.includes(currentUser.value.id) : false,
+                }));
+            }
+        }
+    } else if (e.action === 'deleted') {
+        const messageId = e.data?.message_id;
+        if (messageId) {
+            const targetMsg = activeMessages.value.find(m => m.id === messageId);
+            if (targetMsg) {
+                targetMsg.is_deleted = true;
+                targetMsg.body = 'This message was deleted';
+                targetMsg.attachment_url = null;
+                targetMsg.attachment_name = null;
+            }
+        }
+    }
+};
+
+// Watch active conversation switches
+watch(() => props.activeConversation?.id, (newId, oldId) => {
+    if (newId !== oldId) {
+        activeMessages.value = [...(props.activeConversation?.messages || [])];
+        hasMoreMessages.value = !!props.activeConversation?.has_more;
+        hasNewMessagesBelow.value = false;
+        newIncomingCount.value = 0;
+        activeMessageMenuId.value = null;
+        clearSelectedFile();
+        updateConversationChannelSubscription(newId);
+        scrollToBottom(false);
+        nextTick(focusComposer);
     }
 });
 
-watch(() => allMessages.value.length, () => {
-    scrollToBottom(true);
+// Merge props.activeConversation.messages updates by message ID while preserving locally loaded older messages
+watch(() => props.activeConversation?.messages, (newMsgs) => {
+    if (!newMsgs || !props.activeConversation) return;
+
+    const incomingMap = new Map(newMsgs.map(m => [m.id, m]));
+    const updated = activeMessages.value.map(existingMsg => {
+        if (incomingMap.has(existingMsg.id)) {
+            const incoming = incomingMap.get(existingMsg.id);
+            incomingMap.delete(existingMsg.id);
+            return { ...existingMsg, ...incoming };
+        }
+        return existingMsg;
+    });
+
+    for (const msg of incomingMap.values()) {
+        if (!updated.some(m => m.id === msg.id)) {
+            updated.push(msg);
+        }
+    }
+
+    activeMessages.value = updated;
+}, { deep: true });
+
+// Close open message action menus when pressing Escape
+const handleGlobalKeydown = (e) => {
+    if (e.key === 'Escape') {
+        activeMessageMenuId.value = null;
+        showEmojiPicker.value = false;
+    }
+};
+
+onMounted(() => {
+    scrollToBottom(false);
+    setupEchoListeners();
+    nextTick(focusComposer);
+    window.addEventListener('keydown', handleGlobalKeydown);
 });
 
-watch(() => props.activeConversation?.id, () => {
-    scrollToBottom(false);
+onBeforeUnmount(() => {
+    window.removeEventListener('keydown', handleGlobalKeydown);
+    if (window.Echo) {
+        if (currentUser.value.id) {
+            window.Echo.private(`App.Models.User.${currentUser.value.id}`)
+                .stopListening('.message.sent', handleUserChannelEvent);
+        }
+        if (subscribedConversationId) {
+            window.Echo.leave(`chat.conversation.${subscribedConversationId}`);
+        }
+    }
+    if (selectedFilePreview.value) {
+        URL.revokeObjectURL(selectedFilePreview.value);
+    }
+    if (searchDebounceTimeout) {
+        clearTimeout(searchDebounceTimeout);
+    }
 });
 </script>
 
 <template>
     <AppLayout title="Messenger">
-        <!-- <template #header>
-            <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-3">
-                    <div class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
-                    <h2 class="font-semibold text-xl text-gray-800 leading-tight">
-                        Realtime Messenger
-                    </h2>
-                </div>
-
-               
-                   
-             
-            </div>
-        </template> -->
-
         <div class="flex-1 flex flex-col min-h-0 p-2 sm:p-3 bg-cream-300">
             <div class="max-w-8xl w-full mx-auto flex-1 flex flex-col min-h-0">
                 <!-- Messenger Container -->
@@ -406,7 +750,7 @@ watch(() => props.activeConversation?.id, () => {
                             <div class="flex items-center justify-between mb-3">
                                 <h3 class="text-lg font-bold text-gray-900 tracking-tight">Chats</h3>
                                 <span class="text-xs font-semibold px-2.5 py-1 bg-lime-200 text-forest-900 rounded-full">
-                                    {{ conversations.length }} active
+                                    {{ conversationsList.length }} active
                                 </span>
                             </div>
                             <div class="flex items-center gap-2">
@@ -416,6 +760,7 @@ watch(() => props.activeConversation?.id, () => {
                                         type="text"
                                         placeholder="Search conversations..."
                                         class="w-full pl-9 pr-4 py-2 bg-[#fffef7] text-gray-900 text-sm border border-cream-500/60 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl transition duration-150 placeholder:text-gray-400"
+                                        aria-label="Search conversations"
                                     />
                                     <svg class="size-4 text-gray-400 absolute left-3 top-2.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -424,7 +769,8 @@ watch(() => props.activeConversation?.id, () => {
                                 <div>
                                     <button
                                         @click="showNewChatModal = true"
-                                        class="inline-flex items-center px-4 py-2 bg-forest-500 hover:bg-forest-600 active:bg-forest-700 text-white text-sm font-semibold rounded-xl shadow-xs transition-all duration-150 transform active:scale-95"
+                                        class="inline-flex items-center px-4 py-2 bg-forest-500 hover:bg-forest-600 active:bg-forest-700 text-white text-sm font-semibold rounded-xl shadow-xs transition-all duration-150 transform active:scale-95 cursor-pointer"
+                                        aria-label="Start new conversation"
                                     >
                                         <svg class="size-4 me-1.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -519,7 +865,7 @@ watch(() => props.activeConversation?.id, () => {
                                 <p class="text-sm font-medium">No conversations found</p>
                                 <button
                                     @click="showNewChatModal = true"
-                                    class="mt-3 text-xs text-forest-800 hover:text-forest-950 font-semibold"
+                                    class="mt-3 text-xs text-forest-800 hover:text-forest-950 font-semibold cursor-pointer"
                                 >
                                     + Start a conversation
                                 </button>
@@ -558,6 +904,7 @@ watch(() => props.activeConversation?.id, () => {
                                     <Link
                                         :href="route('chat.index')"
                                         class="md:hidden p-1.5 -ml-2 text-forest-900 hover:bg-cream-300 rounded-lg transition"
+                                        aria-label="Back to conversations list"
                                     >
                                         <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
@@ -623,8 +970,9 @@ watch(() => props.activeConversation?.id, () => {
                                 <div class="flex items-center space-x-1 text-forest-900">
                                     <button
                                         @click="showInfoPanel = !showInfoPanel"
-                                        class="p-2 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-xl transition"
+                                        class="p-2 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-xl transition cursor-pointer"
                                         title="User Information"
+                                        aria-label="View user profile and conversation information"
                                     >
                                         <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
@@ -633,8 +981,9 @@ watch(() => props.activeConversation?.id, () => {
 
                                     <button
                                         @click="showInfoPanel = !showInfoPanel"
-                                        class="p-2 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-xl transition"
+                                        class="p-2 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-xl transition cursor-pointer"
                                         title="Chat Settings"
+                                        aria-label="Open conversation settings"
                                     >
                                         <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.6 6.6 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" />
@@ -647,12 +996,33 @@ watch(() => props.activeConversation?.id, () => {
                             <!-- Horizontal flex layout for Messages + Info Drawer -->
                             <div class="flex-1 flex flex-row min-h-0 overflow-hidden relative">
                                 <!-- Messages & Input Column -->
-                                <div class="flex-1 flex flex-col min-h-0 overflow-hidden">
-                                    <!-- Messages Container -->
+                                <div class="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+                                    <!-- Messages Scroll Container -->
                                     <div 
                                         ref="messagesContainer"
+                                        @scroll="onMessagesScroll"
                                         class="flex-1 overflow-y-auto p-6 space-y-4 bg-cream-300"
                                     >
+                                        <!-- Load Older Messages Button (Top of message history) -->
+                                        <div v-if="hasMoreMessages" class="flex justify-center pb-2 pt-1">
+                                            <button
+                                                type="button"
+                                                @click="loadOlderMessages"
+                                                :disabled="isLoadingOlder"
+                                                class="inline-flex items-center px-4 py-1.5 text-xs font-semibold text-forest-900 bg-cream-200 hover:bg-cream-100 rounded-full border border-cream-500/50 shadow-xs transition duration-150 disabled:opacity-50 cursor-pointer"
+                                                aria-label="Load older messages"
+                                            >
+                                                <svg v-if="isLoadingOlder" class="size-3.5 me-1.5 animate-spin text-forest-900" fill="none" viewBox="0 0 24 24">
+                                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                </svg>
+                                                <svg v-else class="size-3.5 me-1.5 text-forest-800" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m0-15l-4.5 4.5m4.5-4.5l4.5 4.5" />
+                                                </svg>
+                                                <span>{{ isLoadingOlder ? 'Loading older messages...' : 'Load older messages' }}</span>
+                                            </button>
+                                        </div>
+
                                         <template v-if="allMessages.length > 0">
                                             <div
                                                 v-for="message in allMessages"
@@ -670,37 +1040,60 @@ watch(() => props.activeConversation?.id, () => {
 
                                                 <!-- Message & Reaction Bar Row -->
                                                 <div class="group flex items-center space-x-2.5 max-w-[90%] md:max-w-[80%]">
-                                                    <!-- FOR SENDER: Reaction Popup Bar (Left side of bubble) -->
+                                                    <!-- Accessible Actions & Reactions for Sender (Left of bubble) -->
                                                     <div
                                                         v-if="message.is_sender && !message.is_deleted && message.status !== 'sending' && message.status !== 'failed'"
-                                                        class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150 flex items-center bg-cream-100 shadow-md border border-cream-500/40 rounded-full px-2.5 py-1 space-x-1 shrink-0 z-10"
+                                                        class="flex items-center space-x-1 shrink-0 z-10"
                                                     >
+                                                        <!-- Trigger toggle for mobile/keyboard users -->
                                                         <button
-                                                            v-for="(emoji, reactionKey) in reactionMap"
-                                                            :key="reactionKey"
-                                                            @click="toggleReaction(message.id, reactionKey)"
-                                                            class="hover:scale-125 transition-transform text-sm p-0.5"
-                                                            :title="reactionKey"
+                                                            type="button"
+                                                            @click="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
+                                                            class="p-1 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition focus:opacity-100 focus:outline-hidden"
+                                                            :class="activeMessageMenuId === message.id ? 'opacity-100 bg-cream-400/50' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'"
+                                                            aria-label="Message reactions and actions"
                                                         >
-                                                            {{ emoji }}
-                                                        </button>
-
-                                                        <!-- Delete button for sender -->
-                                                        <button
-                                                            v-if="!activeConversation.is_system && activeConversation.type !== 'system'"
-                                                            @click="promptDeleteMessage(message.id)"
-                                                            class="p-1 text-gray-400 hover:text-red-500 transition border-l border-cream-400 pl-1.5 ml-0.5"
-                                                            title="Delete message"
-                                                        >
-                                                            <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                                                <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                                            <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
                                                             </svg>
                                                         </button>
+
+                                                        <!-- Popup Reaction Bar -->
+                                                        <div
+                                                            class="transition-opacity duration-150 flex items-center bg-cream-100 shadow-md border border-cream-500/40 rounded-full px-2.5 py-1 space-x-1"
+                                                            :class="activeMessageMenuId === message.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'"
+                                                        >
+                                                            <button
+                                                                v-for="(emoji, reactionKey) in reactionMap"
+                                                                :key="reactionKey"
+                                                                type="button"
+                                                                @click="toggleReaction(message.id, reactionKey)"
+                                                                class="hover:scale-125 transition-transform text-sm p-0.5 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-forest-600 rounded-sm"
+                                                                :title="reactionKey"
+                                                                :aria-label="'React with ' + reactionKey"
+                                                            >
+                                                                {{ emoji }}
+                                                            </button>
+
+                                                            <!-- Delete button for sender -->
+                                                            <button
+                                                                v-if="!activeConversation.is_system && activeConversation.type !== 'system'"
+                                                                type="button"
+                                                                @click="promptDeleteMessage(message.id)"
+                                                                class="p-1 text-gray-400 hover:text-red-500 transition border-l border-cream-400 pl-1.5 ml-0.5 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-red-500 rounded-sm"
+                                                                title="Delete message"
+                                                                aria-label="Delete message"
+                                                            >
+                                                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                                                </svg>
+                                                            </button>
+                                                        </div>
                                                     </div>
 
                                                     <!-- Message Content Container (Bubble & Reaction Badges) -->
                                                     <div class="flex flex-col" :class="message.is_sender ? 'items-end' : 'items-start'">
-                                                        <!-- Message Bubble (Matches Reference Image 1) -->
+                                                        <!-- Message Bubble -->
                                                         <div
                                                             class="px-4 py-2.5 shadow-xs text-sm break-words relative transition"
                                                             :class="[
@@ -717,13 +1110,13 @@ watch(() => props.activeConversation?.id, () => {
                                                                 <a :href="message.attachment_url" target="_blank" rel="noopener noreferrer">
                                                                     <img 
                                                                         :src="message.attachment_url" 
-                                                                        :alt="message.attachment_name"
+                                                                        :alt="message.attachment_name || 'Attached photo'"
                                                                         class="max-h-64 rounded-xl object-cover hover:opacity-95 transition"
                                                                     />
                                                                 </a>
                                                             </div>
 
-                                                            <!-- Document / File Attachment (Matches Reference Image 1 Attachment Card) -->
+                                                            <!-- Document / File Attachment -->
                                                             <div v-else-if="(message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1">
                                                                 <a
                                                                     :href="message.attachment_url || '#'"
@@ -754,9 +1147,11 @@ watch(() => props.activeConversation?.id, () => {
                                                             <button
                                                                 v-for="reaction in message.reactions"
                                                                 :key="reaction.reaction"
+                                                                type="button"
                                                                 @click="toggleReaction(message.id, reaction.reaction)"
-                                                                class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium border shadow-xs transition"
-                                                                :class="reaction.reacted_by_me ? 'bg-cream-100 border-forest-600 text-forest-900' : 'bg-cream-200 border-cream-500/50 text-gray-700'"
+                                                                class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium border shadow-xs transition cursor-pointer"
+                                                                :class="reaction.reacted_by_me ? 'bg-cream-100 border-forest-600 text-forest-900 font-bold' : 'bg-cream-200 border-cream-500/50 text-gray-700'"
+                                                                :aria-label="`Reacted ${reaction.count} times with ${reaction.reaction}`"
                                                             >
                                                                 <span>{{ reactionMap[reaction.reaction] || reaction.reaction }}</span>
                                                                 <span v-if="reaction.count > 1" class="text-[10px] font-bold">{{ reaction.count }}</span>
@@ -764,19 +1159,40 @@ watch(() => props.activeConversation?.id, () => {
                                                         </div>
                                                     </div>
 
-                                                    <!-- FOR RECEIVER: Reaction Popup Bar (Right side of bubble) -->
+                                                    <!-- Accessible Actions & Reactions for Receiver (Right of bubble) -->
                                                     <div
                                                         v-if="!message.is_sender && !message.is_deleted"
-                                                        class="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150 flex items-center bg-cream-100 shadow-md border border-cream-500/40 rounded-full px-2.5 py-1 space-x-1 shrink-0 z-10"
+                                                        class="flex items-center space-x-1 shrink-0 z-10"
                                                     >
-                                                        <button
-                                                            v-for="(emoji, reactionKey) in reactionMap"
-                                                            :key="reactionKey"
-                                                            @click="toggleReaction(message.id, reactionKey)"
-                                                            class="hover:scale-125 transition-transform text-sm p-0.5"
-                                                            :title="reactionKey"
+                                                        <!-- Popup Reaction Bar -->
+                                                        <div
+                                                            class="transition-opacity duration-150 flex items-center bg-cream-100 shadow-md border border-cream-500/40 rounded-full px-2.5 py-1 space-x-1"
+                                                            :class="activeMessageMenuId === message.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'"
                                                         >
-                                                            {{ emoji }}
+                                                            <button
+                                                                v-for="(emoji, reactionKey) in reactionMap"
+                                                                :key="reactionKey"
+                                                                type="button"
+                                                                @click="toggleReaction(message.id, reactionKey)"
+                                                                class="hover:scale-125 transition-transform text-sm p-0.5 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-forest-600 rounded-sm"
+                                                                :title="reactionKey"
+                                                                :aria-label="'React with ' + reactionKey"
+                                                            >
+                                                                {{ emoji }}
+                                                            </button>
+                                                        </div>
+
+                                                        <!-- Trigger toggle for mobile/keyboard users -->
+                                                        <button
+                                                            type="button"
+                                                            @click="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
+                                                            class="p-1 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition focus:opacity-100 focus:outline-hidden"
+                                                            :class="activeMessageMenuId === message.id ? 'opacity-100 bg-cream-400/50' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'"
+                                                            aria-label="Message reactions"
+                                                        >
+                                                            <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+                                                            </svg>
                                                         </button>
                                                     </div>
                                                 </div>
@@ -805,6 +1221,7 @@ watch(() => props.activeConversation?.id, () => {
                                                                 @click="resendMessage(message)"
                                                                 class="ms-1 px-1.5 py-0.5 text-[10px] font-bold bg-red-100 hover:bg-red-200 text-red-700 rounded transition inline-flex items-center space-x-1 border border-red-300 cursor-pointer"
                                                                 title="Resend message"
+                                                                aria-label="Resend failed message"
                                                             >
                                                                 <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                                     <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -832,7 +1249,22 @@ watch(() => props.activeConversation?.id, () => {
                                         </div>
                                     </div>
 
-                                    <!-- Input Bar (Matches Reference Image 1) -->
+                                    <!-- Floating "New Messages" Button -->
+                                    <button
+                                        v-if="hasNewMessagesBelow"
+                                        type="button"
+                                        @click="scrollToNewest"
+                                        class="absolute bottom-24 right-8 z-30 inline-flex items-center space-x-2 px-3.5 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-full shadow-lg border border-golden-400/50 cursor-pointer animate-bounce transition-transform active:scale-95"
+                                        aria-label="Scroll to newest messages"
+                                    >
+                                        <span>New messages</span>
+                                        <span v-if="newIncomingCount > 1" class="px-1.5 py-0.5 bg-lime-400 text-forest-950 rounded-full text-[10px] font-extrabold leading-none">{{ newIncomingCount }}</span>
+                                        <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5m7.5 7.5V3" />
+                                        </svg>
+                                    </button>
+
+                                    <!-- Input Bar -->
                                     <div
                                         v-if="activeConversation.is_system || activeConversation.type === 'system'"
                                         class="p-4 bg-golden-100/60 border-t border-cream-500/40 flex items-center justify-center space-x-2 text-golden-800 text-xs font-semibold"
@@ -844,16 +1276,31 @@ watch(() => props.activeConversation?.id, () => {
                                     </div>
 
                                     <div v-else class="p-4 border-t border-cream-500/40 bg-cream-300 relative">
+                                        <!-- File Validation Error Banner -->
+                                        <div v-if="fileValidationError" class="mb-3 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center justify-between">
+                                            <div class="flex items-center space-x-2">
+                                                <svg class="size-4 shrink-0 text-red-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                                                </svg>
+                                                <span>{{ fileValidationError }}</span>
+                                            </div>
+                                            <button type="button" @click="fileValidationError = ''" class="text-red-500 hover:text-red-700 p-1" aria-label="Dismiss error">
+                                                <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                                </svg>
+                                            </button>
+                                        </div>
+
                                         <!-- File Preview Banner -->
                                         <div v-if="selectedFile" class="mb-3 p-2.5 bg-cream-200 rounded-xl flex items-center justify-between border border-cream-500/60">
                                             <div class="flex items-center space-x-2 truncate">
-                                                <img v-if="selectedFilePreview" :src="selectedFilePreview" class="size-10 rounded-lg object-cover" />
+                                                <img v-if="selectedFilePreview" :src="selectedFilePreview" alt="Attachment preview" class="size-10 rounded-lg object-cover" />
                                                 <svg v-else class="size-6 text-forest-800" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                     <path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
                                                 </svg>
                                                 <span class="text-xs font-medium text-forest-900 truncate">{{ selectedFile.name }}</span>
                                             </div>
-                                            <button @click="clearSelectedFile" class="text-forest-700 hover:text-red-500 p-1">
+                                            <button type="button" @click="clearSelectedFile" class="text-forest-700 hover:text-red-500 p-1 cursor-pointer" aria-label="Remove attachment">
                                                 <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                                                 </svg>
@@ -864,18 +1311,22 @@ watch(() => props.activeConversation?.id, () => {
                                         <div 
                                             v-if="showEmojiPicker"
                                             class="absolute bottom-20 left-6 bg-cream-200 border border-cream-500/60 shadow-xl rounded-2xl p-3 flex flex-wrap gap-2 w-64 z-30"
+                                            role="dialog"
+                                            aria-label="Emoji Picker"
                                         >
                                             <button
                                                 v-for="e in emojis"
                                                 :key="e"
+                                                type="button"
                                                 @click="insertEmoji(e)"
-                                                class="hover:scale-125 transition-transform text-lg p-1.5"
+                                                class="hover:scale-125 transition-transform text-lg p-1.5 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-forest-600 rounded-sm"
+                                                :aria-label="'Insert ' + e"
                                             >
                                                 {{ e }}
                                             </button>
                                         </div>
 
-                                        <!-- Input Controls Form (Pill shaped with send button) -->
+                                        <!-- Input Controls Form -->
                                         <form @submit.prevent="sendMessage" class="flex items-center space-x-3">
                                             <!-- Hidden File Input -->
                                             <input
@@ -884,6 +1335,7 @@ watch(() => props.activeConversation?.id, () => {
                                                 class="hidden"
                                                 accept="image/*,.pdf,.doc,.docx,.zip,.txt"
                                                 @change="onFileSelected"
+                                                aria-label="File upload"
                                             />
 
                                             <!-- Pill Wrapper for attachment icon, emoji icon, and textarea -->
@@ -892,8 +1344,9 @@ watch(() => props.activeConversation?.id, () => {
                                                 <button
                                                     type="button"
                                                     @click="$refs.fileInput.click()"
-                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0"
+                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0 cursor-pointer"
                                                     title="Attach file or photo"
+                                                    aria-label="Attach file or photo"
                                                 >
                                                     <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                         <path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
@@ -904,21 +1357,24 @@ watch(() => props.activeConversation?.id, () => {
                                                 <button
                                                     type="button"
                                                     @click="showEmojiPicker = !showEmojiPicker"
-                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0"
+                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0 cursor-pointer"
                                                     title="Insert emoji"
+                                                    aria-label="Insert emoji"
                                                 >
                                                     <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                         <path stroke-linecap="round" stroke-linejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z" />
                                                     </svg>
                                                 </button>
 
-                                                <!-- Textarea -->
+                                                <!-- Auto-growing Textarea -->
                                                 <textarea
+                                                    ref="composerTextarea"
                                                     v-model="messageForm.body"
                                                     rows="1"
-                                                    placeholder="Type a message... (Press Enter to send)"
-                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 max-h-32"
-                                                    @keydown.enter.exact.prevent="sendMessage"
+                                                    placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden"
+                                                    @keydown="onComposerKeydown"
+                                                    aria-label="Type message content"
                                                 ></textarea>
                                             </div>
 
@@ -926,8 +1382,9 @@ watch(() => props.activeConversation?.id, () => {
                                             <button
                                                 type="submit"
                                                 :disabled="messageForm.processing || (!messageForm.body.trim() && !messageForm.attachment)"
-                                                class="size-10 bg-forest-900 hover:bg-forest-950 disabled:opacity-40 text-white rounded-full shadow-md flex items-center justify-center transition-all transform active:scale-95 shrink-0"
+                                                class="size-10 bg-forest-900 hover:bg-forest-950 disabled:opacity-40 text-white rounded-full shadow-md flex items-center justify-center transition-all transform active:scale-95 shrink-0 cursor-pointer"
                                                 title="Send message"
+                                                aria-label="Send message"
                                             >
                                                 <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
@@ -950,7 +1407,7 @@ watch(() => props.activeConversation?.id, () => {
                                             </svg>
                                             <span>Conversation Info</span>
                                         </h3>
-                                        <button @click="showInfoPanel = false" class="text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-cream-300 transition">
+                                        <button @click="showInfoPanel = false" class="text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-cream-300 transition cursor-pointer" aria-label="Close conversation information">
                                             <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                                             </svg>
@@ -1050,6 +1507,7 @@ watch(() => props.activeConversation?.id, () => {
                                                     <img 
                                                         v-if="file.type === 'image'" 
                                                         :src="file.url" 
+                                                        alt="Attachment"
                                                         class="size-14 rounded-lg object-cover mb-1 group-hover:scale-105 transition" 
                                                     />
                                                     <svg v-else class="size-7 text-forest-800 mb-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -1079,7 +1537,8 @@ watch(() => props.activeConversation?.id, () => {
                             </p>
                             <button
                                 @click="showNewChatModal = true"
-                                class="inline-flex items-center px-5 py-2.5 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl shadow-xs transition transform active:scale-95"
+                                class="inline-flex items-center px-5 py-2.5 bg-forest-900 hover:bg-forest-950 text-white text-sm font-semibold rounded-xl shadow-xs transition transform active:scale-95 cursor-pointer"
+                                aria-label="Start new conversation"
                             >
                                 <svg class="size-4 me-2" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -1098,6 +1557,9 @@ watch(() => props.activeConversation?.id, () => {
         <div 
             v-if="showNewChatModal"
             class="fixed inset-0 z-50 overflow-y-auto bg-gray-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="New chat modal"
         >
             <div class="bg-cream-200 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-cream-500/60 flex flex-col max-h-[85vh]">
                 <!-- Modal Header & Tabs -->
@@ -1106,7 +1568,7 @@ watch(() => props.activeConversation?.id, () => {
                         <h3 class="font-bold text-base text-gray-900">
                             {{ newChatType === 'group' ? 'Create Group Chat' : 'New Direct Message' }}
                         </h3>
-                        <button @click="showNewChatModal = false" class="text-gray-500 hover:text-gray-700 p-1">
+                        <button @click="showNewChatModal = false" class="text-gray-500 hover:text-gray-700 p-1 cursor-pointer" aria-label="Close dialog">
                             <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                             </svg>
@@ -1117,14 +1579,14 @@ watch(() => props.activeConversation?.id, () => {
                     <div class="flex p-1 bg-cream-300/80 rounded-xl space-x-1">
                         <button
                             @click="newChatType = 'direct'"
-                            class="flex-1 py-1.5 text-xs font-semibold rounded-lg transition"
+                            class="flex-1 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer"
                             :class="newChatType === 'direct' ? 'bg-cream-100 text-forest-900 font-bold shadow-xs' : 'text-gray-600 hover:text-gray-900'"
                         >
                             Direct Message
                         </button>
                         <button
                             @click="newChatType = 'group'"
-                            class="flex-1 py-1.5 text-xs font-semibold rounded-lg transition"
+                            class="flex-1 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer"
                             :class="newChatType === 'group' ? 'bg-cream-100 text-forest-900 font-bold shadow-xs' : 'text-gray-600 hover:text-gray-900'"
                         >
                             New Group Chat
@@ -1138,9 +1600,11 @@ watch(() => props.activeConversation?.id, () => {
                         <div class="relative">
                             <input
                                 v-model="newChatSearch"
+                                @input="onContactSearchInput"
                                 type="text"
                                 placeholder="Type a contact's name or email..."
                                 class="w-full pl-9 pr-4 py-2 bg-[#fffef7] text-gray-900 text-sm border border-cream-500/60 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl transition"
+                                aria-label="Search contacts"
                             />
                             <svg class="size-4 text-gray-400 absolute left-3 top-2.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -1149,12 +1613,21 @@ watch(() => props.activeConversation?.id, () => {
                     </div>
 
                     <div class="overflow-y-auto p-2 divide-y divide-cream-500/20 flex-1 min-h-[220px]">
-                        <template v-if="filteredUsers.length > 0">
+                        <!-- Loading State -->
+                        <div v-if="isLoadingContacts" class="p-8 text-center text-forest-800 flex flex-col items-center justify-center">
+                            <svg class="size-6 animate-spin text-forest-700 mb-2" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span class="text-xs font-semibold">Searching contacts...</span>
+                        </div>
+
+                        <template v-else-if="contacts.length > 0">
                             <button
-                                v-for="user in filteredUsers"
+                                v-for="user in contacts"
                                 :key="user.id"
                                 @click="startDirectChat(user.id)"
-                                class="w-full flex items-center p-3 hover:bg-cream-300/60 rounded-xl transition text-left group"
+                                class="w-full flex items-center p-3 hover:bg-cream-300/60 rounded-xl transition text-left group cursor-pointer"
                             >
                                 <div class="relative me-3 shrink-0">
                                     <img
@@ -1180,7 +1653,7 @@ watch(() => props.activeConversation?.id, () => {
                         </template>
 
                         <div v-else class="p-8 text-center text-gray-400 text-sm">
-                            No contacts match "{{ newChatSearch }}"
+                            {{ newChatSearch.trim() ? `No contacts match "${newChatSearch}"` : 'No contacts available' }}
                         </div>
                     </div>
                 </template>
@@ -1189,8 +1662,9 @@ watch(() => props.activeConversation?.id, () => {
                 <template v-else>
                     <div class="p-4 border-b border-cream-500/40 bg-cream-100/50 space-y-3">
                         <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Group Name</label>
+                            <label for="group-chat-name" class="block text-xs font-semibold text-gray-700 mb-1">Group Name</label>
                             <input
+                                id="group-chat-name"
                                 v-model="groupForm.title"
                                 type="text"
                                 placeholder="e.g. Project Alpha, Marketing Team"
@@ -1203,9 +1677,11 @@ watch(() => props.activeConversation?.id, () => {
                             <div class="relative">
                                 <input
                                     v-model="newChatSearch"
+                                    @input="onContactSearchInput"
                                     type="text"
                                     placeholder="Search contacts..."
                                     class="w-full pl-9 pr-4 py-2 bg-[#fffef7] text-gray-900 text-sm border border-cream-500/60 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl transition"
+                                    aria-label="Search contacts for group"
                                 />
                                 <svg class="size-4 text-gray-400 absolute left-3 top-2.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -1220,8 +1696,8 @@ watch(() => props.activeConversation?.id, () => {
                                 :key="userId"
                                 class="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-lime-200 text-forest-900 text-xs font-semibold rounded-full border border-forest-500/30"
                             >
-                                <span>{{ availableUsers.find(u => u.id === userId)?.name || 'User' }}</span>
-                                <button @click="toggleGroupUser(userId)" class="text-forest-700 hover:text-red-600">
+                                <span>{{ selectedGroupUsers.find(u => u.id === userId)?.name || contacts.find(u => u.id === userId)?.name || 'User' }}</span>
+                                <button type="button" @click="removeGroupUserById(userId)" class="text-forest-700 hover:text-red-600 cursor-pointer" aria-label="Remove member">
                                     <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                                     </svg>
@@ -1232,17 +1708,27 @@ watch(() => props.activeConversation?.id, () => {
 
                     <!-- Member Selection List -->
                     <div class="overflow-y-auto p-2 divide-y divide-cream-500/20 flex-1 min-h-[180px]">
-                        <template v-if="filteredUsers.length > 0">
+                        <!-- Loading State -->
+                        <div v-if="isLoadingContacts" class="p-8 text-center text-forest-800 flex flex-col items-center justify-center">
+                            <svg class="size-6 animate-spin text-forest-700 mb-2" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span class="text-xs font-semibold">Searching contacts...</span>
+                        </div>
+
+                        <template v-else-if="contacts.length > 0">
                             <div
-                                v-for="user in filteredUsers"
+                                v-for="user in contacts"
                                 :key="user.id"
-                                @click="toggleGroupUser(user.id)"
+                                @click="toggleGroupUser(user)"
                                 class="w-full flex items-center p-3 hover:bg-cream-300/60 rounded-xl transition text-left cursor-pointer group"
                             >
                                 <input
                                     type="checkbox"
                                     :checked="groupForm.user_ids.includes(user.id)"
                                     class="size-4 text-forest-900 rounded-md border-cream-500 me-3 focus:ring-forest-600 pointer-events-none"
+                                    :aria-label="`Select ${user.name}`"
                                 />
                                 <div class="relative me-3 shrink-0">
                                     <img
@@ -1263,8 +1749,9 @@ watch(() => props.activeConversation?.id, () => {
                                 </div>
                             </div>
                         </template>
+
                         <div v-else class="p-8 text-center text-gray-400 text-sm">
-                            No contacts match "{{ newChatSearch }}"
+                            {{ newChatSearch.trim() ? `No contacts match "${newChatSearch}"` : 'No contacts available' }}
                         </div>
                     </div>
 
@@ -1273,7 +1760,7 @@ watch(() => props.activeConversation?.id, () => {
                         <button
                             @click="createGroupChat"
                             :disabled="!groupForm.title.trim() || groupForm.user_ids.length === 0 || groupForm.processing"
-                            class="px-5 py-2 bg-forest-900 hover:bg-forest-950 disabled:opacity-40 text-white text-xs font-semibold rounded-xl shadow-xs transition"
+                            class="px-5 py-2 bg-forest-900 hover:bg-forest-950 disabled:opacity-40 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
                         >
                             {{ groupForm.processing ? 'Creating Group...' : 'Create Group Chat' }}
                         </button>

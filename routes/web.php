@@ -107,7 +107,9 @@ Route::middleware([
 
     // Chat / Messenger Routes
     Route::get('/chat', [ChatController::class, 'index'])->name('chat.index');
+    Route::get('/chat/contacts', [ChatController::class, 'searchContacts'])->name('chat.contacts');
     Route::get('/chat/unread-count', [ChatController::class, 'unreadCount'])->name('chat.unread-count');
+    Route::get('/chat/{conversation}/messages', [ChatController::class, 'messages'])->name('chat.messages');
     Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])->name('chat.download-attachment');
     Route::post('/chat/direct', [ChatController::class, 'startDirect'])->name('chat.start-direct');
     Route::post('/chat/group', [ChatController::class, 'createGroup'])->name('chat.create-group');
