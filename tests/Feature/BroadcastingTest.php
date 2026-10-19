@@ -16,7 +16,7 @@ class BroadcastingTest extends TestCase
     {
         Event::fake([MessageSent::class]);
 
-        $user = User::factory()->create();
+        $user = User::factory()->create(['is_admin' => true]);
 
         $this->actingAs($user)
             ->get(route('test-broadcast', ['message' => 'Testing Reverb WebSocket']))

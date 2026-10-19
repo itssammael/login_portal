@@ -45,12 +45,12 @@ Route::middleware([
 
     // Account Binding / Connected Systems Routes
     Route::get('/connected-systems', [ConnectedSystemsController::class, 'index'])->name('sso.connected-systems');
-    Route::post('/connected-systems/{clientId}/bind', [ConnectedSystemsController::class, 'bind'])->name('sso.connected-systems.bind');
+    Route::post('/connected-systems/{clientId}/bind', [ConnectedSystemsController::class, 'bind'])->middleware('throttle:10,1')->name('sso.connected-systems.bind');
     Route::delete('/connected-systems/{clientId}/unbind', [ConnectedSystemsController::class, 'unbind'])->name('sso.connected-systems.unbind');
 
     // Settings SSO Aliases
     Route::get('/settings/sso', [ConnectedSystemsController::class, 'index'])->name('settings.sso');
-    Route::post('/settings/sso/{clientId}/bind', [ConnectedSystemsController::class, 'bind'])->name('settings.sso.bind');
+    Route::post('/settings/sso/{clientId}/bind', [ConnectedSystemsController::class, 'bind'])->middleware('throttle:10,1')->name('settings.sso.bind');
     Route::delete('/settings/sso/{clientId}/unbind', [ConnectedSystemsController::class, 'unbind'])->name('settings.sso.unbind');
 
     Route::get('/dashboard', function (Request $request) {

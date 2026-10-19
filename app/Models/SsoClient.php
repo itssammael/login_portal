@@ -160,11 +160,8 @@ class SsoClient extends Model
      */
     public static function findClient(string $identifier): ?self
     {
-        return static::where('client_id', $identifier)
-            ->orWhere('name', $identifier)
-            ->orWhere('client_id', 'LIKE', $identifier.'%')
-            ->orWhere('name', 'LIKE', '%'.$identifier.'%')
-            ->first();
+        return static::where('client_id', $identifier)->first()
+            ?? static::where('name', $identifier)->first();
     }
 
     /**

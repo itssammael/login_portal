@@ -145,8 +145,13 @@ return [
     */
 
     'passkeys' => [
-        'relying_party_id' => parse_url(config('app.url'), PHP_URL_HOST),
-        'allowed_origins' => [config('app.url')],
+        'relying_party_id' => env('PASSKEY_RP_ID', parse_url(config('app.url'), PHP_URL_HOST)),
+        'allowed_origins' => array_values(array_filter(array_unique([
+            config('app.url'),
+            env('APP_TUNNEL_URL'),
+            env('PUSHER_APP_TUNNEL_URL') ? 'https://'.env('PUSHER_APP_TUNNEL_URL') : null,
+            ...explode(',', (string) env('PASSKEY_ALLOWED_ORIGINS', '')),
+        ]))),
         'timeout' => 60000,
     ],
 

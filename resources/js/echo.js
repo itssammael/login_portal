@@ -9,18 +9,40 @@ window.axios.defaults.withCredentials = true;
 
 const broadcaster = import.meta.env.VITE_BROADCAST_CONNECTION || (import.meta.env.VITE_REVERB_APP_KEY ? 'reverb' : 'pusher');
 const appKey = import.meta.env.VITE_REVERB_APP_KEY || import.meta.env.VITE_PUSHER_APP_KEY;
-const rawHost = import.meta.env.VITE_REVERB_HOST || import.meta.env.VITE_PUSHER_HOST || window.location.hostname;
+
+// Detect if current session is loaded over HTTPS (e.g. Cloudflare Tunnel or reverse proxy)
+const isPageHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+const configuredScheme = import.meta.env.VITE_REVERB_SCHEME || import.meta.env.VITE_PUSHER_SCHEME || 'http';
+const isTls = isPageHttps || configuredScheme === 'https';
+
+// Tunneling configuration support
+const isTunneling = (
+    import.meta.env.VITE_PUSHER_APP_TUNNELING === 'true' ||
+    import.meta.env.PUSHER_APP_TUNNELING === 'true'
+);
+const tunnelUrl = import.meta.env.VITE_PUSHER_APP_TUNNEL_URL || import.meta.env.PUSHER_APP_TUNNEL_URL;
+
+let rawHost;
+if (isTunneling && tunnelUrl) {
+    rawHost = tunnelUrl.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0];
+} else if (isPageHttps) {
+    // When accessing via Cloudflare Tunnel, default to current public hostname
+    rawHost = window.location.hostname;
+} else {
+    rawHost = import.meta.env.VITE_REVERB_HOST || import.meta.env.VITE_PUSHER_HOST || window.location.hostname;
+}
+
 const wsHost = rawHost === 'localhost' ? '127.0.0.1' : rawHost;
-const port = Number(import.meta.env.VITE_REVERB_PORT || import.meta.env.VITE_PUSHER_PORT || 8080);
-const scheme = import.meta.env.VITE_REVERB_SCHEME || import.meta.env.VITE_PUSHER_SCHEME || 'http';
-const isTls = scheme === 'https';
+const defaultTlsPort = (typeof window !== 'undefined' && window.location.port) ? Number(window.location.port) : 443;
+const defaultPlainPort = 8080;
+const port = Number(import.meta.env.VITE_REVERB_PORT || import.meta.env.VITE_PUSHER_PORT || (isTls ? defaultTlsPort : defaultPlainPort));
 
 window.Echo = new Echo({
     broadcaster: broadcaster,
     key: appKey,
     wsHost: wsHost,
-    wsPort: port,
-    wssPort: port,
+    wsPort: isTls ? (Number(import.meta.env.VITE_REVERB_PORT) || defaultTlsPort) : port,
+    wssPort: isTls ? (Number(import.meta.env.VITE_REVERB_PORT) || defaultTlsPort) : 443,
     forceTLS: isTls,
     cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER || 'mt1',
     enabledTransports: ['ws', 'wss'],
@@ -31,13 +53,13 @@ window.Echo = new Echo({
                     socket_id: socketId,
                     channel_name: channel.name,
                 })
-                .then((response) => {
-                    callback(null, response.data);
-                })
-                .catch((error) => {
-                    console.error('[Echo Authorizer Error]', error);
-                    callback(error);
-                });
+                    .then((response) => {
+                        callback(null, response.data);
+                    })
+                    .catch((error) => {
+                        console.error('[Echo Authorizer Error]', error);
+                        callback(error);
+                    });
             },
         };
     },

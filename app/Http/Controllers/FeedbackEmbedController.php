@@ -61,7 +61,7 @@ class FeedbackEmbedController extends Controller
         $resolvedSchema = $schemaValidator->resolveSchemaForEvent($feedback->schema, $event);
 
         // Build Content-Security-Policy frame-ancestors directive
-        $csp = $this->buildContentSecurityPolicy($embed->allowed_origins);
+        $csp = $this->buildContentSecurityPolicy($embed->allowed_origins, $request->isSecure());
 
         $inertiaResponse = Inertia::render('Feedback/Embed', [
             'event' => [
@@ -196,26 +196,32 @@ class FeedbackEmbedController extends Controller
      *
      * @param  array<int, string>|null  $allowedOrigins
      */
-    protected function buildContentSecurityPolicy(?array $allowedOrigins): string
+    protected function buildContentSecurityPolicy(?array $allowedOrigins, bool $isSecure = false): string
     {
-        if (empty($allowedOrigins)) {
-            return "frame-ancestors 'self';";
-        }
+        $directives = [];
 
-        $sanitizedOrigins = [];
-        foreach ($allowedOrigins as $origin) {
-            $origin = trim((string) $origin);
-            if (preg_match('/^https?:\/\/[a-zA-Z0-9.-]+(?::[1-9][0-9]{0,4})?$/', $origin)) {
-                $sanitizedOrigins[] = $origin;
+        if (empty($allowedOrigins)) {
+            $directives[] = "frame-ancestors 'self'";
+        } else {
+            $sanitizedOrigins = [];
+            foreach ($allowedOrigins as $origin) {
+                $origin = trim((string) $origin);
+                if (preg_match('/^https?:\/\/(?:\*\.)?[a-zA-Z0-9.-]+(?::[1-9][0-9]{0,4})?$/', $origin)) {
+                    $sanitizedOrigins[] = $origin;
+                }
+            }
+
+            if (empty($sanitizedOrigins)) {
+                $directives[] = "frame-ancestors 'self'";
+            } else {
+                $directives[] = "frame-ancestors 'self' ".implode(' ', array_unique($sanitizedOrigins));
             }
         }
 
-        if (empty($sanitizedOrigins)) {
-            return "frame-ancestors 'self';";
+        if ($isSecure) {
+            $directives[] = 'upgrade-insecure-requests';
         }
 
-        $originList = implode(' ', array_unique($sanitizedOrigins));
-
-        return "frame-ancestors 'self' {$originList};";
+        return implode('; ', $directives).';';
     }
 }

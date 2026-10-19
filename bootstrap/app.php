@@ -4,6 +4,7 @@ use App\Http\Middleware\CheckBanned;
 use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\SetSecurityHeaders;
+use App\Http\Middleware\TrustCloudflareTunnel;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -19,13 +20,26 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->trustProxies(at: '*');
+        $trustedProxies = env('TRUSTED_PROXIES');
+        if ($trustedProxies === '*') {
+            $middleware->trustProxies(at: '*');
+        } elseif (! empty($trustedProxies)) {
+            $middleware->trustProxies(at: array_filter(array_map('trim', explode(',', (string) $trustedProxies))));
+        } else {
+            $middleware->trustProxies(at: ['127.0.0.1', '::1']);
+        }
 
-        $middleware->web(append: [
+        $middleware->web(prepend: [
+            TrustCloudflareTunnel::class,
+        ], append: [
             SetSecurityHeaders::class,
             HandleInertiaRequests::class,
             AddLinkHeadersForPreloadedAssets::class,
             CheckBanned::class,
+        ]);
+
+        $middleware->api(prepend: [
+            TrustCloudflareTunnel::class,
         ]);
 
         $middleware->validateCsrfTokens(except: [
@@ -33,8 +47,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'sso/token',
         ]);
 
-        $middleware->alias([
-            'admin' => EnsureUserIsAdmin::class,
+        $middleware->alias(['admin' => EnsureUserIsAdmin::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
