@@ -110,11 +110,17 @@ Route::middleware([
     Route::get('/chat/contacts', [ChatController::class, 'searchContacts'])->name('chat.contacts');
     Route::get('/chat/unread-count', [ChatController::class, 'unreadCount'])->name('chat.unread-count');
     Route::get('/chat/{conversation}/messages', [ChatController::class, 'messages'])->name('chat.messages');
+    Route::get('/chat/{conversation}/search', [ChatController::class, 'searchMessages'])->name('chat.search-messages');
     Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])->name('chat.download-attachment');
     Route::post('/chat/direct', [ChatController::class, 'startDirect'])->name('chat.start-direct');
     Route::post('/chat/group', [ChatController::class, 'createGroup'])->name('chat.create-group');
     Route::post('/chat/{conversation}/messages', [ChatController::class, 'sendMessage'])->middleware('throttle:60,1')->name('chat.send-message');
+    Route::patch('/chat/messages/{message}', [ChatController::class, 'editMessage'])->name('chat.edit-message');
     Route::post('/chat/{conversation}/read', [ChatController::class, 'markAsRead'])->name('chat.mark-read');
+    Route::post('/chat/mark-all-read', [ChatController::class, 'markAllAsRead'])->name('chat.mark-all-read');
+    Route::post('/chat/{conversation}/pin', [ChatController::class, 'togglePin'])->name('chat.toggle-pin');
+    Route::post('/chat/{conversation}/mute', [ChatController::class, 'toggleMute'])->name('chat.toggle-mute');
+    Route::post('/chat/{conversation}/typing', [ChatController::class, 'typing'])->name('chat.typing');
     Route::post('/chat/messages/{message}/reaction', [ChatController::class, 'toggleReaction'])->name('chat.reaction');
     Route::delete('/chat/messages/{message}', [ChatController::class, 'deleteMessage'])->name('chat.delete-message');
 

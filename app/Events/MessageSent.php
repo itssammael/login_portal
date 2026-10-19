@@ -43,8 +43,12 @@ class MessageSent implements ShouldBroadcastNow
             foreach ($participantIds as $participantId) {
                 $channels[] = new PrivateChannel('App.Models.User.'.$participantId);
             }
-        } elseif (auth()->check()) {
-            $channels[] = new PrivateChannel('App.Models.User.'.auth()->id());
+        } else {
+            $userId = (app()->bound('auth') && auth()->check())
+                ? auth()->id()
+                : (is_array($this->messageData) ? ($this->messageData['sender_id'] ?? 0) : 0);
+
+            $channels[] = new PrivateChannel('App.Models.User.'.$userId);
         }
 
         return $channels;

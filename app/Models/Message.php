@@ -44,12 +44,14 @@ class Message extends Model
     protected $fillable = [
         'conversation_id',
         'sender_id',
+        'reply_to_id',
         'body',
         'type',
         'attachment_path',
         'attachment_name',
         'attachment_type',
         'status',
+        'edited_at',
         'is_deleted',
     ];
 
@@ -71,6 +73,7 @@ class Message extends Model
     {
         return [
             'status' => 'integer',
+            'edited_at' => 'datetime',
             'is_deleted' => 'boolean',
         ];
     }
@@ -105,6 +108,16 @@ class Message extends Model
     public function sender(): BelongsTo
     {
         return $this->belongsTo(User::class, 'sender_id');
+    }
+
+    /**
+     * The message this message is replying to.
+     *
+     * @return BelongsTo<Message, Message>
+     */
+    public function replyTo(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'reply_to_id');
     }
 
     /**

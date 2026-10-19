@@ -19,7 +19,7 @@ class MessageSentEventTest extends TestCase
         $this->assertEquals('message.sent', $event->broadcastAs());
         $channels = $event->broadcastOn();
         $this->assertCount(1, $channels);
-        $this->assertEquals('public-chat', $channels[0]->name);
+        $this->assertEquals('private-App.Models.User.5', $channels[0]->name);
 
         $data = $event->broadcastWith();
         $this->assertEquals('Hello world', $data['message']);

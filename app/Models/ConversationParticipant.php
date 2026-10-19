@@ -20,6 +20,7 @@ class ConversationParticipant extends Model
         'user_id',
         'last_read_at',
         'is_muted',
+        'is_pinned',
     ];
 
     /**
@@ -32,6 +33,7 @@ class ConversationParticipant extends Model
         return [
             'last_read_at' => 'datetime',
             'is_muted' => 'boolean',
+            'is_pinned' => 'boolean',
         ];
     }
 

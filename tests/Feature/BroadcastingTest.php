@@ -37,6 +37,6 @@ class BroadcastingTest extends TestCase
         $event = new MessageSent('Hello world');
 
         $this->assertEquals('message.sent', $event->broadcastAs());
-        $this->assertEquals('public-chat', $event->broadcastOn()[0]->name);
+        $this->assertEquals('private-App.Models.User.0', $event->broadcastOn()[0]->name);
     }
 }

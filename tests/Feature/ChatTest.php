@@ -637,4 +637,271 @@ class ChatTest extends TestCase
             'attachment_path' => $filePath,
         ]);
     }
+
+    public function test_user_can_pin_and_unpin_conversation(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        $p1 = ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id, 'is_pinned' => false]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id, 'is_pinned' => false]);
+
+        $response = $this->actingAs($user1)->post(route('chat.toggle-pin', $conversation));
+        $response->assertSessionHasNoErrors();
+        $this->assertTrue($p1->fresh()->is_pinned);
+
+        // Toggle again to unpin
+        $this->actingAs($user1)->post(route('chat.toggle-pin', $conversation));
+        $this->assertFalse($p1->fresh()->is_pinned);
+    }
+
+    public function test_user_can_mute_and_unmute_conversation(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        $p1 = ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id, 'is_muted' => false]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id, 'is_muted' => false]);
+
+        $response = $this->actingAs($user1)->post(route('chat.toggle-mute', $conversation));
+        $response->assertSessionHasNoErrors();
+        $this->assertTrue($p1->fresh()->is_muted);
+
+        // Toggle again to unmute
+        $this->actingAs($user1)->post(route('chat.toggle-mute', $conversation));
+        $this->assertFalse($p1->fresh()->is_muted);
+    }
+
+    public function test_user_can_mark_all_conversations_as_read(): void
+    {
+        $user = User::factory()->create();
+        $conv1 = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        $conv2 = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+
+        $p1 = ConversationParticipant::create(['conversation_id' => $conv1->id, 'user_id' => $user->id, 'last_read_at' => now()->subDay()]);
+        $p2 = ConversationParticipant::create(['conversation_id' => $conv2->id, 'user_id' => $user->id, 'last_read_at' => null]);
+
+        $response = $this->actingAs($user)->post(route('chat.mark-all-read'));
+        $response->assertSessionHasNoErrors();
+
+        $this->assertNotNull($p1->fresh()->last_read_at);
+        $this->assertNotNull($p2->fresh()->last_read_at);
+        $this->assertTrue($p1->fresh()->last_read_at->isToday());
+        $this->assertTrue($p2->fresh()->last_read_at->isToday());
+    }
+
+    public function test_participant_can_mark_conversation_as_read_and_broadcasts(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $user = User::factory()->create();
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        $participant = ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $user->id,
+            'last_read_at' => null,
+        ]);
+
+        $response = $this->actingAs($user)->post(route('chat.mark-read', $conversation));
+        $response->assertSessionHasNoErrors();
+
+        $this->assertNotNull($participant->fresh()->last_read_at);
+
+        Event::assertDispatched(MessageSent::class, function ($event) use ($conversation, $user) {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'read'
+                && $event->messageData['user_id'] === $user->id;
+        });
+    }
+
+    public function test_non_participant_cannot_mark_conversation_as_read(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $user = User::factory()->create();
+        $stranger = User::factory()->create();
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $user->id,
+            'last_read_at' => null,
+        ]);
+
+        $response = $this->actingAs($stranger)->post(route('chat.mark-read', $conversation));
+        $response->assertStatus(403);
+
+        Event::assertNotDispatched(MessageSent::class);
+    }
+
+    public function test_user_can_send_reply_to_message(): void
+    {
+        $sender = User::factory()->create();
+        $recipient = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $recipient->id]);
+
+        $originalMsg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $recipient->id,
+            'body' => 'Original question',
+            'type' => 'text',
+        ]);
+
+        $response = $this->actingAs($sender)->post(route('chat.send-message', $conversation), [
+            'body' => 'This is my reply',
+            'reply_to_id' => $originalMsg->id,
+        ]);
+        $response->assertSessionHasNoErrors();
+
+        $replyMsg = Message::where('conversation_id', $conversation->id)->where('reply_to_id', $originalMsg->id)->first();
+        $this->assertNotNull($replyMsg);
+        $this->assertEquals($originalMsg->id, $replyMsg->reply_to_id);
+    }
+
+    public function test_user_can_edit_own_message_within_15_minutes(): void
+    {
+        $sender = User::factory()->create();
+        $recipient = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $recipient->id]);
+
+        $msg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => 'Initial text',
+            'type' => 'text',
+            'created_at' => now()->subMinutes(5),
+        ]);
+
+        $response = $this->actingAs($sender)->patch(route('chat.edit-message', $msg), [
+            'body' => 'Corrected text',
+        ]);
+        $response->assertSessionHasNoErrors();
+
+        $fresh = $msg->fresh();
+        $this->assertNotNull($fresh->edited_at);
+        $this->assertStringStartsWith('ENC::', $fresh->body);
+    }
+
+    public function test_user_cannot_edit_message_after_15_minutes(): void
+    {
+        $sender = User::factory()->create();
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+
+        $msg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => 'Old message text',
+            'type' => 'text',
+        ]);
+        $msg->forceFill(['created_at' => now()->subMinutes(20)])->saveQuietly();
+
+        $response = $this->actingAs($sender)->patch(route('chat.edit-message', $msg), [
+            'body' => 'Trying to edit after 20 mins',
+        ]);
+        $response->assertStatus(403);
+    }
+
+    public function test_user_cannot_edit_another_users_message(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        $msg = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user1->id,
+            'body' => 'User1 text',
+            'type' => 'text',
+            'created_at' => now(),
+        ]);
+
+        $response = $this->actingAs($user2)->patch(route('chat.edit-message', $msg), [
+            'body' => 'Malicious edit',
+        ]);
+        $response->assertStatus(403);
+    }
+
+    public function test_typing_endpoint_broadcasts_to_conversation_participants(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $recipient = User::factory()->create(['name' => 'Bob']);
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $recipient->id]);
+
+        $response = $this->actingAs($sender)->post(route('chat.typing', $conversation));
+        $response->assertOk();
+        $response->assertJson(['status' => 'ok']);
+
+        Event::assertDispatched(MessageSent::class, function (MessageSent $event) use ($sender, $conversation): bool {
+            return $event->action === 'typing'
+                && $event->conversationId === $conversation->id
+                && ($event->messageData['user_id'] ?? null) === $sender->id;
+        });
+    }
+
+    public function test_search_messages_in_active_conversation_returns_decrypted_matches(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $recipient = User::factory()->create(['name' => 'Bob']);
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $recipient->id]);
+
+        $senderKey = $sender->getOrCreateEncryptionKey();
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => 'Secret strawberry project update',
+            'type' => 'text',
+        ]);
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $sender->id,
+            'body' => 'Unrelated blueberry notice',
+            'type' => 'text',
+        ]);
+
+        $response = $this->actingAs($recipient)->getJson(route('chat.search-messages', [
+            'conversation' => $conversation->id,
+            'q' => 'strawberry',
+        ]));
+
+        $response->assertOk();
+        $data = $response->json();
+        $this->assertEquals(1, $data['count']);
+        $this->assertStringContainsString('strawberry', $data['results'][0]['body']);
+    }
+
+    public function test_search_messages_forbids_non_participants(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+        $outsider = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        $response = $this->actingAs($outsider)->getJson(route('chat.search-messages', [
+            'conversation' => $conversation->id,
+            'q' => 'anything',
+        ]));
+
+        $response->assertStatus(403);
+    }
 }
