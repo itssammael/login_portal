@@ -35,14 +35,16 @@ if (isTunneling && tunnelUrl) {
 const wsHost = rawHost === 'localhost' ? '127.0.0.1' : rawHost;
 const defaultTlsPort = (typeof window !== 'undefined' && window.location.port) ? Number(window.location.port) : 443;
 const defaultPlainPort = 8080;
-const port = Number(import.meta.env.VITE_REVERB_PORT || import.meta.env.VITE_PUSHER_PORT || (isTls ? defaultTlsPort : defaultPlainPort));
+const configuredPort = Number(import.meta.env.VITE_REVERB_PORT || import.meta.env.VITE_PUSHER_PORT);
+const resolvedTlsPort = (configuredPort && configuredPort !== 8080) ? configuredPort : defaultTlsPort;
+const resolvedPlainPort = configuredPort || defaultPlainPort;
 
 window.Echo = new Echo({
     broadcaster: broadcaster,
     key: appKey,
     wsHost: wsHost,
-    wsPort: isTls ? (Number(import.meta.env.VITE_REVERB_PORT) || defaultTlsPort) : port,
-    wssPort: isTls ? (Number(import.meta.env.VITE_REVERB_PORT) || defaultTlsPort) : 443,
+    wsPort: isTls ? resolvedTlsPort : resolvedPlainPort,
+    wssPort: resolvedTlsPort,
     forceTLS: isTls,
     cluster: import.meta.env.VITE_PUSHER_APP_CLUSTER || 'mt1',
     enabledTransports: ['ws', 'wss'],

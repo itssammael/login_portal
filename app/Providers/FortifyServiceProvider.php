@@ -6,8 +6,10 @@ use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
 use App\Actions\Fortify\UpdateUserPassword;
 use App\Actions\Fortify\UpdateUserProfileInformation;
+use App\Models\User;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
@@ -34,6 +36,37 @@ class FortifyServiceProvider extends ServiceProvider
         Fortify::updateUserPasswordsUsing(UpdateUserPassword::class);
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
         Fortify::redirectUserForTwoFactorAuthenticationUsing(RedirectIfTwoFactorAuthenticatable::class);
+
+        Fortify::authenticateUsing(function (Request $request) {
+            $login = trim((string) $request->input(Fortify::username()));
+
+            if ($login === '') {
+                return null;
+            }
+
+            $lowerLogin = Str::lower($login);
+
+            $user = User::where(function ($query) use ($lowerLogin) {
+                $query->whereRaw('LOWER(email) = ?', [$lowerLogin])
+                    ->orWhere(function ($q) use ($lowerLogin) {
+                        $q->whereNotNull('username')
+                            ->where('username', '!=', '')
+                            ->whereRaw('LOWER(username) = ?', [$lowerLogin]);
+                    });
+            })->first();
+
+            if ($user && Hash::check($request->password, $user->password)) {
+                if (Hash::needsRehash($user->password)) {
+                    $user->forceFill([
+                        'password' => Hash::make($request->password),
+                    ])->save();
+                }
+
+                return $user;
+            }
+
+            return null;
+        });
 
         RateLimiter::for('login', function (Request $request) {
             $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());

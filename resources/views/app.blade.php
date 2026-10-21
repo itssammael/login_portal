@@ -4,6 +4,18 @@
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="csrf-token" content="{{ csrf_token() }}">
+        <script>
+            // Suppress third-party browser extension message channel errors from cluttering the console
+            window.addEventListener('unhandledrejection', function (event) {
+                var reason = event && (event.reason ? (event.reason.message || event.reason) : '');
+                if (typeof reason === 'string' && (
+                    reason.indexOf('message channel closed before a response was received') !== -1 ||
+                    reason.indexOf('A listener indicated an asynchronous response by returning true') !== -1
+                )) {
+                    event.preventDefault();
+                }
+            });
+        </script>
         @if (request()->isSecure())
             <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
         @endif

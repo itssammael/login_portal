@@ -14,6 +14,7 @@ use App\Services\MessageEncryptionService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -70,6 +71,7 @@ class AdminDashboardController extends Controller
             $search = $request->input('search');
             $query->where(function ($q) use ($search): void {
                 $q->where('name', 'like', "%{$search}%")
+                    ->orWhere('username', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%")
                     ->orWhere('employee_number', 'like', "%{$search}%")
                     ->orWhere('position', 'like', "%{$search}%");
@@ -116,6 +118,7 @@ class AdminDashboardController extends Controller
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'username' => ['nullable', 'string', 'max:255', 'unique:users,username'],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'role_id' => ['nullable', 'exists:roles,id'],
@@ -128,8 +131,13 @@ class AdminDashboardController extends Controller
         $role = ! empty($validated['role_id']) ? Role::find($validated['role_id']) : null;
         $isAdmin = (bool) ($validated['is_admin'] ?? false) || ($role && ($role->slug === 'admin' || $role->hasPermission('access_admin')));
 
+        $username = isset($validated['username']) && trim((string) $validated['username']) !== ''
+            ? trim((string) $validated['username'])
+            : null;
+
         $newUser = new User([
             'name' => $validated['name'],
+            'username' => $username,
             'email' => $validated['email'],
             'password' => Hash::make($validated['password']),
             'role_id' => $validated['role_id'] ?? null,
@@ -148,6 +156,7 @@ class AdminDashboardController extends Controller
             'target_id' => $newUser->id,
             'details' => [
                 'name' => $newUser->name,
+                'username' => $newUser->username,
                 'email' => $newUser->email,
                 'role' => $role?->name ?? 'User',
                 'is_admin' => $newUser->is_admin,
@@ -169,6 +178,7 @@ class AdminDashboardController extends Controller
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'username' => ['nullable', 'string', 'max:255', Rule::unique('users', 'username')->ignore($user->id)],
             'email' => ['required', 'string', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
             'password' => ['nullable', 'string', 'min:8', 'confirmed'],
             'role_id' => ['nullable', 'exists:roles,id'],
@@ -191,7 +201,12 @@ class AdminDashboardController extends Controller
             return back()->with('error', 'You cannot remove your own administrator status.');
         }
 
+        $username = isset($validated['username']) && trim((string) $validated['username']) !== ''
+            ? trim((string) $validated['username'])
+            : null;
+
         $user->name = $validated['name'];
+        $user->username = $username;
         $user->email = $validated['email'];
         $user->role_id = $validated['role_id'] ?? null;
         $user->section_id = $validated['section_id'] ?? null;
@@ -212,6 +227,7 @@ class AdminDashboardController extends Controller
             'target_id' => $user->id,
             'details' => [
                 'name' => $user->name,
+                'username' => $user->username,
                 'email' => $user->email,
                 'role' => $role?->name ?? 'User',
                 'is_admin' => $user->is_admin,
@@ -481,11 +497,15 @@ class AdminDashboardController extends Controller
             $conversation->update(['last_message_at' => now()]);
 
             // Broadcast real-time event via Reverb
-            broadcast(new MessageSent("📢 Announcement: {$title}", $conversation->id, [
-                'id' => $messageModel->id,
-                'body' => $announcementText,
-                'sender_id' => $admin->id,
-            ], 'created'));
+            try {
+                broadcast(new MessageSent("📢 Announcement: {$title}", $conversation->id, [
+                    'id' => $messageModel->id,
+                    'body' => $announcementText,
+                    'sender_id' => $admin->id,
+                ], 'created'));
+            } catch (\Throwable $e) {
+                Log::warning('Failed to broadcast announcement event to Reverb: '.$e->getMessage());
+            }
 
             $count++;
         }

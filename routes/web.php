@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\DepartmentController;
 use App\Http\Controllers\Admin\FeedbackController;
 use App\Http\Controllers\Admin\RoleController;
+use App\Http\Controllers\Admin\SecurityController;
 use App\Http\Controllers\Admin\SsoPortalController;
 use App\Http\Controllers\Admin\SystemAppearanceController;
 use App\Http\Controllers\Admin\SystemRuleController;
@@ -166,6 +167,17 @@ Route::middleware([
         Route::delete('/sso/{sso}', [SsoPortalController::class, 'destroy'])->name('sso.destroy');
         Route::get('/appearance', [SystemAppearanceController::class, 'index'])->name('appearance.index');
         Route::post('/appearance', [SystemAppearanceController::class, 'update'])->name('appearance.update');
+
+        // Security Command Center & Self-Healing Routes
+        Route::prefix('security')->name('security.')->group(function (): void {
+            Route::get('/', [SecurityController::class, 'index'])->name('index');
+            Route::post('/block-ip', [SecurityController::class, 'blockIp'])->name('block-ip');
+            Route::delete('/unblock-ip/{blockedIp}', [SecurityController::class, 'unblockIp'])->name('unblock-ip');
+            Route::post('/resolve/{threatLog}', [SecurityController::class, 'resolveThreat'])->name('resolve');
+            Route::post('/self-heal', [SecurityController::class, 'runAuditAndHeal'])->name('self-heal');
+            Route::post('/toggle-auto-defense', [SecurityController::class, 'toggleAutoDefense'])->name('toggle-auto-defense');
+            Route::post('/clear-old-logs', [SecurityController::class, 'clearOldLogs'])->name('clear-old-logs');
+        });
 
         // Feedback Module Admin Routes
         Route::prefix('feedback')->name('feedback.')->group(function () {

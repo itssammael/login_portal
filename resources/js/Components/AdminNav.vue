@@ -108,6 +108,18 @@ onUnmounted(() => {
                 <span>Overview</span>
             </Link>
 
+            <!-- Security Command Center Tab -->
+            <Link
+                :href="route('admin.security.index')"
+                class="px-3.5 py-2 text-sm font-semibold rounded-xl transition-all whitespace-nowrap flex items-center space-x-2"
+                :class="route().current('admin.security.*') ? 'bg-[#2d6a4f] text-white shadow-xs' : 'text-emerald-100/75 hover:text-white hover:bg-forest-800/60'"
+            >
+                <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                </svg>
+                <span>Security</span>
+            </Link>
+
             <!-- Accounts Floating Dropdown -->
             <div ref="accountsRef" class="relative">
                 <button
@@ -280,6 +292,20 @@ onUnmounted(() => {
                             </svg>
                             <span class="flex-1">Chat Moderation</span>
                             <span v-if="route().current('admin.chats')" class="size-1.5 rounded-full bg-emerald-300"></span>
+                        </Link>
+
+                        <!-- Security Command Center -->
+                        <Link
+                            :href="route('admin.security.index')"
+                            @click="closeAll"
+                            class="flex items-center space-x-2.5 px-3 py-2 text-sm rounded-xl transition-all font-medium"
+                            :class="route().current('admin.security.*') ? 'bg-[#2d6a4f] text-white shadow-xs' : 'text-emerald-100/80 hover:text-white hover:bg-forest-800/70'"
+                        >
+                            <svg class="size-4 shrink-0 text-emerald-300" :class="{ 'text-white': route().current('admin.security.*') }" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                            </svg>
+                            <span class="flex-1">Security Defense</span>
+                            <span v-if="route().current('admin.security.*')" class="size-1.5 rounded-full bg-emerald-300"></span>
                         </Link>
 
                         <!-- Audit Log -->

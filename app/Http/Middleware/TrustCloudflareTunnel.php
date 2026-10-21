@@ -30,6 +30,11 @@ class TrustCloudflareTunnel
 
         // 1. Only trust CF-Connecting-IP if request came through the verified tunnel agent
         if ($isFromTunnelProxy && $hasCfHeaders) {
+            $rawXff = (string) $request->header('X-Forwarded-For');
+            if ($rawXff !== '') {
+                $request->attributes->set('cf_raw_forwarded_for', $rawXff);
+            }
+
             $cfIp = $request->header('CF-Connecting-IP');
             if ($cfIp && filter_var($cfIp, FILTER_VALIDATE_IP)) {
                 $request->server->set('REMOTE_ADDR', $cfIp);

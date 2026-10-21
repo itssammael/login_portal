@@ -232,4 +232,91 @@ class AdminUserAndDepartmentManagementTest extends TestCase
         $response->assertSessionHas('error');
         $this->assertTrue($admin->fresh()->is_admin);
     }
+
+    public function test_admin_can_create_user_with_username(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        $response = $this->actingAs($admin)->post(route('admin.users.store'), [
+            'name' => 'Maria Santos',
+            'username' => 'msantos',
+            'email' => 'maria@lgunet.gov.ph',
+            'password' => 'Password123!',
+            'password_confirmation' => 'Password123!',
+        ]);
+
+        $response->assertSessionHas('success');
+
+        $created = User::where('email', 'maria@lgunet.gov.ph')->first();
+        $this->assertNotNull($created);
+        $this->assertEquals('msantos', $created->username);
+    }
+
+    public function test_admin_can_create_user_without_username(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        $response = $this->actingAs($admin)->post(route('admin.users.store'), [
+            'name' => 'Pedro Penduko',
+            'username' => '',
+            'email' => 'pedro@lgunet.gov.ph',
+            'password' => 'Password123!',
+            'password_confirmation' => 'Password123!',
+        ]);
+
+        $response->assertSessionHas('success');
+
+        $created = User::where('email', 'pedro@lgunet.gov.ph')->first();
+        $this->assertNotNull($created);
+        $this->assertNull($created->username);
+    }
+
+    public function test_create_user_validates_unique_username(): void
+    {
+        $admin = User::factory()->admin()->create();
+        User::factory()->create(['username' => 'existinguser']);
+
+        $response = $this->actingAs($admin)->post(route('admin.users.store'), [
+            'name' => 'New Person',
+            'username' => 'existinguser',
+            'email' => 'new@lgunet.gov.ph',
+            'password' => 'Password123!',
+            'password_confirmation' => 'Password123!',
+        ]);
+
+        $response->assertSessionHasErrors(['username']);
+    }
+
+    public function test_admin_can_update_user_username(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $user = User::factory()->create([
+            'username' => 'oldusername',
+            'email' => 'user@lgunet.gov.ph',
+        ]);
+
+        $response = $this->actingAs($admin)->put(route('admin.users.update', $user->id), [
+            'name' => $user->name,
+            'username' => 'newusername',
+            'email' => $user->email,
+        ]);
+
+        $response->assertSessionHas('success');
+        $this->assertEquals('newusername', $user->fresh()->username);
+    }
+
+    public function test_update_user_validates_unique_username(): void
+    {
+        $admin = User::factory()->admin()->create();
+        User::factory()->create(['username' => 'takenusername']);
+        $user = User::factory()->create(['username' => 'myusername']);
+
+        $response = $this->actingAs($admin)->put(route('admin.users.update', $user->id), [
+            'name' => $user->name,
+            'username' => 'takenusername',
+            'email' => $user->email,
+        ]);
+
+        $response->assertSessionHasErrors(['username']);
+    }
 }

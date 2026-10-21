@@ -59,6 +59,7 @@ const onDepartmentChange = () => {
 
 const createUserForm = useForm({
     name: '',
+    username: '',
     email: '',
     password: '',
     password_confirmation: '',
@@ -109,6 +110,7 @@ const onEditDepartmentChange = () => {
 
 const editUserForm = useForm({
     name: '',
+    username: '',
     email: '',
     password: '',
     password_confirmation: '',
@@ -123,6 +125,7 @@ const openEditModal = (user) => {
     editingUser.value = user;
     editUserForm.clearErrors();
     editUserForm.name = user.name || '';
+    editUserForm.username = user.username || '';
     editUserForm.email = user.email || '';
     editUserForm.password = '';
     editUserForm.password_confirmation = '';
@@ -258,7 +261,7 @@ const executeConfirmedAction = () => {
                             v-model="search"
                             @keyup.enter="applyFilters"
                             type="text"
-                            placeholder="Search by name, email, employee #, or position..."
+                            placeholder="Search by name, username, email, employee #, or position..."
                             class="w-full pl-10 pr-4 py-2 bg-[#fffef9] border border-cream-500 text-gray-900 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 text-sm rounded-xl transition"
                         />
                         <svg class="size-4 text-gray-400 absolute left-3.5 top-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -347,7 +350,9 @@ const executeConfirmedAction = () => {
                                             </div>
                                             <div>
                                                 <div class="font-bold text-gray-900 leading-tight">{{ user.name }}</div>
-                                                <div class="text-xs text-gray-500">{{ user.email }}</div>
+                                                <div class="text-xs text-gray-500">
+                                                    <span v-if="user.username" class="font-medium text-forest-800">@{{ user.username }} &bull; </span>{{ user.email }}
+                                                </div>
                                                 <!-- Position & Employee ID -->
                                                 <div v-if="user.employee_number || user.position" class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
                                                     <span v-if="user.employee_number" class="font-mono font-bold text-gray-700 bg-cream-300/80 px-1.5 py-0.2 rounded border border-cream-400/60">
@@ -539,6 +544,18 @@ const executeConfirmedAction = () => {
                                 required
                             />
                             <div v-if="createUserForm.errors.email" class="text-xs text-red-600 mt-1">{{ createUserForm.errors.email }}</div>
+                        </div>
+
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1">Username (Optional)</label>
+                            <input
+                                v-model="createUserForm.username"
+                                type="text"
+                                placeholder="e.g. jdelacruz"
+                                class="w-full px-3.5 py-2 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-sm"
+                            />
+                            <p class="text-[11px] text-gray-500 mt-1">Optional. Users can log in using either username or email. If left blank, login requires email.</p>
+                            <div v-if="createUserForm.errors.username" class="text-xs text-red-600 mt-1">{{ createUserForm.errors.username }}</div>
                         </div>
                     </div>
 
@@ -739,6 +756,18 @@ const executeConfirmedAction = () => {
                                 required
                             />
                             <div v-if="editUserForm.errors.email" class="text-xs text-red-600 mt-1">{{ editUserForm.errors.email }}</div>
+                        </div>
+
+                        <div class="sm:col-span-2">
+                            <label class="block text-xs font-bold text-forest-900 uppercase tracking-wider mb-1">Username (Optional)</label>
+                            <input
+                                v-model="editUserForm.username"
+                                type="text"
+                                placeholder="e.g. jdelacruz"
+                                class="w-full px-3.5 py-2 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-sm"
+                            />
+                            <p class="text-[11px] text-gray-500 mt-1">Optional. Users can log in using either username or email. If left blank, login requires email.</p>
+                            <div v-if="editUserForm.errors.username" class="text-xs text-red-600 mt-1">{{ editUserForm.errors.username }}</div>
                         </div>
                     </div>
 
