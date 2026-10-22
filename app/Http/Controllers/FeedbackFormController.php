@@ -9,6 +9,7 @@ use App\Models\Designation;
 use App\Models\FbEvent;
 use App\Models\FbParticipant;
 use App\Models\FbSubmission;
+use App\Models\Feedback;
 use App\Services\FeedbackSchemaValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -25,6 +26,44 @@ class FeedbackFormController extends Controller
     {
         $user = $request->user();
 
+        $forms = Feedback::query()
+            ->with([
+                'event:id,name,details,api_key',
+                'event.embed:event_id,public_id,client_id,is_active',
+                'event.functions:id,function,details',
+            ])
+            ->withCount('submissions')
+            ->whereHas('event')
+            ->latest('id')
+            ->get()
+            ->map(function (Feedback $feedback) use ($schemaValidator): array {
+                $event = $feedback->event;
+                $schema = $schemaValidator->resolveSchemaForEvent($feedback->schema, $event);
+
+                return [
+                    'id' => $feedback->id,
+                    'schema' => $schema,
+                    'submissions_count' => $feedback->submissions_count,
+                    'event' => [
+                        'id' => $event->id,
+                        'name' => $event->name,
+                        'details' => $event->details,
+                        'api_key' => $event->api_key,
+                        'embed' => $event->embed ? [
+                            'public_id' => $event->embed->public_id,
+                            'client_id' => $event->embed->client_id,
+                            'is_active' => $event->embed->is_active,
+                        ] : null,
+                        'functions' => $event->functions->map(fn ($function): array => [
+                            'id' => $function->id,
+                            'function' => $function->function,
+                            'details' => $function->details,
+                        ])->values(),
+                    ],
+                ];
+            })
+            ->values();
+
         // Resolve event bound to this application identity's configured API key
         $event = $this->resolveConfiguredEvent();
         if ($event) {
@@ -35,6 +74,7 @@ class FeedbackFormController extends Controller
             return Inertia::render('Feedback/Form', [
                 'event' => null,
                 'form' => null,
+                'forms' => $forms,
                 'functions' => [],
                 'lookups' => [
                     'agencies' => Agency::getCachedList(),
@@ -61,6 +101,7 @@ class FeedbackFormController extends Controller
                 'name' => $event->name,
                 'details' => $event->details,
             ],
+            'forms' => $forms,
             'form' => [
                 'id' => $feedback->id,
                 'schema' => $resolvedSchema,

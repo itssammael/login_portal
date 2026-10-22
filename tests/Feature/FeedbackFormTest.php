@@ -78,7 +78,40 @@ class FeedbackFormTest extends TestCase
             ->where('event.name', 'Annual Simulation Exercise 2026')
             ->has('functions', 2)
             ->has('form.schema.fields', 2)
+            ->has('forms', 1)
+            ->where('forms.0.event.api_key', $event->api_key)
+            ->where('forms.0.submissions_count', 0)
             ->where('userDefaults.name', 'Maria Santos')
+        );
+    }
+
+    public function test_feedback_form_lists_all_configured_forms_with_embed_data_and_submission_counts(): void
+    {
+        $user = User::factory()->create();
+        $firstEvent = FbEvent::factory()->create(['name' => 'Preparedness Exercise']);
+        $secondEvent = FbEvent::factory()->create(['name' => 'Recovery Exercise']);
+        $firstForm = Feedback::factory()->create([
+            'event_id' => $firstEvent->id,
+            'schema' => ['fields' => [['id' => 'comments', 'particular' => 'Comments', 'type' => 'textarea', 'weight' => 1]]],
+        ]);
+        $secondForm = Feedback::factory()->create([
+            'event_id' => $secondEvent->id,
+            'schema' => ['fields' => [['id' => 'rating', 'particular' => 'Rating', 'type' => 'radio', 'weight' => 1, 'options' => []]]],
+        ]);
+
+        config(['services.feedback.api_key' => $firstEvent->api_key]);
+
+        $response = $this->actingAs($user)->get(route('feedback.form'));
+
+        $response->assertInertia(fn ($page) => $page
+            ->component('Feedback/Form')
+            ->has('forms', 2)
+            ->where('forms.0.id', $secondForm->id)
+            ->where('forms.0.event.api_key', $secondEvent->api_key)
+            ->where('forms.0.submissions_count', 0)
+            ->has('forms.0.schema.fields', 1)
+            ->has('forms.0.event.embed')
+            ->where('forms.1.id', $firstForm->id)
         );
     }
 
