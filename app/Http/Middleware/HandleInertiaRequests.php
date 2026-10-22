@@ -92,6 +92,9 @@ class HandleInertiaRequests extends Middleware
                 'logo_url' => SystemSetting::getLogoUrl(),
                 'favicon_url' => SystemSetting::getFaviconUrl(),
             ],
+            'turnstile' => [
+                'site_key' => config('services.turnstile.key'),
+            ],
         ];
     }
 }

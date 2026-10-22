@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\SecurityBlockedIp;
 use App\Models\SecurityThreatLog;
+use App\Models\SecurityWhitelistedIp;
 use App\Models\SsoAuthorizationCode;
 use App\Models\User;
 use App\Services\Security\SecuritySelfHealingService;
@@ -34,6 +35,7 @@ class AdminSecurityTest extends TestCase
             ->has('topOffendingIps')
             ->has('threatLogs')
             ->has('blockedIps')
+            ->has('whitelistedIps')
             ->has('recentHealingLogs')
             ->has('diagnosticFindings')
         );
@@ -270,6 +272,177 @@ class AdminSecurityTest extends TestCase
         $response->assertRedirect();
         $this->assertDatabaseHas('security_blocked_ips', [
             'ip_address' => '198.51.100.66',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_admin_can_whitelist_ip_and_automatically_unblocks_active_quarantine(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        /** @var SecuritySelfHealingService $healingService */
+        $healingService = app(SecuritySelfHealingService::class);
+        $healingService->quarantineIp('198.51.100.201', 'Exploit probing test', 60);
+
+        $this->assertDatabaseHas('security_blocked_ips', [
+            'ip_address' => '198.51.100.201',
+            'is_active' => true,
+        ]);
+
+        $response = $this->actingAs($admin)->post(route('admin.security.whitelist-ip'), [
+            'ip_address' => '198.51.100.201',
+            'label' => 'Internal Test Server',
+            'description' => 'Trusted server unblocked and immune',
+        ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('security_whitelisted_ips', [
+            'ip_address' => '198.51.100.201',
+            'label' => 'Internal Test Server',
+            'is_active' => true,
+        ]);
+
+        // Quarantine must be automatically unblocked and deactivated
+        $this->assertDatabaseHas('security_blocked_ips', [
+            'ip_address' => '198.51.100.201',
+            'is_active' => false,
+        ]);
+    }
+
+    public function test_whitelisted_ip_is_exempt_from_auto_quarantine_on_critical_exploit_probe(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        $this->actingAs($admin)->post(route('admin.security.whitelist-ip'), [
+            'ip_address' => '198.51.100.202',
+            'label' => 'Penetration Tester Workstation',
+        ]);
+
+        // Probe critical exploit URL from whitelisted IP
+        $response = $this->withServerVariables(['REMOTE_ADDR' => '198.51.100.202'])
+            ->get('/wp-admin/install.php?step=1');
+
+        // Should return 404 Not Found (not 403 Forbidden quarantine)
+        $response->assertStatus(404);
+
+        // Security threat log must mark action_taken as whitelisted_allowed
+        $this->assertDatabaseHas('security_threat_logs', [
+            'ip_address' => '198.51.100.202',
+            'threat_type' => '404_probe',
+            'action_taken' => 'whitelisted_allowed',
+        ]);
+
+        // No active quarantine should be created
+        $this->assertDatabaseMissing('security_blocked_ips', [
+            'ip_address' => '198.51.100.202',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_whitelisted_cidr_range_protects_entire_subnet_from_auto_quarantine(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        $this->actingAs($admin)->post(route('admin.security.whitelist-ip'), [
+            'ip_address' => '10.50.0.0/16',
+            'label' => 'Internal Corporate Network Subnet',
+        ]);
+
+        // Probe from an IP in the whitelisted CIDR range
+        $response = $this->withServerVariables(['REMOTE_ADDR' => '10.50.44.88'])
+            ->get('/wp-admin/install.php?step=1');
+
+        $response->assertStatus(404);
+
+        $this->assertDatabaseHas('security_threat_logs', [
+            'ip_address' => '10.50.44.88',
+            'action_taken' => 'whitelisted_allowed',
+        ]);
+
+        $this->assertDatabaseMissing('security_blocked_ips', [
+            'ip_address' => '10.50.44.88',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_admin_cannot_manually_quarantine_a_whitelisted_ip(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        $this->actingAs($admin)->post(route('admin.security.whitelist-ip'), [
+            'ip_address' => '198.51.100.203',
+            'label' => 'Protected Gateway',
+        ]);
+
+        // Attempt manual quarantine
+        $response = $this->actingAs($admin)->post(route('admin.security.block-ip'), [
+            'ip_address' => '198.51.100.203',
+            'reason' => 'Accidental block attempt',
+            'duration_minutes' => 60,
+        ]);
+
+        $response->assertSessionHasErrors(['ip_address']);
+
+        $this->assertDatabaseMissing('security_blocked_ips', [
+            'ip_address' => '198.51.100.203',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_admin_can_toggle_and_remove_whitelisted_ip(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        $whitelisted = SecurityWhitelistedIp::create([
+            'ip_address' => '198.51.100.204',
+            'label' => 'Temporary Whitelist',
+            'added_by' => $admin->name,
+            'is_active' => true,
+        ]);
+
+        // Toggle to inactive
+        $toggleResponse = $this->actingAs($admin)->post(route('admin.security.toggle-whitelist-ip', $whitelisted));
+        $toggleResponse->assertRedirect();
+        $this->assertDatabaseHas('security_whitelisted_ips', [
+            'id' => $whitelisted->id,
+            'is_active' => false,
+        ]);
+
+        // Remove from whitelist
+        $removeResponse = $this->actingAs($admin)->delete(route('admin.security.remove-whitelist-ip', $whitelisted));
+        $removeResponse->assertRedirect();
+        $this->assertDatabaseMissing('security_whitelisted_ips', [
+            'id' => $whitelisted->id,
+        ]);
+    }
+
+    public function test_self_healing_audit_does_not_quarantine_whitelisted_ips(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        SecurityWhitelistedIp::create([
+            'ip_address' => '198.51.100.205',
+            'label' => 'Whitelisted Server',
+            'added_by' => $admin->name,
+            'is_active' => true,
+        ]);
+
+        SecurityThreatLog::create([
+            'ip_address' => '198.51.100.205',
+            'threat_type' => '404_probe',
+            'severity' => 'critical',
+            'url' => 'http://localhost/adminer.php',
+            'method' => 'GET',
+            'action_taken' => 'logged',
+            'is_resolved' => false,
+            'created_at' => now(),
+        ]);
+
+        $response = $this->actingAs($admin)->post(route('admin.security.self-heal'));
+
+        $response->assertRedirect();
+        $this->assertDatabaseMissing('security_blocked_ips', [
+            'ip_address' => '198.51.100.205',
             'is_active' => true,
         ]);
     }

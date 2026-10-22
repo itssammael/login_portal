@@ -45,6 +45,34 @@ class SecurityThreatDetection
         // 2. Real-time Signature & Exploit Inspection
         $detection = $this->threatDetector->inspectRequest($request);
         if ($detection !== null && $detection['detected']) {
+            $isWhitelisted = $this->selfHealingService->isWhitelisted($primaryIp)
+                || ($ips['client_ipv4'] && $this->selfHealingService->isWhitelisted($ips['client_ipv4']))
+                || ($ips['client_ipv6'] && $this->selfHealingService->isWhitelisted($ips['client_ipv6']));
+
+            if ($isWhitelisted) {
+                $this->threatDetector->logThreat([
+                    'ip_address' => $primaryIp,
+                    'client_ipv4' => $ips['client_ipv4'],
+                    'client_ipv6' => $ips['client_ipv6'],
+                    'user_id' => $request->user()?->id,
+                    'threat_type' => $detection['type'],
+                    'severity' => $detection['severity'],
+                    'url' => $request->fullUrl(),
+                    'method' => $request->method(),
+                    'user_agent' => $request->userAgent(),
+                    'payload' => [
+                        'description' => $detection['description'].' [Whitelisted Exemption]',
+                        'client_ipv4' => $ips['client_ipv4'],
+                        'client_ipv6' => $ips['client_ipv6'],
+                        'query' => $request->query(),
+                        'path' => $request->path(),
+                    ],
+                    'action_taken' => 'whitelisted_allowed',
+                ]);
+
+                return $next($request);
+            }
+
             $this->threatDetector->logThreat([
                 'ip_address' => $primaryIp,
                 'client_ipv4' => $ips['client_ipv4'],

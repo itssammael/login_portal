@@ -178,6 +178,9 @@ Route::middleware([
             Route::get('/', [SecurityController::class, 'index'])->name('index');
             Route::post('/block-ip', [SecurityController::class, 'blockIp'])->name('block-ip');
             Route::delete('/unblock-ip/{blockedIp}', [SecurityController::class, 'unblockIp'])->name('unblock-ip');
+            Route::post('/whitelist-ip', [SecurityController::class, 'whitelistIp'])->name('whitelist-ip');
+            Route::delete('/whitelist-ip/{whitelistedIp}', [SecurityController::class, 'removeWhitelistIp'])->name('remove-whitelist-ip');
+            Route::post('/whitelist-ip/{whitelistedIp}/toggle', [SecurityController::class, 'toggleWhitelistIp'])->name('toggle-whitelist-ip');
             Route::post('/resolve/{threatLog}', [SecurityController::class, 'resolveThreat'])->name('resolve');
             Route::post('/self-heal', [SecurityController::class, 'runAuditAndHeal'])->name('self-heal');
             Route::post('/toggle-auto-defense', [SecurityController::class, 'toggleAutoDefense'])->name('toggle-auto-defense');

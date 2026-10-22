@@ -1,7 +1,9 @@
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
+import InputError from '@/Components/InputError.vue';
+import Turnstile from '@/Components/Turnstile.vue';
 
 const props = defineProps({
     event: {
@@ -27,6 +29,10 @@ const props = defineProps({
         type: String,
         required: true,
     },
+    turnstileSiteKey: {
+        type: String,
+        default: '',
+    },
 });
 
 // Dynamic fields sorted strictly by weight ascending
@@ -39,6 +45,10 @@ const sortedFields = computed(() => {
 
 // Dynamic form answers dictionary keyed by field.id
 const answers = ref({});
+
+// Cloudflare Turnstile verification state
+const turnstileToken = ref('');
+const turnstileRef = ref(null);
 
 // Participant metadata fields (optional for respondent identification)
 const participantData = ref({
@@ -273,6 +283,21 @@ const showQuickErrorToast = ref(false);
 let quickErrorToastTimer = null;
 let currentErrorIndex = 0;
 
+const turnstileError = computed(() => {
+    return clientErrors.value.turnstile_token
+        || serverErrors.value.turnstile_token?.[0]
+        || serverErrors.value['cf-turnstile-response']?.[0]
+        || null;
+});
+
+watch(turnstileToken, (token) => {
+    if (token) {
+        delete clientErrors.value.turnstile_token;
+        delete serverErrors.value.turnstile_token;
+        delete serverErrors.value['cf-turnstile-response'];
+    }
+});
+
 // Extract list of fields with validation errors
 const errorFieldsList = computed(() => {
     const list = [];
@@ -281,7 +306,9 @@ const errorFieldsList = computed(() => {
 
     errorKeys.forEach((key) => {
         let fieldId = key;
-        if (fieldId.startsWith('answers.')) {
+        if (fieldId === 'cf-turnstile-response') {
+            fieldId = 'turnstile_token';
+        } else if (fieldId.startsWith('answers.')) {
             fieldId = fieldId.substring(8);
         } else if (fieldId.startsWith('data.')) {
             fieldId = fieldId.substring(5);
@@ -293,6 +320,17 @@ const errorFieldsList = computed(() => {
 
         if (!seenFieldIds.has(fieldId)) {
             seenFieldIds.add(fieldId);
+            if (fieldId === 'turnstile_token') {
+                list.push({
+                    id: 'turnstile_token',
+                    particular: 'Security Verification',
+                    weight: null,
+                    message: turnstileError.value || 'Please complete the security verification.',
+                    isOther: false,
+                });
+                return;
+            }
+
             const field = sortedFields.value.find((f) => String(f.id) === String(fieldId));
             if (field?.type === 'section') {
                 return;
@@ -330,7 +368,7 @@ const highlightField = (fieldId) => {
 const goToErrorField = (fieldId) => {
     if (!fieldId) return;
 
-    if (isPaginated.value) {
+    if (isPaginated.value && fieldId !== 'turnstile_token') {
         const targetPageIdx = sectionPages.value.findIndex((p) => p.fields.some((f) => String(f.id) === String(fieldId)));
         if (targetPageIdx !== -1 && targetPageIdx !== currentPageIdx.value) {
             currentPageIdx.value = targetPageIdx;
@@ -412,6 +450,7 @@ const submitForm = async () => {
     const payload = {
         answers: { ...answers.value },
         ...participantData.value,
+        turnstile_token: turnstileToken.value,
     };
 
     try {
@@ -419,11 +458,16 @@ const submitForm = async () => {
         if (response.status === 201 || response.status === 200) {
             submissionSuccess.value = true;
             submittedRecord.value = response.data?.data || response.data || null;
+            turnstileToken.value = '';
             serverErrors.value = {};
             showQuickErrorToast.value = false;
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
     } catch (error) {
+        // Clear spent/invalid single-use token and reset widget for a fresh challenge
+        turnstileToken.value = '';
+        turnstileRef.value?.reset();
+
         if (error.response && error.response.status === 422) {
             serverErrors.value = error.response.data.errors || {};
             showQuickErrorToast.value = true;
@@ -452,10 +496,13 @@ const resetForAnotherSubmission = () => {
     submissionSuccess.value = false;
     submittedRecord.value = null;
     serverErrors.value = {};
+    clientErrors.value = {};
     showQuickErrorToast.value = false;
     highlightedFieldId.value = null;
     currentPageIdx.value = 0;
     pageHistory.value = [0];
+    turnstileToken.value = '';
+    turnstileRef.value?.reset();
     initAnswers();
     participantData.value = {
         name: '',
@@ -484,6 +531,15 @@ const getOtherFieldError = (fieldId) => {
         || serverErrors.value[`${fieldId}_other`]?.[0]
         || null;
 };
+
+onBeforeUnmount(() => {
+    if (highlightTimer) {
+        clearTimeout(highlightTimer);
+    }
+    if (quickErrorToastTimer) {
+        clearTimeout(quickErrorToastTimer);
+    }
+});
 </script>
 
 <template>
@@ -851,6 +907,37 @@ const getOtherFieldError = (fieldId) => {
                                 </div>
                             </div>
                         </template>
+                    </div>
+
+                    <!-- Cloudflare Turnstile Security Verification -->
+                    <div
+                        id="field_container_turnstile_token"
+                        class="p-4 sm:p-5 rounded-2xl border space-y-2.5 transition-all duration-300"
+                        :class="[
+                            highlightedFieldId === 'turnstile_token'
+                                ? 'ring-4 ring-red-500/80 ring-offset-2 border-red-500 bg-red-50/90 shadow-xl'
+                                : (turnstileError
+                                    ? 'border-red-400 bg-red-50/30'
+                                    : 'bg-cream-100/50 border-cream-400/60')
+                        ]"
+                    >
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="text-xs font-bold text-gray-800">
+                                Security Verification <span class="text-red-500 font-bold">*</span>
+                            </span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cream-200 text-gray-600">
+                                Turnstile
+                            </span>
+                        </div>
+
+                        <Turnstile
+                            ref="turnstileRef"
+                            v-model="turnstileToken"
+                            :site-key="turnstileSiteKey"
+                            action="feedback_submit"
+                        />
+
+                        <InputError :message="turnstileError" class="text-xs font-medium" />
                     </div>
 
                     <!-- Navigation & Action Buttons -->

@@ -9,6 +9,7 @@ import SecondaryButton from '@/Components/SecondaryButton.vue';
 import DangerButton from '@/Components/DangerButton.vue';
 import TextInput from '@/Components/TextInput.vue';
 import InputLabel from '@/Components/InputLabel.vue';
+import InputError from '@/Components/InputError.vue';
 
 const props = defineProps({
     stats: {
@@ -36,6 +37,10 @@ const props = defineProps({
         required: true,
     },
     blockedIps: {
+        type: Array,
+        default: () => [],
+    },
+    whitelistedIps: {
         type: Array,
         default: () => [],
     },
@@ -82,6 +87,8 @@ const resetFilters = () => {
 const inspectingThreat = ref(null);
 const showQuarantineModal = ref(false);
 const showQuarantinedListModal = ref(false);
+const showWhitelistModal = ref(false);
+const showWhitelistedListModal = ref(false);
 const isHealingRunning = ref(false);
 
 const quarantineForm = useForm({
@@ -90,8 +97,18 @@ const quarantineForm = useForm({
     duration_minutes: 60,
 });
 
+const whitelistForm = useForm({
+    ip_address: '',
+    label: '',
+    description: '',
+});
+
+const whitelistSearch = ref('');
+const whitelistFilter = ref('all');
+
 const openQuarantineModal = (ip = '') => {
     quarantineForm.reset();
+    quarantineForm.clearErrors();
     quarantineForm.ip_address = ip;
     quarantineForm.reason = ip ? 'Manual administrative quarantine' : '';
     showQuarantineModal.value = true;
@@ -105,6 +122,71 @@ const submitQuarantine = () => {
             quarantineForm.reset();
         },
     });
+};
+
+const openWhitelistModal = (ip = '') => {
+    whitelistForm.reset();
+    whitelistForm.clearErrors();
+    whitelistForm.ip_address = ip;
+    whitelistForm.label = ip ? 'Trusted Host' : '';
+    whitelistForm.description = '';
+    showWhitelistModal.value = true;
+};
+
+const submitWhitelist = () => {
+    whitelistForm.post(route('admin.security.whitelist-ip'), {
+        preserveScroll: true,
+        onSuccess: () => {
+            showWhitelistModal.value = false;
+            whitelistForm.reset();
+        },
+    });
+};
+
+const removeWhitelistIp = (whitelisted) => {
+    if (confirm(`Remove IP address ${whitelisted.ip_address} from the whitelist? It will no longer be protected from automated quarantine.`)) {
+        router.delete(route('admin.security.remove-whitelist-ip', whitelisted.id), {
+            preserveScroll: true,
+        });
+    }
+};
+
+const toggleWhitelistIp = (whitelisted) => {
+    router.post(route('admin.security.toggle-whitelist-ip', whitelisted.id), {}, {
+        preserveScroll: true,
+    });
+};
+
+const whitelistAndUnblock = (blocked) => {
+    openWhitelistModal(blocked.client_ipv4 || blocked.ip_address);
+    whitelistForm.label = `Quarantine Release: ${blocked.client_ipv4 || blocked.ip_address}`;
+    whitelistForm.description = `Exempted from quarantine. Previous violation: ${blocked.reason}`;
+};
+
+const filteredWhitelistedIps = computed(() => {
+    let list = props.whitelistedIps || [];
+    if (whitelistFilter.value === 'active') {
+        list = list.filter((item) => item.is_active);
+    } else if (whitelistFilter.value === 'inactive') {
+        list = list.filter((item) => !item.is_active);
+    }
+
+    if (whitelistSearch.value.trim()) {
+        const query = whitelistSearch.value.toLowerCase().trim();
+        list = list.filter((item) =>
+            item.ip_address.toLowerCase().includes(query) ||
+            (item.label && item.label.toLowerCase().includes(query)) ||
+            (item.description && item.description.toLowerCase().includes(query)) ||
+            (item.added_by && item.added_by.toLowerCase().includes(query))
+        );
+    }
+
+    return list;
+});
+
+const isIpWhitelisted = (ip) => {
+    if (!ip) return false;
+    return (props.whitelistedIps || []).some((item) => item.is_active && (item.ip_address === ip || ip.startsWith(item.ip_address)));
 };
 
 const unblockIp = (blockedIp) => {
@@ -219,6 +301,17 @@ const formatThreatType = (type) => {
                         </svg>
                         <span>Quarantine IP</span>
                     </button>
+
+                    <button
+                        type="button"
+                        @click="openWhitelistModal()"
+                        class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center space-x-1.5 transition"
+                    >
+                        <svg class="size-4 text-emerald-100" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                        </svg>
+                        <span>Whitelist IP</span>
+                    </button>
                 </div>
             </div>
         </template>
@@ -258,7 +351,7 @@ const formatThreatType = (type) => {
                         </div>
                     </div>
 
-                    <div class="flex items-center space-x-3 z-10 shrink-0">
+                    <div class="flex flex-wrap items-center gap-3 z-10 shrink-0">
                         <button
                             type="button"
                             @click="toggleAutoDefense"
@@ -276,7 +369,18 @@ const formatThreatType = (type) => {
                             @click="showQuarantinedListModal = true"
                             class="px-3.5 py-2.5 bg-forest-800 hover:bg-forest-700/80 text-white rounded-xl text-xs font-semibold transition border border-forest-700/70 flex items-center space-x-1.5"
                         >
-                            <span>View Quarantined IPs ({{ stats.blocked_ips_count }})</span>
+                            <span>Quarantined IPs ({{ stats.blocked_ips_count }})</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            @click="showWhitelistedListModal = true"
+                            class="px-3.5 py-2.5 bg-forest-800 hover:bg-forest-700/80 text-emerald-300 rounded-xl text-xs font-semibold transition border border-emerald-500/40 flex items-center space-x-1.5"
+                        >
+                            <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                            </svg>
+                            <span>Whitelisted ({{ whitelistedIps.length }})</span>
                         </button>
                     </div>
 
@@ -284,8 +388,8 @@ const formatThreatType = (type) => {
                     <div class="absolute -right-10 -bottom-10 size-48 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none"></div>
                 </div>
 
-                <!-- 4 Metric Cards Grid -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                <!-- 5 Metric Cards Grid -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                     <!-- Total Threats 24h -->
                     <div class="bg-cream-200 p-5 rounded-2xl shadow-xs border border-cream-500/50 hover:shadow-md transition">
                         <div class="flex items-center justify-between mb-2">
@@ -303,7 +407,7 @@ const formatThreatType = (type) => {
                     <!-- 404 Probes -->
                     <div class="bg-cream-200 p-5 rounded-2xl shadow-xs border border-cream-500/50 hover:shadow-md transition">
                         <div class="flex items-center justify-between mb-2">
-                            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">404 Probes Detected</span>
+                            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">404 Probes</span>
                             <div class="size-9 rounded-xl bg-amber-200 text-amber-900 flex items-center justify-center font-bold">
                                 <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -311,13 +415,13 @@ const formatThreatType = (type) => {
                             </div>
                         </div>
                         <div class="text-2xl font-extrabold text-gray-950">{{ stats.probes_404_24h }}</div>
-                        <p class="text-xs text-amber-800 font-medium mt-1">Sensitive file scan attempts</p>
+                        <p class="text-xs text-amber-800 font-medium mt-1">Sensitive scan attempts</p>
                     </div>
 
                     <!-- DDoS / Rate Limiting -->
                     <div class="bg-cream-200 p-5 rounded-2xl shadow-xs border border-cream-500/50 hover:shadow-md transition">
                         <div class="flex items-center justify-between mb-2">
-                            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">DDoS / Burst Blocks</span>
+                            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">DDoS / Bursts</span>
                             <div class="size-9 rounded-xl bg-orange-200 text-orange-900 flex items-center justify-center font-bold">
                                 <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
@@ -325,7 +429,7 @@ const formatThreatType = (type) => {
                             </div>
                         </div>
                         <div class="text-2xl font-extrabold text-gray-950">{{ stats.ddos_blocks_24h }}</div>
-                        <p class="text-xs text-orange-800 font-medium mt-1">High-velocity throttled bursts</p>
+                        <p class="text-xs text-orange-800 font-medium mt-1">Velocity throttled bursts</p>
                     </div>
 
                     <!-- Blocked IPs -->
@@ -340,6 +444,20 @@ const formatThreatType = (type) => {
                         </div>
                         <div class="text-2xl font-extrabold text-gray-950">{{ stats.blocked_ips_count }}</div>
                         <p class="text-xs text-red-800 font-medium mt-1">Active defense isolation</p>
+                    </div>
+
+                    <!-- Whitelisted IPs -->
+                    <div class="bg-cream-200 p-5 rounded-2xl shadow-xs border border-emerald-400/50 hover:shadow-md transition">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Whitelisted IPs</span>
+                            <div class="size-9 rounded-xl bg-emerald-200 text-emerald-900 flex items-center justify-center font-bold">
+                                <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="text-2xl font-extrabold text-emerald-950">{{ stats.whitelisted_ips_count ?? whitelistedIps.length }}</div>
+                        <p class="text-xs text-emerald-800 font-medium mt-1">Auto-quarantine exempt</p>
                     </div>
                 </div>
 
@@ -496,21 +614,203 @@ const formatThreatType = (type) => {
                                     </div>
                                 </div>
 
-                                <div class="flex items-center space-x-3 shrink-0">
+                                <div class="flex items-center space-x-2 shrink-0">
                                     <span class="text-gray-500 text-[11px]">{{ item.last_seen }}</span>
                                     <span class="px-2 py-0.5 bg-cream-300 text-forest-950 rounded-md font-bold text-[11px]">
                                         {{ item.count }} attempts
                                     </span>
-                                    <button
-                                        v-if="!item.is_blocked"
-                                        type="button"
-                                        @click="openQuarantineModal(item.client_ipv4 || item.ip_address)"
-                                        class="text-xs text-red-700 hover:text-red-900 font-bold underline ml-1"
+                                    <span
+                                        v-if="isIpWhitelisted(item.client_ipv4 || item.ip_address)"
+                                        class="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full border border-emerald-300"
+                                        title="Exempt from automated quarantine"
                                     >
-                                        Block
-                                    </button>
+                                        Whitelisted
+                                    </span>
+                                    <template v-else>
+                                        <button
+                                            v-if="!item.is_blocked"
+                                            type="button"
+                                            @click="openQuarantineModal(item.client_ipv4 || item.ip_address)"
+                                            class="text-xs text-red-700 hover:text-red-900 font-bold underline ml-1"
+                                        >
+                                            Block
+                                        </button>
+                                        <button
+                                            type="button"
+                                            @click="openWhitelistModal(item.client_ipv4 || item.ip_address)"
+                                            class="text-xs text-emerald-700 hover:text-emerald-900 font-bold underline ml-1"
+                                        >
+                                            Whitelist
+                                        </button>
+                                    </template>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trusted IP Whitelist Armor Module -->
+                <div class="bg-[#fffef9] p-6 rounded-3xl border border-cream-400/80 shadow-xs">
+                    <div class="flex flex-col lg:flex-row lg:items-center justify-between pb-4 border-b border-cream-300 gap-4">
+                        <div class="flex items-start space-x-3">
+                            <div class="size-10 rounded-2xl bg-emerald-100 text-emerald-900 flex items-center justify-center shrink-0 font-bold mt-0.5">
+                                <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                                </svg>
+                            </div>
+                            <div>
+                                <div class="flex items-center space-x-2">
+                                    <h3 class="text-sm font-bold text-gray-950 uppercase tracking-wider">Trusted IP Whitelist Armor</h3>
+                                    <span class="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full border border-emerald-300">
+                                        {{ whitelistedIps.length }} Configured
+                                    </span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-0.5">
+                                    Protected addresses & CIDR subnets are immune from auto-quarantine by DDoS burst limiters, 404 URL scanners, and self-healing threat mitigations.
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Whitelist Filter Controls & Action -->
+                        <div class="flex flex-wrap items-center gap-2">
+                            <div class="flex items-center rounded-xl bg-cream-200 p-0.5 text-xs font-semibold">
+                                <button
+                                    type="button"
+                                    @click="whitelistFilter = 'all'"
+                                    class="px-2.5 py-1 rounded-lg transition"
+                                    :class="whitelistFilter === 'all' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'"
+                                >
+                                    All ({{ whitelistedIps.length }})
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="whitelistFilter = 'active'"
+                                    class="px-2.5 py-1 rounded-lg transition"
+                                    :class="whitelistFilter === 'active' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'"
+                                >
+                                    Active ({{ whitelistedIps.filter(w => w.is_active).length }})
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="whitelistFilter = 'inactive'"
+                                    class="px-2.5 py-1 rounded-lg transition"
+                                    :class="whitelistFilter === 'inactive' ? 'bg-forest-900 text-white shadow-xs' : 'text-gray-600 hover:text-gray-900'"
+                                >
+                                    Disabled ({{ whitelistedIps.filter(w => !w.is_active).length }})
+                                </button>
+                            </div>
+
+                            <input
+                                v-model="whitelistSearch"
+                                type="text"
+                                placeholder="Search IP, label, notes..."
+                                class="px-3 py-1.5 bg-cream-100 border border-cream-400 rounded-xl text-xs w-40 sm:w-48 focus:border-forest-600 focus:ring-0"
+                            />
+
+                            <button
+                                type="button"
+                                @click="openWhitelistModal()"
+                                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center space-x-1 transition"
+                            >
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                                </svg>
+                                <span>Add Trusted IP</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Whitelist Table / Cards -->
+                    <div class="mt-4">
+                        <div v-if="filteredWhitelistedIps.length === 0" class="py-10 text-center rounded-2xl border border-dashed border-cream-400 bg-cream-50/50">
+                            <svg class="size-8 text-cream-500 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                            </svg>
+                            <p class="text-xs font-semibold text-gray-700">No whitelisted IP entries found</p>
+                            <p class="text-[11px] text-gray-500 mt-0.5">Add developer IPs, office VPN gateways, or monitoring agents to safeguard them from automated blocks.</p>
+                            <button
+                                type="button"
+                                @click="openWhitelistModal()"
+                                class="mt-3 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold inline-flex items-center space-x-1"
+                            >
+                                <span>+ Add Trusted Host</span>
+                            </button>
+                        </div>
+
+                        <div v-else class="overflow-x-auto rounded-2xl border border-cream-300">
+                            <table class="min-w-full divide-y divide-cream-300 text-xs">
+                                <thead class="bg-cream-200 text-forest-950 uppercase tracking-wider font-bold text-[10px]">
+                                    <tr>
+                                        <th class="px-4 py-3 text-left">Trusted Address / Range</th>
+                                        <th class="px-4 py-3 text-left">Label & Purpose</th>
+                                        <th class="px-4 py-3 text-left">Added By / Date</th>
+                                        <th class="px-4 py-3 text-left">Protection Status</th>
+                                        <th class="px-4 py-3 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-cream-200 bg-white">
+                                    <tr
+                                        v-for="item in filteredWhitelistedIps"
+                                        :key="item.id"
+                                        class="hover:bg-cream-100/50 transition"
+                                    >
+                                        <td class="px-4 py-3 whitespace-nowrap">
+                                            <div class="flex items-center space-x-2">
+                                                <span class="font-mono font-bold text-gray-900 text-xs">{{ item.ip_address }}</span>
+                                                <span v-if="item.ip_address.includes('/')" class="px-1.5 py-0.5 bg-blue-100 text-blue-800 text-[9px] font-bold rounded">
+                                                    CIDR Subnet
+                                                </span>
+                                                <span v-else-if="item.ip_address.includes(':')" class="px-1.5 py-0.5 bg-purple-100 text-purple-800 text-[9px] font-bold rounded">
+                                                    IPv6
+                                                </span>
+                                                <span v-else class="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-bold rounded">
+                                                    IPv4
+                                                </span>
+                                            </div>
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <div class="font-bold text-gray-900 text-xs">{{ item.label || 'Trusted Host' }}</div>
+                                            <div v-if="item.description" class="text-[11px] text-gray-500 truncate max-w-xs" :title="item.description">
+                                                {{ item.description }}
+                                            </div>
+                                        </td>
+                                        <td class="px-4 py-3 whitespace-nowrap text-[11px] text-gray-600">
+                                            <div>{{ item.added_by || 'System Admin' }}</div>
+                                            <div class="text-[10px] text-gray-400">{{ new Date(item.created_at).toLocaleDateString() }}</div>
+                                        </td>
+                                        <td class="px-4 py-3 whitespace-nowrap">
+                                            <button
+                                                type="button"
+                                                @click="toggleWhitelistIp(item)"
+                                                class="px-2.5 py-1 rounded-full text-[10px] font-bold transition flex items-center space-x-1"
+                                                :class="item.is_active
+                                                    ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300'
+                                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 border border-gray-300'"
+                                                :title="item.is_active ? 'Click to temporarily disable immunity' : 'Click to activate immunity'"
+                                            >
+                                                <span class="size-1.5 rounded-full" :class="item.is_active ? 'bg-emerald-600' : 'bg-gray-400'"></span>
+                                                <span>{{ item.is_active ? 'Armor Active' : 'Disabled' }}</span>
+                                            </button>
+                                        </td>
+                                        <td class="px-4 py-3 whitespace-nowrap text-right space-x-2">
+                                            <button
+                                                type="button"
+                                                @click="toggleWhitelistIp(item)"
+                                                class="text-xs font-semibold text-gray-700 hover:text-gray-950 underline"
+                                            >
+                                                {{ item.is_active ? 'Pause' : 'Activate' }}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                @click="removeWhitelistIp(item)"
+                                                class="text-xs font-bold text-red-600 hover:text-red-800 underline"
+                                            >
+                                                Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -707,8 +1007,8 @@ const formatThreatType = (type) => {
                                     </td>
                                     <td class="px-4 py-3 whitespace-nowrap">
                                         <span class="px-2 py-0.5 rounded-full text-[10px] font-bold"
-                                            :class="log.action_taken === 'auto_blocked' ? 'bg-red-100 text-red-800' : 'bg-cream-300 text-forest-900'">
-                                            {{ log.action_taken }}
+                                            :class="log.action_taken === 'auto_blocked' ? 'bg-red-100 text-red-800' : (log.action_taken === 'whitelisted_allowed' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-cream-300 text-forest-900')">
+                                            {{ log.action_taken === 'whitelisted_allowed' ? 'whitelisted_allowed' : log.action_taken }}
                                         </span>
                                     </td>
                                     <td class="px-4 py-3 whitespace-nowrap text-right space-x-2">
@@ -719,13 +1019,29 @@ const formatThreatType = (type) => {
                                         >
                                             Inspect
                                         </button>
-                                        <button
-                                            type="button"
-                                            @click="openQuarantineModal(log.client_ipv4 || log.ip_address)"
-                                            class="text-red-700 hover:text-red-900 font-bold underline"
+                                        <span
+                                            v-if="isIpWhitelisted(log.client_ipv4 || log.ip_address)"
+                                            class="text-emerald-700 font-bold text-[11px]"
+                                            title="This IP is protected by Whitelist Armor"
                                         >
-                                            Block IP
-                                        </button>
+                                            Whitelisted
+                                        </span>
+                                        <template v-else>
+                                            <button
+                                                type="button"
+                                                @click="openQuarantineModal(log.client_ipv4 || log.ip_address)"
+                                                class="text-red-700 hover:text-red-900 font-bold underline"
+                                            >
+                                                Block IP
+                                            </button>
+                                            <button
+                                                type="button"
+                                                @click="openWhitelistModal(log.client_ipv4 || log.ip_address)"
+                                                class="text-emerald-700 hover:text-emerald-900 font-bold underline"
+                                            >
+                                                Whitelist
+                                            </button>
+                                        </template>
                                         <button
                                             v-if="!log.is_resolved"
                                             type="button"
@@ -750,10 +1066,11 @@ const formatThreatType = (type) => {
                                 v-for="(link, i) in threatLogs.links"
                                 :key="i"
                                 :href="link.url || '#'"
-                                v-html="link.label"
                                 class="px-3 py-1.5 rounded-lg border font-semibold transition"
                                 :class="link.active ? 'bg-forest-900 text-white border-forest-900' : (link.url ? 'bg-cream-200 border-cream-400 text-gray-700 hover:bg-cream-300' : 'opacity-40 pointer-events-none')"
-                            />
+                            >
+                                <span v-html="link.label"></span>
+                            </Link>
                         </div>
                     </div>
                 </div>
@@ -822,14 +1139,30 @@ const formatThreatType = (type) => {
 
             <template #footer>
                 <div class="flex items-center justify-between w-full">
-                    <button
-                        v-if="inspectingThreat"
-                        type="button"
-                        @click="openQuarantineModal(inspectingThreat.client_ipv4 || inspectingThreat.ip_address); inspectingThreat = null"
-                        class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-semibold"
-                    >
-                        Quarantine {{ inspectingThreat.client_ipv4 || inspectingThreat.ip_address }}
-                    </button>
+                    <div class="flex items-center space-x-2">
+                        <span
+                            v-if="inspectingThreat && isIpWhitelisted(inspectingThreat.client_ipv4 || inspectingThreat.ip_address)"
+                            class="px-2.5 py-1 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-lg border border-emerald-300"
+                        >
+                            Whitelisted (Immune to Quarantine)
+                        </span>
+                        <template v-else-if="inspectingThreat">
+                            <button
+                                type="button"
+                                @click="openQuarantineModal(inspectingThreat.client_ipv4 || inspectingThreat.ip_address); inspectingThreat = null"
+                                class="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-semibold"
+                            >
+                                Quarantine {{ inspectingThreat.client_ipv4 || inspectingThreat.ip_address }}
+                            </button>
+                            <button
+                                type="button"
+                                @click="openWhitelistModal(inspectingThreat.client_ipv4 || inspectingThreat.ip_address); inspectingThreat = null"
+                                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold"
+                            >
+                                Whitelist IP
+                            </button>
+                        </template>
+                    </div>
                     <SecondaryButton @click="inspectingThreat = null">
                         Close
                     </SecondaryButton>
@@ -937,19 +1270,184 @@ const formatThreatType = (type) => {
                             </span>
                         </div>
 
-                        <button
-                            type="button"
-                            @click="unblockIp(blocked)"
-                            class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shrink-0"
-                        >
-                            Unblock
-                        </button>
+                        <div class="flex items-center space-x-2 shrink-0">
+                            <button
+                                type="button"
+                                @click="whitelistAndUnblock(blocked); showQuarantinedListModal = false"
+                                class="px-3 py-1.5 bg-forest-800 hover:bg-forest-900 text-white rounded-xl text-xs font-semibold"
+                                title="Unblock and add to whitelist to protect from future auto-quarantines"
+                            >
+                                Whitelist & Unblock
+                            </button>
+                            <button
+                                type="button"
+                                @click="unblockIp(blocked)"
+                                class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold"
+                            >
+                                Unblock
+                            </button>
+                        </div>
                     </div>
                 </div>
             </template>
 
             <template #footer>
                 <SecondaryButton @click="showQuarantinedListModal = false">
+                    Close
+                </SecondaryButton>
+            </template>
+        </DialogModal>
+
+        <!-- Whitelist IP Form Modal -->
+        <DialogModal :show="showWhitelistModal" @close="showWhitelistModal = false">
+            <template #title>
+                <div class="flex items-center space-x-2">
+                    <div class="size-7 rounded-lg bg-emerald-100 text-emerald-900 flex items-center justify-center font-bold">
+                        <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                        </svg>
+                    </div>
+                    <span>Add Trusted IP Address / CIDR Subnet</span>
+                </div>
+            </template>
+
+            <template #content>
+                <form @submit.prevent="submitWhitelist" class="space-y-4">
+                    <p class="text-xs text-gray-600">
+                        Whitelisted IP addresses and CIDR subnets are immune from automated quarantine triggered by 404 URL scans, velocity DDoS bursts, and self-healing threat checks.
+                    </p>
+
+                    <div>
+                        <InputLabel for="whitelist_ip_address" value="IP Address or CIDR Subnet" />
+                        <TextInput
+                            id="whitelist_ip_address"
+                            v-model="whitelistForm.ip_address"
+                            type="text"
+                            class="mt-1 block w-full text-xs font-mono"
+                            placeholder="e.g. 192.168.1.100, 10.0.0.0/16, or 2001:db8::1"
+                            required
+                        />
+                        <InputError :message="whitelistForm.errors.ip_address" class="mt-1" />
+                    </div>
+
+                    <div>
+                        <InputLabel for="whitelist_label" value="Friendly Label / Host Name (Optional)" />
+                        <TextInput
+                            id="whitelist_label"
+                            v-model="whitelistForm.label"
+                            type="text"
+                            class="mt-1 block w-full text-xs"
+                            placeholder="e.g. Corporate HQ Gateway, Monitoring Agent, Staging VPN"
+                        />
+                        <InputError :message="whitelistForm.errors.label" class="mt-1" />
+                    </div>
+
+                    <div>
+                        <InputLabel for="whitelist_description" value="Description / Context (Optional)" />
+                        <TextInput
+                            id="whitelist_description"
+                            v-model="whitelistForm.description"
+                            type="text"
+                            class="mt-1 block w-full text-xs"
+                            placeholder="e.g. Internal security audit scanner or developer workstation"
+                        />
+                        <InputError :message="whitelistForm.errors.description" class="mt-1" />
+                    </div>
+                </form>
+            </template>
+
+            <template #footer>
+                <SecondaryButton @click="showWhitelistModal = false" class="me-2">
+                    Cancel
+                </SecondaryButton>
+                <PrimaryButton @click="submitWhitelist" :disabled="whitelistForm.processing" class="bg-emerald-700 hover:bg-emerald-800">
+                    Save to Whitelist
+                </PrimaryButton>
+            </template>
+        </DialogModal>
+
+        <!-- View Whitelisted List Modal -->
+        <DialogModal :show="showWhitelistedListModal" @close="showWhitelistedListModal = false" max-width="3xl">
+            <template #title>
+                <div class="flex items-center justify-between w-full pr-6">
+                    <div class="flex items-center space-x-2">
+                        <div class="size-7 rounded-lg bg-emerald-100 text-emerald-900 flex items-center justify-center font-bold">
+                            <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                            </svg>
+                        </div>
+                        <span>Active Whitelisted Addresses ({{ whitelistedIps.length }})</span>
+                    </div>
+                    <button
+                        type="button"
+                        @click="showWhitelistedListModal = false; openWhitelistModal()"
+                        class="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold"
+                    >
+                        + Add IP
+                    </button>
+                </div>
+            </template>
+
+            <template #content>
+                <div v-if="whitelistedIps.length === 0" class="py-8 text-center text-xs text-gray-400">
+                    No whitelisted IP addresses configured.
+                </div>
+
+                <div v-else class="max-h-96 overflow-y-auto divide-y divide-cream-300 text-xs">
+                    <div
+                        v-for="item in whitelistedIps"
+                        :key="item.id"
+                        class="py-3 flex items-center justify-between gap-3"
+                    >
+                        <div>
+                            <div class="flex items-center space-x-2">
+                                <span class="font-mono font-bold text-gray-900 text-sm">{{ item.ip_address }}</span>
+                                <span v-if="item.ip_address.includes('/')" class="px-1.5 py-0.5 bg-blue-100 text-blue-800 text-[9px] font-bold rounded">
+                                    CIDR
+                                </span>
+                                <span v-else-if="item.ip_address.includes(':')" class="px-1.5 py-0.5 bg-purple-100 text-purple-800 text-[9px] font-bold rounded">
+                                    IPv6
+                                </span>
+                                <span v-else class="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-bold rounded">
+                                    IPv4
+                                </span>
+                                <span
+                                    class="px-2 py-0.5 text-[10px] font-bold rounded-full"
+                                    :class="item.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-700'"
+                                >
+                                    {{ item.is_active ? 'Active' : 'Disabled' }}
+                                </span>
+                            </div>
+                            <div class="font-semibold text-gray-800 mt-1">{{ item.label || 'Trusted Host' }}</div>
+                            <p v-if="item.description" class="text-xs text-gray-500">{{ item.description }}</p>
+                            <span class="text-[10px] text-gray-400">
+                                Added by {{ item.added_by || 'Admin' }} on {{ new Date(item.created_at).toLocaleString() }}
+                            </span>
+                        </div>
+
+                        <div class="flex items-center space-x-2 shrink-0">
+                            <button
+                                type="button"
+                                @click="toggleWhitelistIp(item)"
+                                class="px-3 py-1.5 rounded-xl text-xs font-semibold border transition"
+                                :class="item.is_active ? 'bg-gray-100 hover:bg-gray-200 text-gray-800 border-gray-300' : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600'"
+                            >
+                                {{ item.is_active ? 'Disable' : 'Enable' }}
+                            </button>
+                            <button
+                                type="button"
+                                @click="removeWhitelistIp(item)"
+                                class="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-xl text-xs font-semibold transition"
+                            >
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <template #footer>
+                <SecondaryButton @click="showWhitelistedListModal = false">
                     Close
                 </SecondaryButton>
             </template>

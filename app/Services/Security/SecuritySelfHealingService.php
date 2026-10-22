@@ -5,10 +5,12 @@ namespace App\Services\Security;
 use App\Models\SecurityBlockedIp;
 use App\Models\SecurityHealingLog;
 use App\Models\SecurityThreatLog;
+use App\Models\SecurityWhitelistedIp;
 use App\Models\SsoAuthorizationCode;
 use App\Models\SystemRule;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
+use Symfony\Component\HttpFoundation\IpUtils;
 
 class SecuritySelfHealingService
 {
@@ -54,13 +56,95 @@ class SecuritySelfHealingService
      */
     public function isWhitelisted(string $ip): bool
     {
-        $whitelist = SystemRule::getValue('security_ip_whitelist', self::DEFAULT_WHITELIST);
-
-        if (is_string($whitelist)) {
-            $whitelist = array_filter(array_map('trim', explode(',', $whitelist)));
+        if (in_array($ip, self::DEFAULT_WHITELIST, true)) {
+            return true;
         }
 
-        return in_array($ip, (array) $whitelist, true);
+        $whitelist = Cache::remember('sec:whitelist_ips', 60, function (): array {
+            $dbIps = SecurityWhitelistedIp::where('is_active', true)
+                ->pluck('ip_address')
+                ->all();
+
+            $ruleIps = SystemRule::getValue('security_ip_whitelist', []);
+            if (is_string($ruleIps)) {
+                $ruleIps = array_filter(array_map('trim', explode(',', $ruleIps)));
+            }
+
+            return array_values(array_unique(array_merge(self::DEFAULT_WHITELIST, $dbIps, (array) $ruleIps)));
+        });
+
+        if (in_array($ip, $whitelist, true)) {
+            return true;
+        }
+
+        try {
+            return IpUtils::checkIp($ip, $whitelist);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Invalidate cached whitelist IP entries.
+     */
+    public function clearWhitelistCache(): void
+    {
+        Cache::forget('sec:whitelist_ips');
+    }
+
+    /**
+     * Add an IP to the whitelist and automatically lift any active quarantine.
+     */
+    public function addWhitelistedIp(
+        string $ip,
+        string $label,
+        ?string $description = null,
+        string $addedBy = 'system'
+    ): SecurityWhitelistedIp {
+        $whitelisted = SecurityWhitelistedIp::updateOrCreate(
+            ['ip_address' => $ip],
+            [
+                'label' => $label,
+                'description' => $description,
+                'added_by' => $addedBy,
+                'is_active' => true,
+            ]
+        );
+
+        $this->clearWhitelistCache();
+
+        // Release any existing quarantine on this IP
+        $blocked = SecurityBlockedIp::where('ip_address', $ip)
+            ->orWhere('client_ipv4', $ip)
+            ->orWhere('client_ipv6', $ip)
+            ->get();
+
+        foreach ($blocked as $blockedRecord) {
+            if ($blockedRecord->is_active) {
+                $blockedRecord->update(['is_active' => false]);
+                Cache::forget("sec:blocked:{$blockedRecord->ip_address}");
+                if ($blockedRecord->client_ipv4) {
+                    Cache::forget("sec:blocked:{$blockedRecord->client_ipv4}");
+                }
+                if ($blockedRecord->client_ipv6) {
+                    Cache::forget("sec:blocked:{$blockedRecord->client_ipv6}");
+                }
+
+                SecurityHealingLog::create([
+                    'action_type' => 'whitelist_quarantine_release',
+                    'description' => "Quarantine released for IP {$blockedRecord->ip_address} upon addition to trusted whitelist by {$addedBy}.",
+                    'target' => $blockedRecord->ip_address,
+                    'status' => 'applied',
+                    'details' => [
+                        'ip_address' => $blockedRecord->ip_address,
+                        'whitelisted_ip' => $ip,
+                        'added_by' => $addedBy,
+                    ],
+                ]);
+            }
+        }
+
+        return $whitelisted;
     }
 
     /**
@@ -74,12 +158,21 @@ class SecuritySelfHealingService
         }
 
         $ip = $threat->ip_address;
-        if ($this->isWhitelisted($ip)) {
+        $clientIpv4 = $threat->client_ipv4;
+        $clientIpv6 = $threat->client_ipv6;
+
+        // Never auto-quarantine whitelisted IPs
+        if ($this->isWhitelisted($ip)
+            || ($clientIpv4 && $this->isWhitelisted($clientIpv4))
+            || ($clientIpv6 && $this->isWhitelisted($clientIpv6))
+        ) {
+            $threat->update(['action_taken' => 'whitelisted_allowed']);
+
             return;
         }
 
         // Prevent duplicate quarantine records if already actively blocked
-        if ($this->isIpBlocked($ip) || ($threat->client_ipv4 && $this->isIpBlocked($threat->client_ipv4))) {
+        if ($this->isIpBlocked($ip) || ($clientIpv4 && $this->isIpBlocked($clientIpv4))) {
             return;
         }
 
@@ -132,6 +225,21 @@ class SecuritySelfHealingService
         ?string $clientIpv4 = null,
         ?string $clientIpv6 = null
     ): SecurityBlockedIp {
+        if ($this->isWhitelisted($ip)
+            || ($clientIpv4 && $this->isWhitelisted($clientIpv4))
+            || ($clientIpv6 && $this->isWhitelisted($clientIpv6))
+        ) {
+            // Whitelisted IP address cannot be placed into quarantine
+            return SecurityBlockedIp::firstOrNew(
+                ['ip_address' => $ip],
+                [
+                    'reason' => $reason,
+                    'is_active' => false,
+                    'blocked_by' => $blockedBy,
+                ]
+            );
+        }
+
         $blockedUntil = $durationMinutes ? now()->addMinutes($durationMinutes) : null;
 
         $record = SecurityBlockedIp::updateOrCreate(
@@ -361,7 +469,11 @@ class SecuritySelfHealingService
 
         $quarantinedCount = 0;
         foreach ($unquarantinedExploits as $exploit) {
-            if (! $this->isIpBlocked($exploit->ip_address) && ! $this->isWhitelisted($exploit->ip_address)) {
+            $isWhitelisted = $this->isWhitelisted($exploit->ip_address)
+                || ($exploit->client_ipv4 && $this->isWhitelisted($exploit->client_ipv4))
+                || ($exploit->client_ipv6 && $this->isWhitelisted($exploit->client_ipv6));
+
+            if (! $this->isIpBlocked($exploit->ip_address) && ! $isWhitelisted) {
                 if ($applyFixes) {
                     $this->quarantineIp(
                         $exploit->ip_address,
@@ -380,6 +492,16 @@ class SecuritySelfHealingService
         if ($quarantinedCount > 0) {
             $healedActions[] = "Quarantined {$quarantinedCount} offending IP address(es) associated with recent critical exploit probes.";
         }
+
+        // 7. Trusted IP Whitelist Armor Check
+        $whitelistedCount = SecurityWhitelistedIp::where('is_active', true)->count();
+        $findings[] = [
+            'check' => 'ip_whitelisting',
+            'title' => 'Trusted IP Whitelist Armor',
+            'severity' => 'low',
+            'status' => 'secure',
+            'message' => "{$whitelistedCount} trusted IP address(es)/subnet(s) actively exempted from automated quarantine and velocity blocks.",
+        ];
 
         // Ensure score stays within 0-100 range
         $score = max(0, min(100, $score));

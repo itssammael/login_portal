@@ -7,9 +7,11 @@ use App\Models\AuditLog;
 use App\Models\SecurityBlockedIp;
 use App\Models\SecurityHealingLog;
 use App\Models\SecurityThreatLog;
+use App\Models\SecurityWhitelistedIp;
 use App\Models\SystemRule;
 use App\Services\Security\SecuritySelfHealingService;
 use Carbon\Carbon;
+use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -153,12 +155,16 @@ class SecurityController extends Controller
             ->take(20)
             ->get();
 
-        // 8. Recent Self-Healing Actions
+        // 8. Whitelisted IPs (Exempt from auto-quarantine)
+        $whitelistedIps = SecurityWhitelistedIp::orderByDesc('created_at')->get();
+        $whitelistedIpsCount = SecurityWhitelistedIp::where('is_active', true)->count();
+
+        // 9. Recent Self-Healing Actions
         $recentHealingLogs = SecurityHealingLog::latest()
             ->take(8)
             ->get();
 
-        // 9. Current Diagnostic Audit
+        // 10. Current Diagnostic Audit
         $diagnosticAudit = $this->selfHealingService->runAuditAndHeal(false);
 
         return Inertia::render('Admin/Security/Index', [
@@ -167,6 +173,7 @@ class SecurityController extends Controller
                 'probes_404_24h' => $probes40424h,
                 'ddos_blocks_24h' => $ddosBlocks24h,
                 'blocked_ips_count' => $blockedIpsCount,
+                'whitelisted_ips_count' => $whitelistedIpsCount,
                 'auto_defense_enabled' => $autoDefenseEnabled,
                 'score' => $diagnosticAudit['score'],
                 'posture' => $diagnosticAudit['posture'],
@@ -177,10 +184,107 @@ class SecurityController extends Controller
             'topOffendingIps' => $topOffendingIps,
             'threatLogs' => $threatLogs,
             'blockedIps' => $blockedIps,
+            'whitelistedIps' => $whitelistedIps,
             'recentHealingLogs' => $recentHealingLogs,
             'diagnosticFindings' => $diagnosticAudit['findings'],
             'filters' => $request->only(['search', 'threat_type', 'severity', 'resolved']),
         ]);
+    }
+
+    /**
+     * Add an IP address or CIDR range to the whitelist.
+     */
+    public function whitelistIp(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'ip_address' => [
+                'required',
+                'string',
+                'max:50',
+                'unique:security_whitelisted_ips,ip_address',
+                function (string $attribute, mixed $value, Closure $fail): void {
+                    $isValidIp = filter_var($value, FILTER_VALIDATE_IP) !== false;
+                    $isValidCidr = false;
+
+                    if (! $isValidIp && str_contains((string) $value, '/')) {
+                        [$subnet, $mask] = explode('/', (string) $value, 2);
+                        if (filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                            $isValidCidr = is_numeric($mask) && (int) $mask >= 0 && (int) $mask <= 32;
+                        } elseif (filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+                            $isValidCidr = is_numeric($mask) && (int) $mask >= 0 && (int) $mask <= 128;
+                        }
+                    }
+
+                    if (! $isValidIp && ! $isValidCidr) {
+                        $fail('The '.$attribute.' must be a valid IPv4 address, IPv6 address, or CIDR subnet (e.g. 192.168.1.100 or 10.0.0.0/24).');
+                    }
+                },
+            ],
+            'label' => ['required', 'string', 'max:150'],
+            'description' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $admin = $request->user();
+        $whitelisted = $this->selfHealingService->addWhitelistedIp(
+            $validated['ip_address'],
+            $validated['label'],
+            $validated['description'] ?? null,
+            "admin:{$admin->name}"
+        );
+
+        AuditLog::create([
+            'admin_id' => $admin->id,
+            'action' => 'security_whitelist_ip',
+            'target_type' => 'security_whitelisted_ip',
+            'target_id' => $whitelisted->id,
+            'details' => $validated,
+        ]);
+
+        return back()->with('success', "IP address {$validated['ip_address']} has been added to the whitelist and protected from automated quarantine.");
+    }
+
+    /**
+     * Remove an IP address from the whitelist.
+     */
+    public function removeWhitelistIp(Request $request, SecurityWhitelistedIp $whitelistedIp): RedirectResponse
+    {
+        $ip = $whitelistedIp->ip_address;
+        $whitelistedIp->delete();
+        $this->selfHealingService->clearWhitelistCache();
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'security_remove_whitelist_ip',
+            'target_type' => 'security_whitelisted_ip',
+            'target_id' => $whitelistedIp->id,
+            'details' => ['ip_address' => $ip],
+        ]);
+
+        return back()->with('success', "IP address {$ip} has been removed from the whitelist.");
+    }
+
+    /**
+     * Toggle active state of a whitelisted IP address.
+     */
+    public function toggleWhitelistIp(Request $request, SecurityWhitelistedIp $whitelistedIp): RedirectResponse
+    {
+        $whitelistedIp->update(['is_active' => ! $whitelistedIp->is_active]);
+        $this->selfHealingService->clearWhitelistCache();
+
+        $status = $whitelistedIp->is_active ? 'activated' : 'deactivated';
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'security_toggle_whitelist_ip',
+            'target_type' => 'security_whitelisted_ip',
+            'target_id' => $whitelistedIp->id,
+            'details' => [
+                'ip_address' => $whitelistedIp->ip_address,
+                'is_active' => $whitelistedIp->is_active,
+            ],
+        ]);
+
+        return back()->with('success', "IP address {$whitelistedIp->ip_address} whitelist protection {$status}.");
     }
 
     /**
@@ -193,6 +297,12 @@ class SecurityController extends Controller
             'reason' => ['required', 'string', 'max:255'],
             'duration_minutes' => ['nullable', 'integer', 'min:1'],
         ]);
+
+        if ($this->selfHealingService->isWhitelisted($validated['ip_address'])) {
+            return back()->withErrors([
+                'ip_address' => "IP address {$validated['ip_address']} is currently on the whitelist and protected from quarantine. Remove it from the whitelist first if you intend to quarantine it.",
+            ]);
+        }
 
         $admin = $request->user();
         $this->selfHealingService->quarantineIp(
