@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue';
 import { Link } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import axios from 'axios';
@@ -70,8 +70,69 @@ const fetchActivities = async () => {
     }
 };
 
+const weatherStations = ref([]);
+const waterLevels = ref([]);
+const loadingMonitoring = ref(true);
+const monitoringError = ref(false);
+let monitoringRefreshTimer;
+
+const primaryWeather = computed(() => weatherStations.value[0] || null);
+const weatherObservation = computed(() => primaryWeather.value?.latest_observation || null);
+const weatherCondition = computed(() => {
+    if (!weatherObservation.value) return 'Loading conditions';
+    if (Number(weatherObservation.value.precipitation_rate) > 0) return 'Rain showers';
+    if (Number(weatherObservation.value.humidity) >= 80) return 'Mostly Cloudy';
+    if (Number(weatherObservation.value.solar_radiation) > 300) return 'Sunny';
+
+    return 'Partly Cloudy';
+});
+
+const formatNumber = (value, digits = 1) => Number(value || 0).toFixed(digits);
+const formatReadingTime = (value) => {
+    if (!value) return 'Awaiting reading';
+
+    return new Intl.DateTimeFormat('en-PH', {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date(value.replace(' ', 'T')));
+};
+const waterLevelWidth = (sensor) => {
+    const level = Number(sensor.latest_data?.sensor_data || 0);
+    const dangerLevel = Number(sensor.level_4 || 1);
+
+    return `${Math.min(Math.max((level / dangerLevel) * 100, 0), 100)}%`;
+};
+const thresholdPosition = (threshold, dangerLevel) => `${Math.min((Number(threshold) / Number(dangerLevel)) * 100, 96)}%`;
+const waterLevelTone = (sensor) => {
+    const level = Number(sensor.latest_data?.sensor_data || 0);
+    if (level >= Number(sensor.level_4)) return 'bg-red-500';
+    if (level >= Number(sensor.level_3)) return 'bg-orange-500';
+    if (level >= Number(sensor.level_2)) return 'bg-amber-400';
+
+    return 'bg-sky-500';
+};
+
+const fetchMonitoring = async () => {
+    try {
+        loadingMonitoring.value = true;
+        monitoringError.value = false;
+        const [weatherResponse, waterResponse] = await Promise.all([
+            axios.get('https://lfews.lguportal.ink/api/latest-weather-observation'),
+            axios.get('https://lfews.lguportal.ink/api/live-water-level-data'),
+        ]);
+        weatherStations.value = weatherResponse.data?.data || [];
+        waterLevels.value = waterResponse.data?.data || [];
+    } catch (error) {
+        console.error('Unable to load live weather and river monitoring data:', error);
+        monitoringError.value = true;
+    } finally {
+        loadingMonitoring.value = false;
+    }
+};
+
 onMounted(() => {
     fetchActivities();
+    fetchMonitoring();
+    monitoringRefreshTimer = window.setInterval(fetchMonitoring, 300000);
     if (!announcement.value) {
         fetchLatestAnnouncement();
     }
@@ -85,6 +146,10 @@ onMounted(() => {
                 }
             });
     }
+});
+
+onBeforeUnmount(() => {
+    window.clearInterval(monitoringRefreshTimer);
 });
 </script>
 
@@ -222,45 +287,23 @@ onMounted(() => {
                     <!-- Right Column (approx 42% width on desktop) -->
                     <div class="lg:col-span-5 flex flex-col gap-6">
 
-                        <!-- Panel 3: Weather Widget (Green Gradient within #22C55E to #4ADE80) -->
-                        <div class="rounded-3xl p-6 sm:p-7 shadow-md relative overflow-hidden bg-gradient-to-r from-[#22c55e] to-[#4ade80] flex items-center justify-between min-h-[175px] border border-[#16a34a]/30">
-                            <!-- Weather Information (Left) -->
-                            <div class="z-10 flex flex-col justify-between h-full">
-                                <!-- Temperature -->
-                                <div class="text-5xl sm:text-6xl font-light tracking-tight text-forest-950 leading-none">
-                                    20°
-                                </div>
-
-                                <!-- Condition -->
-                                <div class="flex items-center space-x-2 mt-3 text-forest-950 font-bold text-sm sm:text-base">
-                                    <div class="flex items-center justify-center size-5 bg-forest-950/15 backdrop-blur-xs rounded-full p-0.5">
-                                        <svg class="size-3.5 text-forest-950" viewBox="0 0 24 24" fill="currentColor">
-                                            <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z" />
-                                        </svg>
-                                    </div>
-                                    <span class="tracking-wide">Mostly Cloudy</span>
-                                </div>
-
-                                <!-- Precipitation & Wind -->
-                                <div class="mt-3 text-xs text-forest-950 font-bold space-y-0.5">
-                                    <div>Precipitation: 20%</div>
-                                    <div>Wind: 3 mph</div>
-                                </div>
+                        <!-- Panel 3: Live Weather & River Monitoring -->
+                        <section class="h-[175px] overflow-hidden rounded-3xl border border-sky-200 bg-sky-50 shadow-md" aria-labelledby="monitoring-title">
+                            <div v-if="loadingMonitoring" class="grid h-full grid-cols-5 animate-pulse">
+                                <div class="col-span-2 bg-sky-600/70"></div>
+                                <div class="col-span-3 space-y-3 p-5"><div class="h-5 w-2/3 rounded bg-sky-100"></div><div class="h-10 rounded-2xl bg-white"></div><div class="h-10 rounded-2xl bg-white"></div></div>
                             </div>
-
-                            <!-- Stylized Graphic (Right): Overlapping Eclipse Circles -->
-                            <div class="relative w-36 h-36 sm:w-40 sm:h-40 shrink-0 flex items-center justify-center">
-                                <!-- Subtle background radial ring -->
-                                <div class="absolute inset-0 rounded-full border border-forest-950/10 scale-110"></div>
-                                <div class="absolute inset-0 rounded-full bg-radial from-white/20 to-transparent"></div>
-
-                                <!-- Dark Forest Green Circle -->
-                                <div class="absolute size-28 sm:size-32 rounded-full bg-gradient-to-tr from-[#0f2e1e] via-[#1b4332] to-[#2d6a4f] shadow-2xl ring-2 ring-forest-950/15 transform translate-x-2"></div>
-
-                                <!-- Overlapping Pale Soft Cream Circle -->
-                                <div class="absolute size-18 sm:size-20 rounded-full bg-[#fef9c3] shadow-xl ring-1 ring-forest-950/10 transform -translate-x-4 translate-y-2"></div>
+                            <div v-else-if="monitoringError" class="flex h-full flex-col items-center justify-center gap-2 p-5 text-center"><svg class="size-7 text-sky-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 9v3.75m0 3h.008M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 3.5c-.77-1.33-2.69-1.33-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3Z" /></svg><p class="text-xs font-bold text-slate-700">Live monitoring is temporarily unavailable.</p><button type="button" class="rounded-lg bg-sky-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-sky-700" @click="fetchMonitoring">Try again</button></div>
+                            <div v-else class="grid h-full grid-cols-5">
+                                <div class="relative col-span-2 overflow-hidden bg-gradient-to-br from-blue-700 via-sky-600 to-cyan-400 p-4 text-white">
+                                    <div class="absolute -right-5 top-7 size-20 rounded-full bg-amber-300/90 shadow-[0_0_22px_rgba(250,204,21,.85)]"></div>
+                                    <div class="absolute right-1 top-14 h-9 w-20 rounded-full bg-white/90 shadow-lg before:absolute before:-left-3 before:top-3 before:size-7 before:rounded-full before:bg-white/90"></div>
+                                    <div class="relative z-10"><h2 id="monitoring-title" class="text-sm font-black leading-none">Weather Conditions</h2><p class="mt-1 text-[9px] font-semibold text-sky-100">Latest observations from {{ weatherStations.length }} stations</p><p class="mt-4 text-4xl font-light leading-none">{{ formatNumber(weatherObservation?.temperature) }}°</p><p class="mt-2 max-w-[7.5rem] truncate text-xs font-black">{{ primaryWeather?.name || 'No station data' }}</p><div class="mt-1 flex items-center gap-1.5 text-[10px] font-medium text-sky-50"><span class="size-1.5 rounded-full bg-emerald-300"></span><span>{{ weatherCondition }} · {{ formatReadingTime(weatherObservation?.date_time) }}</span></div></div>
+                                    <div class="absolute inset-x-3 bottom-2 flex gap-1.5"><div v-for="station in weatherStations.slice(0, 3)" :key="station.name" class="min-w-0 flex-1 rounded-lg border border-white/20 bg-blue-950/15 px-1.5 py-1 backdrop-blur-sm"><p class="truncate text-[8px] font-bold">{{ station.name }}</p><p class="text-xs font-black">{{ formatNumber(station.latest_observation?.temperature) }}°</p></div></div>
+                                </div>
+                                <div class="col-span-3 bg-[radial-gradient(circle_at_top_right,_rgba(186,230,253,.8),_transparent_43%)] p-3 sm:p-4"><div class="flex items-center gap-2"><svg class="size-5 shrink-0 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7c2.1 0 2.1 2 4.2 2s2.1-2 4.2-2 2.1 2 4.2 2 2.1-2 4.2-2M3 12c2.1 0 2.1 2 4.2 2s2.1-2 4.2-2 2.1 2 4.2 2 2.1-2 4.2-2M3 17c2.1 0 2.1 2 4.2 2s2.1-2 4.2-2 2.1 2 4.2 2 2.1-2 4.2-2" /></svg><div><h3 class="text-sm font-black leading-none text-slate-800">River Water Levels</h3><p class="mt-0.5 text-[9px] font-semibold text-slate-500">Latest readings from {{ waterLevels.length }} sensors</p></div><button type="button" class="ml-auto rounded-md p-1 text-sky-700 hover:bg-sky-100" title="Refresh monitoring data" @click="fetchMonitoring"><svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8 8 0 0 0 4.582 9m0 0H9m11 11v-5h-.581m0 0A8 8 0 0 1 4.582 15m14.837 0H15" /></svg></button></div><div class="mt-2 space-y-1.5"><div v-for="sensor in waterLevels.slice(0, 3)" :key="sensor.name" class="grid grid-cols-[minmax(0,1fr)_42px_72px] items-center gap-2 rounded-xl bg-white/80 px-2 py-1.5 shadow-sm"><div class="min-w-0"><div class="flex items-center gap-1.5"><span class="size-1.5 shrink-0 rounded-full" :class="sensor.state ? 'bg-emerald-400' : 'bg-gray-400'"></span><p class="truncate text-[10px] font-black text-slate-800">{{ sensor.name }}</p></div><p class="mt-0.5 truncate pl-3 text-[8px] font-medium text-slate-400">{{ formatReadingTime(sensor.latest_data?.date) }}</p></div><p class="text-right text-sm font-black leading-none text-slate-800">{{ formatNumber(sensor.latest_data?.sensor_data, 2) }}<span class="block mt-0.5 text-[8px] font-bold text-slate-400">cm</span></p><div class="relative h-2 overflow-visible rounded-full bg-sky-100"><div class="absolute inset-y-0 left-0 rounded-full" :class="waterLevelTone(sensor)" :style="{ width: waterLevelWidth(sensor) }"></div><span class="absolute -top-3.5 text-[7px] font-black text-amber-600" :style="{ left: thresholdPosition(sensor.level_2, sensor.level_4) }">L2</span><span class="absolute -top-3.5 text-[7px] font-black text-orange-600" :style="{ left: thresholdPosition(sensor.level_3, sensor.level_4) }">L3</span><span class="absolute -top-3.5 right-0 text-[7px] font-black text-red-600">L4</span></div></div></div></div>
                             </div>
-                        </div>
+                        </section>
 
                         <!-- Panel 4: LGU Activities for {current_month & current_year} (Warm Cream from Image 3) -->
                         <div class="bg-cream-200 rounded-3xl p-6 sm:p-7 shadow-xs border border-cream-500/50 flex-1 flex flex-col transition hover:shadow-sm">
@@ -382,4 +425,3 @@ onMounted(() => {
         </div>
     </AppLayout>
 </template>
-
