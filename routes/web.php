@@ -12,6 +12,7 @@ use App\Http\Controllers\Admin\SystemRuleController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\FeedbackEmbedController;
 use App\Http\Controllers\FeedbackFormController;
+use App\Http\Controllers\LiveFeedbackFormController;
 use App\Http\Controllers\Sso\ConnectedSystemsController;
 use App\Http\Controllers\Sso\SsoProviderController;
 use App\Http\Middleware\CheckPendingSsoRequest;
@@ -28,6 +29,10 @@ Route::get('/', function () {
 
     return redirect()->route('login');
 });
+
+// Public Live Deployed Feedback Form Routes
+Route::get('/forms/e/{api_key}', [LiveFeedbackFormController::class, 'show'])->name('forms.live');
+Route::post('/forms/e/{api_key}', [LiveFeedbackFormController::class, 'submit'])->middleware('throttle:30,1')->name('forms.live.submit');
 
 // Public Embedded Feedback Form Routes (Session-authenticated & frame-protected)
 Route::get('/embed/feedback/{publicId}', [FeedbackEmbedController::class, 'show'])->name('feedback.embed.show');

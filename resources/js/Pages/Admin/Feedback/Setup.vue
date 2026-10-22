@@ -1254,6 +1254,49 @@ const closeSamplePreviewModal = () => {
                                     </div>
                                 </div>
 
+                                <!-- Live Deployed Form URL Card -->
+                                <div class="mt-3.5 bg-[#fffef9] p-3 rounded-xl border border-cream-500/60 shadow-xs">
+                                    <div class="flex items-center justify-between text-[11px] font-bold text-forest-900 mb-1.5">
+                                        <span class="flex items-center space-x-1">
+                                            <svg class="size-3.5 text-forest-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+                                            </svg>
+                                            <span>Live Deployed Form URL</span>
+                                        </span>
+                                        <a
+                                            :href="route('forms.live', event.api_key)"
+                                            target="_blank"
+                                            class="text-forest-800 hover:text-forest-950 text-[10px] font-semibold underline flex items-center space-x-0.5"
+                                        >
+                                            <span>Open in Portal</span>
+                                            <svg class="size-2.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                            </svg>
+                                        </a>
+                                    </div>
+
+                                    <div class="flex items-center space-x-1.5">
+                                        <input
+                                            type="text"
+                                            readonly
+                                            :value="route('forms.live', event.api_key)"
+                                            class="flex-1 px-2 py-1 bg-cream-100/70 border border-cream-400 rounded-lg text-xs font-mono select-all text-gray-800"
+                                        />
+                                        <button
+                                            type="button"
+                                            @click="copyText(route('forms.live', event.api_key), `live_url_${event.id}`)"
+                                            class="px-2.5 py-1 bg-forest-900 hover:bg-forest-950 text-white rounded-lg text-xs font-semibold shrink-0 transition cursor-pointer"
+                                            title="Copy Live Deployed URL"
+                                        >
+                                            {{ copiedRef === `live_url_${event.id}` ? '✓ Copied' : 'Copy URL' }}
+                                        </button>
+                                    </div>
+
+                                    <p class="mt-1 text-[10px] text-gray-500">
+                                        Direct public link for respondents to access and complete this feedback form.
+                                    </p>
+                                </div>
+
                                 <!-- Secure Public Iframe Embed Card -->
                                 <div class="mt-3.5 bg-[#fffef9] p-3.5 rounded-xl border border-cream-500/60 shadow-xs space-y-3">
                                     <div class="flex items-center justify-between text-[11px] font-bold text-forest-900">
