@@ -874,6 +874,176 @@ const confirmDeleteMessage = () => {
     });
 };
 
+// Group Admin Management State & Actions
+const showRenameGroupModal = ref(false);
+const renameGroupTitle = ref('');
+const isRenamingGroup = ref(false);
+
+const showAddMembersModal = ref(false);
+const addMembersSearch = ref('');
+const addMembersSelectedIds = ref([]);
+const addMembersSelectedUsers = ref([]);
+const isAddingMembers = ref(false);
+
+const memberToRemove = ref(null);
+const isRemovingMember = ref(false);
+
+const memberToPromote = ref(null);
+const isPromotingMember = ref(false);
+
+const showDeleteGroupModal = ref(false);
+const isDeletingGroup = ref(false);
+
+const addableContacts = computed(() => {
+    if (!props.activeConversation?.participants) return contacts.value;
+    const participantIds = new Set(props.activeConversation.participants.map(p => p.id));
+    return contacts.value.filter(c => !participantIds.has(c.id));
+});
+
+const openRenameGroupModal = () => {
+    renameGroupTitle.value = props.activeConversation?.title || '';
+    showRenameGroupModal.value = true;
+};
+
+const confirmRenameGroup = () => {
+    if (!renameGroupTitle.value.trim() || !props.activeConversation) return;
+    isRenamingGroup.value = true;
+
+    router.patch(route('chat.rename-group', props.activeConversation.id), {
+        title: renameGroupTitle.value.trim(),
+    }, {
+        preserveScroll: true,
+        onSuccess: () => {
+            showRenameGroupModal.value = false;
+            showToast('Group renamed successfully');
+        },
+        onError: (err) => {
+            showToast(err.title || err.error || 'Failed to rename group');
+        },
+        onFinish: () => {
+            isRenamingGroup.value = false;
+        },
+    });
+};
+
+const openAddMembersModal = () => {
+    addMembersSearch.value = '';
+    addMembersSelectedIds.value = [];
+    addMembersSelectedUsers.value = [];
+    showAddMembersModal.value = true;
+    fetchContacts('');
+};
+
+const onAddMembersSearchInput = () => {
+    if (contactSearchDebounceTimeout) clearTimeout(contactSearchDebounceTimeout);
+    contactSearchDebounceTimeout = setTimeout(() => {
+        fetchContacts(addMembersSearch.value);
+    }, 280);
+};
+
+const toggleAddMemberSelection = (user) => {
+    const idx = addMembersSelectedIds.value.indexOf(user.id);
+    if (idx > -1) {
+        addMembersSelectedIds.value.splice(idx, 1);
+        const selIdx = addMembersSelectedUsers.value.findIndex(u => u.id === user.id);
+        if (selIdx > -1) addMembersSelectedUsers.value.splice(selIdx, 1);
+    } else {
+        addMembersSelectedIds.value.push(user.id);
+        addMembersSelectedUsers.value.push(user);
+    }
+};
+
+const confirmAddMembers = () => {
+    if (addMembersSelectedIds.value.length === 0 || !props.activeConversation) return;
+    isAddingMembers.value = true;
+
+    router.post(route('chat.add-members', props.activeConversation.id), {
+        user_ids: addMembersSelectedIds.value,
+    }, {
+        preserveScroll: true,
+        onSuccess: () => {
+            showAddMembersModal.value = false;
+            addMembersSelectedIds.value = [];
+            addMembersSelectedUsers.value = [];
+            showToast('Members added to group');
+        },
+        onError: (err) => {
+            showToast(err.user_ids || err.error || 'Failed to add members');
+        },
+        onFinish: () => {
+            isAddingMembers.value = false;
+        },
+    });
+};
+
+const promptRemoveMember = (participant) => {
+    memberToRemove.value = participant;
+};
+
+const confirmRemoveMember = () => {
+    if (!memberToRemove.value || !props.activeConversation) return;
+    isRemovingMember.value = true;
+
+    router.delete(route('chat.remove-member', [props.activeConversation.id, memberToRemove.value.id]), {
+        preserveScroll: true,
+        onSuccess: () => {
+            showToast(`${memberToRemove.value.name} was removed from the group`);
+            memberToRemove.value = null;
+        },
+        onError: (err) => {
+            showToast(err.error || 'Failed to remove member');
+        },
+        onFinish: () => {
+            isRemovingMember.value = false;
+        },
+    });
+};
+
+const promptPromoteMember = (participant) => {
+    memberToPromote.value = participant;
+};
+
+const confirmPromoteMember = () => {
+    if (!memberToPromote.value || !props.activeConversation) return;
+    isPromotingMember.value = true;
+
+    router.post(route('chat.promote-member', [props.activeConversation.id, memberToPromote.value.id]), {}, {
+        preserveScroll: true,
+        onSuccess: () => {
+            showToast(`${memberToPromote.value.name} was promoted to group admin`);
+            memberToPromote.value = null;
+        },
+        onError: (err) => {
+            showToast(err.error || 'Failed to promote member');
+        },
+        onFinish: () => {
+            isPromotingMember.value = false;
+        },
+    });
+};
+
+const promptDeleteGroup = () => {
+    showDeleteGroupModal.value = true;
+};
+
+const confirmDeleteGroup = () => {
+    if (!props.activeConversation) return;
+    isDeletingGroup.value = true;
+
+    router.delete(route('chat.delete-group', props.activeConversation.id), {
+        onSuccess: () => {
+            showDeleteGroupModal.value = false;
+            showToast('Group deleted successfully');
+        },
+        onError: (err) => {
+            showToast(err.error || 'Failed to delete group');
+        },
+        onFinish: () => {
+            isDeletingGroup.value = false;
+        },
+    });
+};
+
 // Real-Time Echo Subscriptions
 let subscribedConversationId = null;
 
@@ -965,6 +1135,28 @@ const handleUserChannelEvent = (e) => {
         if (conv && conv.latest_message?.id === e.data?.message_id) {
             conv.latest_message.body = 'This message was deleted';
             conv.latest_message.is_deleted = true;
+        }
+    } else if (e.action === 'group_renamed') {
+        const conv = conversationsList.value.find(c => c.id === e.conversation_id);
+        if (conv && e.data?.title) {
+            conv.title = e.data.title;
+        }
+    } else if (e.action === 'members_added') {
+        const isCurrentAdded = Array.isArray(e.data?.participants) && e.data.participants.some(p => (p.id || p) === currentUser.value.id);
+        if (isCurrentAdded && e.data?.conversation && !conversationsList.value.some(c => c.id === e.data.conversation.id)) {
+            reorderConversation(e.data.conversation);
+        }
+    } else if (e.action === 'group_deleted') {
+        conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
+        if (props.activeConversation?.id === e.conversation_id) {
+            showToast('This group chat was deleted');
+            router.visit(route('chat.index'));
+        }
+    } else if (e.action === 'member_removed' && e.data?.user_id === currentUser.value.id) {
+        conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
+        if (props.activeConversation?.id === e.conversation_id) {
+            showToast('You were removed from this group');
+            router.visit(route('chat.index'));
         }
     }
 };
@@ -1060,6 +1252,54 @@ const handleConversationChannelEvent = (e) => {
                 targetMsg.attachment_url = null;
                 targetMsg.attachment_name = null;
             }
+        }
+    } else if (e.action === 'group_renamed') {
+        if (props.activeConversation && props.activeConversation.id === e.conversation_id && e.data?.title) {
+            props.activeConversation.title = e.data.title;
+        }
+        const conv = conversationsList.value.find(c => c.id === e.conversation_id);
+        if (conv && e.data?.title) {
+            conv.title = e.data.title;
+        }
+    } else if (e.action === 'members_added') {
+        if (props.activeConversation && props.activeConversation.id === e.conversation_id && Array.isArray(e.data?.participants)) {
+            if (!props.activeConversation.participants) props.activeConversation.participants = [];
+            e.data.participants.forEach(p => {
+                if (!props.activeConversation.participants.some(existing => existing.id === p.id)) {
+                    props.activeConversation.participants.push(p);
+                }
+            });
+        }
+    } else if (e.action === 'member_removed') {
+        if (props.activeConversation && props.activeConversation.id === e.conversation_id) {
+            if (e.data?.user_id === currentUser.value.id) {
+                showToast('You were removed from this group');
+                router.visit(route('chat.index'));
+                return;
+            }
+            if (props.activeConversation.participants) {
+                props.activeConversation.participants = props.activeConversation.participants.filter(p => p.id !== e.data.user_id);
+            }
+        }
+    } else if (e.action === 'member_promoted') {
+        if (props.activeConversation && props.activeConversation.id === e.conversation_id) {
+            if (props.activeConversation.participants) {
+                const p = props.activeConversation.participants.find(p => p.id === e.data.user_id);
+                if (p) {
+                    p.role = 'admin';
+                    p.is_admin = true;
+                }
+            }
+            if (e.data?.user_id === currentUser.value.id) {
+                props.activeConversation.is_admin = true;
+                showToast('You were promoted to group admin');
+            }
+        }
+    } else if (e.action === 'group_deleted') {
+        conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
+        if (props.activeConversation && props.activeConversation.id === e.conversation_id) {
+            showToast('This group chat was deleted');
+            router.visit(route('chat.index'));
         }
     }
 };
@@ -2190,9 +2430,23 @@ onBeforeUnmount(() => {
                                                         class="absolute bottom-1 right-1 size-4 bg-forest-500 border-2 border-white rounded-full"
                                                     ></span>
                                                 </div>
-                                                <h4 class="font-bold text-base text-gray-900 leading-tight">
-                                                    {{ (activeConversation.is_system || activeConversation.type === 'system') ? 'System Notifications' : activeConversation.title }}
-                                                </h4>
+                                                <div class="flex items-center justify-center space-x-1.5">
+                                                    <h4 class="font-bold text-base text-gray-900 leading-tight">
+                                                        {{ (activeConversation.is_system || activeConversation.type === 'system') ? 'System Notifications' : activeConversation.title }}
+                                                    </h4>
+                                                    <button
+                                                        v-if="activeConversation.type === 'group' && activeConversation.is_admin"
+                                                        type="button"
+                                                        @click="openRenameGroupModal"
+                                                        class="text-gray-400 hover:text-forest-800 p-1 rounded-lg hover:bg-cream-300 transition cursor-pointer"
+                                                        title="Rename Group"
+                                                        aria-label="Rename Group"
+                                                    >
+                                                        <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                                 <p v-if="activeConversation.other_user" class="text-xs text-gray-500 mt-0.5">
                                                     {{ activeConversation.other_user.email }}
                                                 </p>
@@ -2210,7 +2464,7 @@ onBeforeUnmount(() => {
                                                 </div>
 
                                                 <!-- Quick Actions Row -->
-                                                <div class="flex items-center space-x-3 mt-4">
+                                                <div class="flex flex-wrap items-center justify-center gap-2 mt-4">
                                                     <button
                                                         type="button"
                                                         @click="togglePinConversation(activeConversation)"
@@ -2225,6 +2479,15 @@ onBeforeUnmount(() => {
                                                     >
                                                         <span>{{ activeConversation.is_muted ? '🔕 Muted' : '🔔 Mute' }}</span>
                                                     </button>
+                                                    <button
+                                                        v-if="activeConversation.type === 'group' && activeConversation.is_admin"
+                                                        type="button"
+                                                        @click="promptDeleteGroup"
+                                                        class="px-3 py-1.5 text-xs font-semibold rounded-xl border border-red-300 bg-red-50 hover:bg-red-100 transition flex items-center space-x-1 text-red-700 cursor-pointer"
+                                                        title="Delete Group"
+                                                    >
+                                                        <span>🗑️ Delete Group</span>
+                                                    </button>
                                                 </div>
                                             </div>
 
@@ -2234,12 +2497,23 @@ onBeforeUnmount(() => {
                                                     <h5 class="text-xs font-bold text-gray-500 uppercase tracking-wider">
                                                         Participants ({{ activeConversation.participants?.length || 0 }})
                                                     </h5>
+                                                    <button
+                                                        v-if="activeConversation.type === 'group' && activeConversation.is_admin"
+                                                        type="button"
+                                                        @click="openAddMembersModal"
+                                                        class="text-xs font-semibold text-forest-800 hover:text-forest-950 flex items-center space-x-1 hover:underline cursor-pointer"
+                                                    >
+                                                        <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                                                        </svg>
+                                                        <span>Add Member</span>
+                                                    </button>
                                                 </div>
                                                 <div class="space-y-2">
                                                     <div 
                                                         v-for="participant in activeConversation.participants"
                                                         :key="participant.id"
-                                                        class="flex items-center justify-between p-2 hover:bg-cream-300/60 rounded-xl transition"
+                                                        class="flex items-center justify-between p-2 hover:bg-cream-300/60 rounded-xl transition group"
                                                     >
                                                         <div class="flex items-center space-x-3 truncate me-2">
                                                             <div class="relative shrink-0">
@@ -2254,16 +2528,54 @@ onBeforeUnmount(() => {
                                                                 ></span>
                                                             </div>
                                                             <div class="truncate text-left">
-                                                                <div class="text-xs font-semibold text-gray-900 truncate">
-                                                                    {{ participant.name }}
-                                                                    <span v-if="participant.id === $page.props.auth.user.id" class="text-[10px] text-forest-800 font-normal ms-1">(You)</span>
+                                                                <div class="text-xs font-semibold text-gray-900 flex items-center space-x-1 truncate">
+                                                                    <span class="truncate">{{ participant.name }}</span>
+                                                                    <span v-if="participant.id === $page.props.auth.user.id" class="text-[10px] text-forest-800 font-normal shrink-0">(You)</span>
+                                                                    <span
+                                                                        v-if="activeConversation.type === 'group' && (participant.is_admin || participant.role === 'admin')"
+                                                                        class="ms-1 px-1.5 py-0.2 text-[9px] font-bold bg-amber-100 text-amber-900 border border-amber-300/80 rounded-full shrink-0"
+                                                                    >
+                                                                        Admin
+                                                                    </span>
                                                                 </div>
                                                                 <div class="text-[11px] text-gray-500 truncate">{{ participant.email }}</div>
                                                             </div>
                                                         </div>
-                                                        <span v-if="participant.is_online" class="text-[10px] font-bold text-forest-800 bg-lime-200 px-2 py-0.5 rounded-full shrink-0">
-                                                            Online
-                                                        </span>
+
+                                                        <!-- Actions for Group Admins -->
+                                                        <div class="flex items-center space-x-1 shrink-0">
+                                                            <span v-if="participant.is_online" class="text-[10px] font-bold text-forest-800 bg-lime-200 px-2 py-0.5 rounded-full shrink-0">
+                                                                Online
+                                                            </span>
+
+                                                            <template v-if="activeConversation.type === 'group' && activeConversation.is_admin && participant.id !== $page.props.auth.user.id && !participant.is_admin && participant.role !== 'admin'">
+                                                                <!-- Promote to Admin -->
+                                                                <button
+                                                                    type="button"
+                                                                    @click.stop="promptPromoteMember(participant)"
+                                                                    class="p-1 text-gray-400 hover:text-amber-800 hover:bg-cream-200 rounded-lg transition cursor-pointer"
+                                                                    title="Promote to Group Admin"
+                                                                    :aria-label="`Promote ${participant.name} to Admin`"
+                                                                >
+                                                                    <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+                                                                    </svg>
+                                                                </button>
+
+                                                                <!-- Remove Member -->
+                                                                <button
+                                                                    type="button"
+                                                                    @click.stop="promptRemoveMember(participant)"
+                                                                    class="p-1 text-gray-400 hover:text-red-700 hover:bg-red-50 rounded-lg transition cursor-pointer"
+                                                                    title="Remove from Group"
+                                                                    :aria-label="`Remove ${participant.name} from group`"
+                                                                >
+                                                                    <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                                        <path stroke-linecap="round" stroke-linejoin="round" d="M22 10.5h-6m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.765z" />
+                                                                    </svg>
+                                                                </button>
+                                                            </template>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -2671,6 +2983,285 @@ onBeforeUnmount(() => {
                         class="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
                     >
                         Delete for Everyone
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Remove Member Confirmation Dialog Modal -->
+        <DialogModal :show="memberToRemove !== null" max-width="sm" @close="memberToRemove = null">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-red-100 text-red-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M22 10.5h-6m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.765z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Remove Member</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to remove <strong class="text-gray-900">{{ memberToRemove?.name }}</strong> from this group? They will no longer be able to view or send messages in this conversation.
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="memberToRemove = null"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="isRemovingMember"
+                        @click="confirmRemoveMember"
+                        class="px-4 py-2 bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isRemovingMember ? 'Removing...' : 'Remove Member' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Promote Member Confirmation Dialog Modal -->
+        <DialogModal :show="memberToPromote !== null" max-width="sm" @close="memberToPromote = null">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Promote to Group Admin</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to promote <strong class="text-gray-900">{{ memberToPromote?.name }}</strong> to a group admin? They will gain elevated permissions to rename the group, add members, remove non-admin members, and delete the group.
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="memberToPromote = null"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="isPromotingMember"
+                        @click="confirmPromoteMember"
+                        class="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isPromotingMember ? 'Promoting...' : 'Promote to Admin' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Delete Group Confirmation Dialog Modal -->
+        <DialogModal :show="showDeleteGroupModal" max-width="sm" @close="showDeleteGroupModal = false">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-red-100 text-red-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Delete Group Chat</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to permanently delete <strong class="text-gray-900">&ldquo;{{ activeConversation?.title }}&rdquo;</strong>? All messages, shared media, and files will be removed for all members. This action cannot be undone.
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="showDeleteGroupModal = false"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="isDeletingGroup"
+                        @click="confirmDeleteGroup"
+                        class="px-4 py-2 bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isDeletingGroup ? 'Deleting...' : 'Delete Group' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Rename Group Modal -->
+        <DialogModal :show="showRenameGroupModal" max-width="md" @close="showRenameGroupModal = false">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-forest-100 text-forest-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Rename Group Chat</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <div class="space-y-3">
+                    <label class="block text-xs font-bold text-gray-700">Group Name</label>
+                    <input
+                        v-model="renameGroupTitle"
+                        type="text"
+                        maxlength="255"
+                        placeholder="Enter new group name..."
+                        class="w-full px-3 py-2 border border-cream-400 rounded-xl bg-cream-50 text-sm focus:outline-hidden focus:ring-2 focus:ring-forest-500"
+                        @keydown.enter.prevent="confirmRenameGroup"
+                    />
+                </div>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="showRenameGroupModal = false"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="!renameGroupTitle.trim() || isRenamingGroup"
+                        @click="confirmRenameGroup"
+                        class="px-4 py-2 bg-forest-900 hover:bg-forest-950 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isRenamingGroup ? 'Saving...' : 'Save Name' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Add Members to Group Modal -->
+        <DialogModal :show="showAddMembersModal" max-width="md" @close="showAddMembersModal = false">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-forest-100 text-forest-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.765z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Add Members to Group</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <div class="space-y-4">
+                    <!-- Search Input -->
+                    <div class="relative">
+                        <input
+                            v-model="addMembersSearch"
+                            type="text"
+                            placeholder="Search contacts by name or email..."
+                            @input="onAddMembersSearchInput"
+                            class="w-full px-3 py-2 pl-9 border border-cream-400 rounded-xl bg-cream-50 text-sm focus:outline-hidden focus:ring-2 focus:ring-forest-500"
+                        />
+                        <svg class="size-4 text-gray-400 absolute left-3 top-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                        </svg>
+                    </div>
+
+                    <!-- Selected Members Pills -->
+                    <div v-if="addMembersSelectedUsers.length > 0" class="flex flex-wrap gap-1.5 p-2 bg-cream-200/50 rounded-xl border border-cream-400/50 max-h-24 overflow-y-auto">
+                        <span
+                            v-for="user in addMembersSelectedUsers"
+                            :key="user.id"
+                            class="inline-flex items-center space-x-1 px-2.5 py-1 bg-forest-900 text-white rounded-lg text-xs font-medium"
+                        >
+                            <span>{{ user.name }}</span>
+                            <button type="button" @click="toggleAddMemberSelection(user)" class="hover:text-red-300 cursor-pointer">
+                                &times;
+                            </button>
+                        </span>
+                    </div>
+
+                    <!-- Contacts List -->
+                    <div class="border border-cream-400/60 rounded-xl divide-y divide-cream-300 max-h-56 overflow-y-auto bg-cream-100">
+                        <div v-if="isLoadingContacts" class="p-6 text-center text-xs text-gray-500">
+                            Loading contacts...
+                        </div>
+                        <template v-else-if="addableContacts.length > 0">
+                            <div
+                                v-for="user in addableContacts"
+                                :key="user.id"
+                                @click="toggleAddMemberSelection(user)"
+                                class="p-2.5 flex items-center justify-between hover:bg-cream-200 cursor-pointer transition"
+                            >
+                                <div class="flex items-center space-x-3">
+                                    <img
+                                        :src="user.profile_photo_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.name)"
+                                        :alt="user.name"
+                                        class="size-8 rounded-full object-cover ring-1 ring-cream-400"
+                                    />
+                                    <div>
+                                        <div class="text-xs font-semibold text-gray-900">{{ user.name }}</div>
+                                        <div class="text-[11px] text-gray-500">{{ user.email }}</div>
+                                    </div>
+                                </div>
+                                <input
+                                    type="checkbox"
+                                    :checked="addMembersSelectedIds.includes(user.id)"
+                                    class="size-4 rounded border-cream-400 text-forest-800 focus:ring-forest-500 pointer-events-none"
+                                />
+                            </div>
+                        </template>
+                        <div v-else class="p-6 text-center text-xs text-gray-400">
+                            {{ addMembersSearch.trim() ? `No contacts match "${addMembersSearch}"` : 'All available contacts are already in this group' }}
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="showAddMembersModal = false"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="addMembersSelectedIds.length === 0 || isAddingMembers"
+                        @click="confirmAddMembers"
+                        class="px-4 py-2 bg-forest-900 hover:bg-forest-950 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isAddingMembers ? 'Adding...' : `Add Selected (${addMembersSelectedIds.length})` }}
                     </button>
                 </div>
             </template>

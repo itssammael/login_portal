@@ -13,6 +13,7 @@ use App\Services\MessageEncryptionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -152,6 +153,8 @@ class ChatController extends Controller
                     'participants' => $conversation->type === 'group' ? $conversation->users->map(fn (User $user): array => [
                         'id' => $user->id,
                         'name' => $user->name,
+                        'role' => $user->pivot?->role ?? 'member',
+                        'is_admin' => ($user->pivot?->role === 'admin'),
                     ])->values()->all() : [],
                     'latest_message' => $latestMessage ? [
                         'id' => $latestMessage->id,
@@ -165,6 +168,7 @@ class ChatController extends Controller
                     'unread_count' => $unreadCount,
                     'is_pinned' => (bool) ($participantPref?->is_pinned ?? false),
                     'is_muted' => (bool) ($participantPref?->is_muted ?? false),
+                    'is_admin' => $conversation->type === 'group' && ($participantPref?->role === 'admin'),
                     'last_message_at' => $latestMessage ? $latestMessage->created_at->diffForHumans() : ($conversation->last_message_at?->diffForHumans() ?? $conversation->created_at?->diffForHumans()),
                     'is_system' => $conversation->type === 'system',
                 ];
@@ -235,7 +239,11 @@ class ChatController extends Controller
                     return $this->formatMessage($message, $currentUser, $senderKey, $otherUserLastReadAt);
                 });
 
-                $participants = $convModel->users->map(function (User $u): array {
+                $participantsByUserId = $convModel->participants->keyBy('user_id');
+                $participants = $convModel->users->map(function (User $u) use ($participantsByUserId): array {
+                    $p = $participantsByUserId->get($u->id);
+                    $role = $p?->role ?? 'member';
+
                     return [
                         'id' => $u->id,
                         'name' => $u->name,
@@ -243,6 +251,8 @@ class ChatController extends Controller
                         'profile_photo_url' => $u->profile_photo_url,
                         'is_online' => $u->is_online,
                         'last_seen_at' => $u->last_seen_at?->diffForHumans(),
+                        'role' => $role,
+                        'is_admin' => $role === 'admin',
                     ];
                 })->values();
 
@@ -277,6 +287,7 @@ class ChatController extends Controller
                     'is_system' => $convModel->type === 'system',
                     'is_pinned' => (bool) ($currentParticipant?->is_pinned ?? false),
                     'is_muted' => (bool) ($currentParticipant?->is_muted ?? false),
+                    'is_admin' => $convModel->type === 'group' && ($currentParticipant?->role === 'admin'),
                     'created_at' => $convModel->created_at->format('M j, Y'),
                     'other_user' => $otherUser ? [
                         'id' => $otherUser->id,
@@ -467,11 +478,12 @@ class ChatController extends Controller
             'last_message_at' => now(),
         ]);
 
-        // Add creator as participant
+        // Add creator as admin participant
         ConversationParticipant::create([
             'conversation_id' => $conversation->id,
             'user_id' => $currentUser->id,
             'last_read_at' => now(),
+            'role' => ConversationParticipant::ROLE_ADMIN,
         ]);
 
         // Add selected members as participants
@@ -481,6 +493,7 @@ class ChatController extends Controller
                 'conversation_id' => $conversation->id,
                 'user_id' => (int) $userId,
                 'last_read_at' => null,
+                'role' => ConversationParticipant::ROLE_MEMBER,
             ]);
         }
 
@@ -489,9 +502,12 @@ class ChatController extends Controller
             'type' => 'group',
             'title' => $conversation->title,
             'other_user' => null,
+            'is_admin' => true,
             'participants' => $conversation->users->map(fn (User $user): array => [
                 'id' => $user->id,
                 'name' => $user->name,
+                'role' => $user->id === $currentUser->id ? 'admin' : 'member',
+                'is_admin' => $user->id === $currentUser->id,
             ])->values()->all(),
             'latest_message' => null,
             'unread_count' => 0,
@@ -505,6 +521,270 @@ class ChatController extends Controller
         ], 'group_created'));
 
         return redirect()->route('chat.index', ['conversation' => $conversation->id]);
+    }
+
+    /**
+     * Rename a group chat conversation.
+     */
+    public function renameGroup(Request $request, Conversation $conversation): RedirectResponse
+    {
+        $currentUser = $request->user();
+
+        if (! $conversation->isGroup()) {
+            abort(403, 'Only group conversations can be renamed.');
+        }
+
+        if (! $conversation->isAdmin($currentUser)) {
+            abort(403, 'Only group admins can rename the group.');
+        }
+
+        $validated = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+        ]);
+
+        $conversation->update([
+            'title' => trim($validated['title']),
+        ]);
+
+        broadcast(new MessageSent("Group renamed to \"{$conversation->title}\"", $conversation->id, [
+            'conversation_id' => $conversation->id,
+            'title' => $conversation->title,
+        ], 'group_renamed'));
+
+        return back()->with('success', 'Group renamed successfully.');
+    }
+
+    /**
+     * Add new members to a group chat conversation.
+     */
+    public function addMembers(Request $request, Conversation $conversation): RedirectResponse
+    {
+        $currentUser = $request->user();
+
+        if (! $conversation->isGroup()) {
+            abort(403, 'Only group conversations have members.');
+        }
+
+        if (! $conversation->isAdmin($currentUser)) {
+            abort(403, 'Only group admins can add members.');
+        }
+
+        $validated = $request->validate([
+            'user_ids' => ['required', 'array', 'min:1'],
+            'user_ids.*' => ['required', 'integer', 'exists:users,id'],
+        ]);
+
+        $existingUserIds = $conversation->participants()->pluck('user_id')->map(fn ($id) => (int) $id)->toArray();
+        $toAdd = array_values(array_diff(array_unique(array_map('intval', $validated['user_ids'])), $existingUserIds));
+
+        if (empty($toAdd)) {
+            return back()->with('error', 'Selected user(s) are already members of this group.');
+        }
+
+        foreach ($toAdd as $userId) {
+            ConversationParticipant::create([
+                'conversation_id' => $conversation->id,
+                'user_id' => $userId,
+                'role' => ConversationParticipant::ROLE_MEMBER,
+                'last_read_at' => null,
+            ]);
+        }
+
+        $newUsers = User::whereIn('id', $toAdd)->get();
+        $newParticipantsData = $newUsers->map(fn (User $u): array => [
+            'id' => $u->id,
+            'name' => $u->name,
+            'email' => $u->email,
+            'profile_photo_url' => $u->profile_photo_url,
+            'is_online' => $u->is_online,
+            'last_seen_at' => $u->last_seen_at?->diffForHumans(),
+            'role' => ConversationParticipant::ROLE_MEMBER,
+            'is_admin' => false,
+        ])->values()->all();
+
+        $latestMessage = $conversation->messages()->latest('id')->with('sender:id,name')->first();
+        $latestMessageBody = null;
+        if ($latestMessage) {
+            if ($latestMessage->is_deleted) {
+                $latestMessageBody = 'This message was deleted';
+            } elseif ($latestMessage->body !== null) {
+                $senderKey = UserEncryptionKey::where('user_id', $latestMessage->sender_id)->value('encryption_key')
+                    ?? $latestMessage->sender?->getOrCreateEncryptionKey();
+                $latestMessageBody = $senderKey
+                    ? MessageEncryptionService::decrypt($latestMessage->body, $senderKey)
+                    : $latestMessage->body;
+            } else {
+                $latestMessageBody = $latestMessage->type === 'image' ? '📷 Photo' : '📎 Attachment';
+            }
+        }
+
+        $allParticipants = $conversation->users()->get()->map(fn (User $user): array => [
+            'id' => $user->id,
+            'name' => $user->name,
+            'role' => $user->pivot?->role ?? 'member',
+            'is_admin' => ($user->pivot?->role === 'admin'),
+        ])->values()->all();
+
+        $conversationData = [
+            'id' => $conversation->id,
+            'type' => 'group',
+            'title' => $conversation->title,
+            'other_user' => null,
+            'is_admin' => false,
+            'participants' => $allParticipants,
+            'latest_message' => $latestMessage ? [
+                'id' => $latestMessage->id,
+                'body' => $latestMessageBody,
+                'type' => $latestMessage->type,
+                'sender_id' => $latestMessage->sender_id,
+                'sender_name' => $latestMessage->sender?->name ?? 'System',
+                'created_at' => $latestMessage->created_at->diffForHumans(),
+                'is_deleted' => $latestMessage->is_deleted,
+            ] : null,
+            'unread_count' => 0,
+            'is_pinned' => false,
+            'is_muted' => false,
+            'last_message_at' => $latestMessage ? $latestMessage->created_at->diffForHumans() : ($conversation->last_message_at?->diffForHumans() ?? $conversation->created_at?->diffForHumans()),
+            'is_system' => false,
+        ];
+
+        broadcast(new MessageSent("Members added to \"{$conversation->title}\"", $conversation->id, [
+            'conversation_id' => $conversation->id,
+            'participants' => $newParticipantsData,
+            'conversation' => $conversationData,
+        ], 'members_added'));
+
+        return back()->with('success', count($toAdd).' member(s) added successfully.');
+    }
+
+    /**
+     * Remove a non-admin member from a group chat conversation.
+     */
+    public function removeMember(Request $request, Conversation $conversation, User $user): RedirectResponse
+    {
+        $currentUser = $request->user();
+
+        if (! $conversation->isGroup()) {
+            abort(403, 'Only group conversations have members.');
+        }
+
+        if (! $conversation->isAdmin($currentUser)) {
+            abort(403, 'Only group admins can remove members.');
+        }
+
+        $participant = $conversation->participants()->where('user_id', $user->id)->first();
+
+        if (! $participant) {
+            abort(404, 'User is not a participant in this conversation.');
+        }
+
+        if ($participant->isAdmin()) {
+            abort(422, 'Admins cannot be removed from the group. Only non-admin members can be removed.');
+        }
+
+        // Snapshot participant IDs before deleting the participant to ensure the removed member receives the event
+        $recipientIds = $conversation->participants()->pluck('user_id')->map(fn ($id) => (int) $id)->values()->toArray();
+
+        $participant->delete();
+
+        broadcast(new MessageSent("{$user->name} was removed from \"{$conversation->title}\"", $conversation->id, [
+            'conversation_id' => $conversation->id,
+            'user_id' => $user->id,
+            'user_name' => $user->name,
+        ], 'member_removed', $recipientIds));
+
+        return back()->with('success', "{$user->name} was removed from the group.");
+    }
+
+    /**
+     * Promote a group member to admin role.
+     */
+    public function promoteMember(Request $request, Conversation $conversation, User $user): RedirectResponse
+    {
+        $currentUser = $request->user();
+
+        if (! $conversation->isGroup()) {
+            abort(403, 'Only group conversations have admin roles.');
+        }
+
+        if (! $conversation->isAdmin($currentUser)) {
+            abort(403, 'Only group admins can promote members.');
+        }
+
+        $participant = $conversation->participants()->where('user_id', $user->id)->first();
+
+        if (! $participant) {
+            abort(404, 'User is not a participant in this conversation.');
+        }
+
+        if ($participant->isAdmin()) {
+            abort(422, 'User is already an admin of this group.');
+        }
+
+        $participant->update([
+            'role' => ConversationParticipant::ROLE_ADMIN,
+        ]);
+
+        broadcast(new MessageSent("{$user->name} was promoted to group admin", $conversation->id, [
+            'conversation_id' => $conversation->id,
+            'user_id' => $user->id,
+            'user_name' => $user->name,
+            'role' => ConversationParticipant::ROLE_ADMIN,
+        ], 'member_promoted'));
+
+        return back()->with('success', "{$user->name} was promoted to group admin.");
+    }
+
+    /**
+     * Delete a group chat conversation.
+     */
+    public function deleteGroup(Request $request, Conversation $conversation): RedirectResponse
+    {
+        $currentUser = $request->user();
+
+        if (! $conversation->isGroup()) {
+            abort(403, 'Only group conversations can be deleted.');
+        }
+
+        if (! $conversation->isAdmin($currentUser)) {
+            abort(403, 'Only group admins can delete the group.');
+        }
+
+        // Snapshot participant IDs and attachment paths before deletion
+        $recipientIds = $conversation->participants()->pluck('user_id')->map(fn ($id) => (int) $id)->values()->toArray();
+        $attachmentPaths = $conversation->messages()
+            ->whereNotNull('attachment_path')
+            ->pluck('attachment_path')
+            ->filter()
+            ->values()
+            ->all();
+
+        $conversationId = $conversation->id;
+        $conversationTitle = $conversation->title;
+
+        // Run all three database deletions in a single transaction
+        DB::transaction(function () use ($conversation): void {
+            $conversation->messages()->delete();
+            $conversation->participants()->delete();
+            $conversation->delete();
+        });
+
+        // Delete message attachments from storage after transaction commits
+        foreach ($attachmentPaths as $path) {
+            try {
+                Storage::disk('local')->delete($path);
+                Storage::disk('public')->delete($path);
+            } catch (\Throwable) {
+                // Suppress storage cleanup errors
+            }
+        }
+
+        // Broadcast group_deleted event after transaction commits using the recipient snapshot
+        broadcast(new MessageSent("Group \"{$conversationTitle}\" was deleted", $conversationId, [
+            'conversation_id' => $conversationId,
+        ], 'group_deleted', $recipientIds));
+
+        return redirect()->route('chat.index')->with('success', 'Group chat deleted successfully.');
     }
 
     /**

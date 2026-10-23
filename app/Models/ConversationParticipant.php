@@ -10,6 +10,10 @@ class ConversationParticipant extends Model
 {
     use HasFactory;
 
+    public const ROLE_ADMIN = 'admin';
+
+    public const ROLE_MEMBER = 'member';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -18,10 +22,19 @@ class ConversationParticipant extends Model
     protected $fillable = [
         'conversation_id',
         'user_id',
+        'role',
         'last_read_at',
         'is_muted',
         'is_pinned',
     ];
+
+    /**
+     * Check if participant has the admin role.
+     */
+    public function isAdmin(): bool
+    {
+        return $this->role === self::ROLE_ADMIN;
+    }
 
     /**
      * Get the attributes that should be cast.

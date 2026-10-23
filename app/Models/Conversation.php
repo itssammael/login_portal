@@ -53,8 +53,53 @@ class Conversation extends Model
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'conversation_participants')
-            ->withPivot(['last_read_at', 'is_muted'])
+            ->withPivot(['last_read_at', 'is_muted', 'is_pinned', 'role'])
             ->withTimestamps();
+    }
+
+    /**
+     * Check if the conversation is a group chat.
+     */
+    public function isGroup(): bool
+    {
+        return $this->type === 'group';
+    }
+
+    /**
+     * Check if a specific user is an admin of this group conversation.
+     */
+    public function isAdmin(User|int $user): bool
+    {
+        if (! $this->isGroup()) {
+            return false;
+        }
+
+        $userId = $user instanceof User ? $user->id : (int) $user;
+
+        if ($this->relationLoaded('participants')) {
+            return $this->participants->contains(fn ($p) => (int) $p->user_id === $userId && $p->role === ConversationParticipant::ROLE_ADMIN);
+        }
+
+        return $this->participants()
+            ->where('user_id', $userId)
+            ->where('role', ConversationParticipant::ROLE_ADMIN)
+            ->exists();
+    }
+
+    /**
+     * Get the count of admins in this group conversation.
+     */
+    public function adminCount(): int
+    {
+        if (! $this->isGroup()) {
+            return 0;
+        }
+
+        if ($this->relationLoaded('participants')) {
+            return $this->participants->where('role', ConversationParticipant::ROLE_ADMIN)->count();
+        }
+
+        return $this->participants()->where('role', ConversationParticipant::ROLE_ADMIN)->count();
     }
 
     /**

@@ -904,4 +904,368 @@ class ChatTest extends TestCase
 
         $response->assertStatus(403);
     }
+
+    public function test_group_creator_is_assigned_admin_role_and_members_are_regular_members(): void
+    {
+        $creator = User::factory()->create();
+        $member1 = User::factory()->create();
+        $member2 = User::factory()->create();
+
+        $response = $this->actingAs($creator)->post(route('chat.create-group'), [
+            'title' => 'Core Architecture Team',
+            'user_ids' => [$member1->id, $member2->id],
+        ]);
+
+        $conversation = Conversation::where('title', 'Core Architecture Team')->first();
+        $this->assertNotNull($conversation);
+        $this->assertTrue($conversation->isGroup());
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $creator->id,
+            'role' => 'admin',
+        ]);
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $member1->id,
+            'role' => 'member',
+        ]);
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $member2->id,
+            'role' => 'member',
+        ]);
+
+        $this->assertTrue($conversation->isAdmin($creator));
+        $this->assertFalse($conversation->isAdmin($member1));
+    }
+
+    public function test_group_admin_can_rename_group(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Old Title', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member->id, 'role' => 'member']);
+
+        $response = $this->actingAs($admin)->patch(route('chat.rename-group', $conversation), [
+            'title' => 'New Shiny Group Name',
+        ]);
+
+        $response->assertSessionHasNoErrors();
+        $this->assertEquals('New Shiny Group Name', $conversation->fresh()->title);
+
+        Event::assertDispatched(MessageSent::class, function ($event) use ($conversation) {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'group_renamed'
+                && $event->messageData['title'] === 'New Shiny Group Name';
+        });
+    }
+
+    public function test_non_admin_member_cannot_rename_group(): void
+    {
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Original Title', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member->id, 'role' => 'member']);
+
+        $response = $this->actingAs($member)->patch(route('chat.rename-group', $conversation), [
+            'title' => 'Hacked Title',
+        ]);
+
+        $response->assertStatus(403);
+        $this->assertEquals('Original Title', $conversation->fresh()->title);
+    }
+
+    public function test_group_admin_can_add_members_to_group(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $admin = User::factory()->create();
+        $newMember = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Engineering', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+
+        $response = $this->actingAs($admin)->post(route('chat.add-members', $conversation), [
+            'user_ids' => [$newMember->id],
+        ]);
+
+        $response->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $newMember->id,
+            'role' => 'member',
+        ]);
+
+        Event::assertDispatched(MessageSent::class, function ($event) use ($conversation, $newMember) {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'members_added'
+                && $event->messageData['participants'][0]['id'] === $newMember->id
+                && isset($event->messageData['conversation'])
+                && $event->messageData['conversation']['id'] === $conversation->id;
+        });
+    }
+
+    public function test_non_admin_member_cannot_add_members_to_group(): void
+    {
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+        $stranger = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Engineering', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member->id, 'role' => 'member']);
+
+        $response = $this->actingAs($member)->post(route('chat.add-members', $conversation), [
+            'user_ids' => [$stranger->id],
+        ]);
+
+        $response->assertStatus(403);
+        $this->assertDatabaseMissing('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $stranger->id,
+        ]);
+    }
+
+    public function test_group_admin_can_remove_non_admin_member(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Frontend Guild', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member->id, 'role' => 'member']);
+
+        $response = $this->actingAs($admin)->delete(route('chat.remove-member', [$conversation, $member]));
+        $response->assertSessionHasNoErrors();
+
+        $this->assertDatabaseMissing('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $member->id,
+        ]);
+
+        Event::assertDispatched(MessageSent::class, function ($event) use ($conversation, $member, $admin) {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'member_removed'
+                && $event->messageData['user_id'] === $member->id
+                && in_array($member->id, $event->recipientUserIds ?? [])
+                && in_array($admin->id, $event->recipientUserIds ?? []);
+        });
+
+        // Ensure server-side access checks immediately exclude the removed member
+        $this->actingAs($member)->post(route('chat.send-message', $conversation), [
+            'message' => 'Should be forbidden',
+        ])->assertStatus(403);
+    }
+
+    public function test_non_admin_member_cannot_remove_member(): void
+    {
+        $admin = User::factory()->create();
+        $member1 = User::factory()->create();
+        $member2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Frontend Guild', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member1->id, 'role' => 'member']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member2->id, 'role' => 'member']);
+
+        $response = $this->actingAs($member1)->delete(route('chat.remove-member', [$conversation, $member2]));
+        $response->assertStatus(403);
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $member2->id,
+        ]);
+    }
+
+    public function test_admin_cannot_remove_another_admin(): void
+    {
+        $admin1 = User::factory()->create();
+        $admin2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Leadership', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin1->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin2->id, 'role' => 'admin']);
+
+        $response = $this->actingAs($admin1)->delete(route('chat.remove-member', [$conversation, $admin2]));
+        $response->assertStatus(422);
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin2->id,
+            'role' => 'admin',
+        ]);
+    }
+
+    public function test_group_admin_can_promote_member_to_admin(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Backend Guild', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member->id, 'role' => 'member']);
+
+        $response = $this->actingAs($admin)->post(route('chat.promote-member', [$conversation, $member]));
+        $response->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $member->id,
+            'role' => 'admin',
+        ]);
+
+        Event::assertDispatched(MessageSent::class, function ($event) use ($conversation, $member) {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'member_promoted'
+                && $event->messageData['user_id'] === $member->id
+                && $event->messageData['role'] === 'admin';
+        });
+    }
+
+    public function test_non_admin_member_cannot_promote_member(): void
+    {
+        $admin = User::factory()->create();
+        $member1 = User::factory()->create();
+        $member2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Backend Guild', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member1->id, 'role' => 'member']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member2->id, 'role' => 'member']);
+
+        $response = $this->actingAs($member1)->post(route('chat.promote-member', [$conversation, $member2]));
+        $response->assertStatus(403);
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $member2->id,
+            'role' => 'member',
+        ]);
+    }
+
+    public function test_promoting_already_admin_member_is_rejected(): void
+    {
+        $admin1 = User::factory()->create();
+        $admin2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Executive', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin1->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin2->id, 'role' => 'admin']);
+
+        $response = $this->actingAs($admin1)->post(route('chat.promote-member', [$conversation, $admin2]));
+        $response->assertStatus(422);
+    }
+
+    public function test_group_admin_can_delete_group_and_associated_messages_and_attachments(): void
+    {
+        Event::fake([MessageSent::class]);
+        Storage::fake('local');
+        Storage::fake('public');
+
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Temporary Squad', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member->id, 'role' => 'member']);
+
+        $attachmentPath = 'chat-attachments/temp_file.pdf';
+        Storage::disk('local')->put($attachmentPath, 'Sample content');
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $admin->id,
+            'body' => 'Important document',
+            'type' => 'file',
+            'attachment_path' => $attachmentPath,
+            'attachment_name' => 'temp_file.pdf',
+        ]);
+
+        $response = $this->actingAs($admin)->delete(route('chat.delete-group', $conversation));
+        $response->assertRedirect(route('chat.index'));
+
+        $this->assertDatabaseMissing('conversations', ['id' => $conversation->id]);
+        $this->assertDatabaseMissing('messages', ['id' => $message->id]);
+        $this->assertDatabaseMissing('conversation_participants', ['conversation_id' => $conversation->id]);
+
+        Storage::disk('local')->assertMissing($attachmentPath);
+
+        Event::assertDispatched(MessageSent::class, function ($event) use ($conversation, $admin, $member) {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'group_deleted'
+                && in_array($admin->id, $event->recipientUserIds ?? [])
+                && in_array($member->id, $event->recipientUserIds ?? []);
+        });
+    }
+
+    public function test_message_sent_preserves_channels_from_recipient_snapshot_even_after_participants_deleted(): void
+    {
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Test Channels', 'last_message_at' => now()]);
+
+        // Simulating post-deletion state where conversation_participants rows are gone
+        $event = new MessageSent(
+            'Snapshot test',
+            $conversation->id,
+            ['some' => 'data'],
+            'member_removed',
+            [$admin->id, $member->id]
+        );
+
+        $channels = $event->broadcastOn();
+        $channelNames = array_map(fn ($c) => $c->name, $channels);
+
+        $this->assertContains('private-chat.conversation.'.$conversation->id, $channelNames);
+        $this->assertContains('private-App.Models.User.'.$admin->id, $channelNames);
+        $this->assertContains('private-App.Models.User.'.$member->id, $channelNames);
+
+        $payload = $event->broadcastWith();
+        $this->assertContains($admin->id, $payload['participant_ids']);
+        $this->assertContains($member->id, $payload['participant_ids']);
+    }
+
+    public function test_non_admin_member_cannot_delete_group(): void
+    {
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'group', 'title' => 'Permanent Group', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $member->id, 'role' => 'member']);
+
+        $response = $this->actingAs($member)->delete(route('chat.delete-group', $conversation));
+        $response->assertStatus(403);
+
+        $this->assertDatabaseHas('conversations', ['id' => $conversation->id]);
+    }
+
+    public function test_admin_actions_cannot_be_performed_on_direct_conversations(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $directConv = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $directConv->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $directConv->id, 'user_id' => $user2->id]);
+
+        $this->actingAs($user1)->patch(route('chat.rename-group', $directConv), ['title' => 'Direct Rename'])->assertStatus(403);
+        $this->actingAs($user1)->post(route('chat.add-members', $directConv), ['user_ids' => [$user2->id]])->assertStatus(403);
+        $this->actingAs($user1)->delete(route('chat.remove-member', [$directConv, $user2]))->assertStatus(403);
+        $this->actingAs($user1)->post(route('chat.promote-member', [$directConv, $user2]))->assertStatus(403);
+        $this->actingAs($user1)->delete(route('chat.delete-group', $directConv))->assertStatus(403);
+    }
 }
