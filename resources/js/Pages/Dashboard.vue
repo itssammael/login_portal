@@ -115,12 +115,50 @@ const fetchMonitoring = async () => {
     try {
         loadingMonitoring.value = true;
         monitoringError.value = false;
-        const [weatherResponse, waterResponse] = await Promise.all([
-            axios.get('https://lfews.lguportal.ink/api/latest-weather-observation'),
-            axios.get('https://lfews.lguportal.ink/api/live-water-level-data'),
+
+        // 1. Try local same-origin proxy first (eliminates cross-origin CORS barriers)
+        try {
+            const proxyRes = await fetch('/api/monitoring/live', {
+                credentials: 'same-origin',
+                headers: { Accept: 'application/json' },
+            });
+            if (proxyRes.ok) {
+                const proxyData = await proxyRes.json();
+                if (proxyData.status === 'success' && (proxyData.weather?.length > 0 || proxyData.water?.length > 0)) {
+                    weatherStations.value = proxyData.weather || [];
+                    waterLevels.value = proxyData.water || [];
+                    return;
+                }
+            }
+        } catch (proxyErr) {
+            console.warn('Local monitoring proxy error, falling back to direct public endpoints:', proxyErr);
+        }
+
+        // 2. Fallback: Direct public endpoints with omitted credentials to comply with wildcard CORS
+        const fetchPublic = async (url) => {
+            const res = await fetch(url, {
+                method: 'GET',
+                credentials: 'omit',
+                headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return res.json();
+        };
+
+        const results = await Promise.allSettled([
+            fetchPublic('https://lfews.lguportal.ink/api/latest-weather-observation'),
+            fetchPublic('https://lfews.lguportal.ink/api/live-water-level-data'),
         ]);
-        weatherStations.value = weatherResponse.data?.data || [];
-        waterLevels.value = waterResponse.data?.data || [];
+
+        const weatherResult = results[0].status === 'fulfilled' ? results[0].value?.data : null;
+        const waterResult = results[1].status === 'fulfilled' ? results[1].value?.data : null;
+
+        if (!weatherResult && !waterResult) {
+            throw new Error('Both public monitoring endpoints failed to load');
+        }
+
+        weatherStations.value = weatherResult || [];
+        waterLevels.value = waterResult || [];
     } catch (error) {
         console.error('Unable to load live weather and river monitoring data:', error);
         monitoringError.value = true;
