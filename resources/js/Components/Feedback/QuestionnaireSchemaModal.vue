@@ -740,7 +740,7 @@ const saveSchema = () => {
         preserveScroll: true,
         onSuccess: () => {
             emit('saved');
-            emit('close');
+            // emit('close');
         },
         onError: () => {
             if (schemaErrorsList.value.length > 0) {
