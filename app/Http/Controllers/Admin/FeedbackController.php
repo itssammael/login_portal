@@ -724,6 +724,11 @@ class FeedbackController extends Controller
             ['schema' => $validatedSchema]
         );
 
+        if ($feedback->wasRecentlyCreated) {
+            $feedback->created_by = $admin->id;
+            $feedback->save();
+        }
+
         AuditLog::create([
             'admin_id' => $admin->id,
             'action' => 'configured_feedback_form',

@@ -10,6 +10,8 @@ use App\Http\Controllers\Admin\SsoPortalController;
 use App\Http\Controllers\Admin\SystemAppearanceController;
 use App\Http\Controllers\Admin\SystemRuleController;
 use App\Http\Controllers\ChatController;
+use App\Http\Controllers\FeedbackAnalyticsController;
+use App\Http\Controllers\FeedbackAnalyticsPageController;
 use App\Http\Controllers\FeedbackEmbedController;
 use App\Http\Controllers\FeedbackFormController;
 use App\Http\Controllers\LiveFeedbackFormController;
@@ -30,7 +32,11 @@ Route::get('/', function () {
     return redirect()->route('login');
 });
 
+Route::post('_boost/browser_logs', fn () => response()->noContent());
+
 // Public Live Deployed Feedback Form Routes
+Route::get('/forms/anal/{api_key}', [FeedbackAnalyticsPageController::class, 'show'])->middleware('throttle:60,1')->name('forms.analytics.public');
+
 Route::get('/forms/e/{api_key}', [LiveFeedbackFormController::class, 'show'])->name('forms.live');
 Route::post('/forms/e/{api_key}', [LiveFeedbackFormController::class, 'submit'])->middleware('throttle:30,1')->name('forms.live.submit');
 
@@ -133,6 +139,15 @@ Route::middleware([
     // User Feedback Form Routes
     Route::get('/feedback', [FeedbackFormController::class, 'show'])->name('feedback.form');
     Route::post('/feedback', [FeedbackFormController::class, 'submit'])->name('feedback.submit');
+
+    Route::prefix('feedback/{feedback}/analytics')->name('feedback.analytics.')->middleware('throttle:60,1')->group(function () {
+        Route::get('/publication', [FeedbackAnalyticsController::class, 'index'])->name('publication');
+        Route::post('/preview', [FeedbackAnalyticsController::class, 'preview'])->name('preview');
+        Route::post('/reports', [FeedbackAnalyticsController::class, 'store'])->name('store');
+        Route::put('/reports/{report}', [FeedbackAnalyticsController::class, 'update'])->name('update');
+        Route::post('/reports/{report}/publish', [FeedbackAnalyticsController::class, 'publish'])->name('publish');
+        Route::post('/reports/{report}/unpublish', [FeedbackAnalyticsController::class, 'unpublish'])->name('unpublish');
+    });
 
     // Admin Panel Routes
     Route::prefix('admin')->middleware('admin')->name('admin.')->group(function () {

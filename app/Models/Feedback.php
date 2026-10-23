@@ -45,6 +45,17 @@ class Feedback extends Model
         return $this->belongsTo(FbEvent::class, 'event_id');
     }
 
+    public function analyticsReports(): HasMany
+    {
+        return $this->hasMany(FeedbackAnalyticsReport::class);
+    }
+
+    public function publishedAnalyticsReport(): BelongsTo
+    {
+        return $this->belongsTo(FeedbackAnalyticsReport::class, 'published_analytics_report_id')
+            ->where('status', 'published')->where('visibility', 'public');
+    }
+
     /**
      * Get the submissions for this feedback template.
      */

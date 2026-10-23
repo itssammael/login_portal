@@ -10,6 +10,7 @@ use App\Models\FbEvent;
 use App\Models\FbParticipant;
 use App\Models\FbSubmission;
 use App\Models\Feedback;
+use App\Services\FeedbackAnalyticsService;
 use App\Services\FeedbackSchemaValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,13 +23,14 @@ class FeedbackFormController extends Controller
     /**
      * Display the feedback form questionnaire for the active system event.
      */
-    public function show(Request $request, FeedbackSchemaValidator $schemaValidator): Response
+    public function show(Request $request, FeedbackSchemaValidator $schemaValidator, FeedbackAnalyticsService $analytics): Response
     {
         $user = $request->user();
 
         $forms = Feedback::query()
             ->with([
                 'event:id,name,details,api_key',
+                'publishedAnalyticsReport',
                 'event.embed:event_id,public_id,client_id,is_active',
                 'event.functions:id,function,details',
             ])
@@ -36,7 +38,7 @@ class FeedbackFormController extends Controller
             ->whereHas('event')
             ->latest('id')
             ->get()
-            ->map(function (Feedback $feedback) use ($schemaValidator): array {
+            ->map(function (Feedback $feedback) use ($schemaValidator, $analytics, $user): array {
                 $event = $feedback->event;
                 $schema = $schemaValidator->resolveSchemaForEvent($feedback->schema, $event);
 
@@ -44,6 +46,8 @@ class FeedbackFormController extends Controller
                     'id' => $feedback->id,
                     'schema' => $schema,
                     'submissions_count' => $feedback->submissions_count,
+                    'analytics' => $analytics->publication($feedback),
+                    'can_manage_analytics' => $user?->can('manageAnalytics', $feedback) ?? false,
                     'event' => [
                         'id' => $event->id,
                         'name' => $event->name,

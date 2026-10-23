@@ -12,6 +12,21 @@ export default {
         './resources/js/**/*.vue',
     ],
 
+    safelist: [
+        {
+            pattern: /grid-cols-(1|2|3|4|5|6|7|8|9|10|11|12)/,
+            variants: ['sm', 'md', 'lg', 'xl'],
+        },
+        {
+            pattern: /col-span-(1|2|3|4|5|6|7|8|9|10|11|12|full)/,
+            variants: ['sm', 'md', 'lg', 'xl'],
+        },
+        {
+            pattern: /row-span-(1|2|3|4|5|6|7|8|9|full)/,
+            variants: ['sm', 'md', 'lg', 'xl'],
+        },
+    ],
+
     theme: {
         extend: {
             fontFamily: {
