@@ -120,6 +120,11 @@ Route::middleware([
     Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])->name('chat.download-attachment');
     Route::post('/chat/direct', [ChatController::class, 'startDirect'])->name('chat.start-direct');
     Route::post('/chat/group', [ChatController::class, 'createGroup'])->name('chat.create-group');
+    Route::patch('/chat/{conversation}/title', [ChatController::class, 'renameGroup'])->name('chat.rename-group');
+    Route::post('/chat/{conversation}/members', [ChatController::class, 'addMembers'])->name('chat.add-members');
+    Route::delete('/chat/{conversation}/members/{user}', [ChatController::class, 'removeMember'])->name('chat.remove-member');
+    Route::post('/chat/{conversation}/members/{user}/promote', [ChatController::class, 'promoteMember'])->name('chat.promote-member');
+    Route::delete('/chat/{conversation}', [ChatController::class, 'deleteGroup'])->name('chat.delete-group');
     Route::post('/chat/{conversation}/messages', [ChatController::class, 'sendMessage'])->middleware('throttle:60,1')->name('chat.send-message');
     Route::patch('/chat/messages/{message}', [ChatController::class, 'editMessage'])->name('chat.edit-message');
     Route::post('/chat/{conversation}/read', [ChatController::class, 'markAsRead'])->name('chat.mark-read');
