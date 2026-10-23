@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { usePage } from '@inertiajs/vue3';
 import FeedbackAnalyticsReport from './FeedbackAnalyticsReport.vue';
-import { moveBlock, reorderBlock, reportBlocks } from './feedbackAnalyticsLayout';
+import { isDescendantOf, moveBlock, reorderBlock, reportBlocks } from './feedbackAnalyticsLayout';
 
 const aspectW = 8.333333333;
 const aspectH = 11.111111111;
@@ -32,7 +32,9 @@ const settingsPanelRef = ref(null);
 const isAdmin = computed(() => Boolean(usePage().props.auth?.user?.is_admin));
 const selectedReport = computed(() => reports.value.find((report) => report.id === selectedId.value));
 const selectedBlock = computed(() => config.value ? reportBlocks(config.value).find((block) => block.key === selectedKey.value) : null);
+const blankSections = computed(() => (config.value?.sections || []).filter((s) => s.kind === 'blank'));
 const chartTypes = ['bar', 'column', 'line', 'area', 'pie', 'donut', 'radar', 'table', 'kpi'];
+const borderStyles = ['solid', 'dashed', 'dotted', 'double', 'none'];
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const aggregates = (question) => questions.value.find((item) => item.id === question)?.type === 'number'
@@ -79,17 +81,54 @@ async function run(action) {
 
 function normalizeLayout() {
     config.value.columns = 12;
-    reportBlocks(config.value).forEach((block, index) => {
-        block.item.position = index;
-        block.item.width ??= block.kind === 'section' ? 12 : 6;
+    (config.value.sections || []).forEach((s) => {
+        s.id ??= crypto.randomUUID();
+    });
+    const allBlocks = reportBlocks(config.value);
+    const validBlankIds = new Set(
+        (config.value.sections || [])
+            .filter((s) => s.kind === 'blank')
+            .map((s) => s.id),
+    );
+
+    allBlocks.forEach((block) => {
+        if (block.kind === 'section' || block.kind === 'blank') {
+            block.item.id ??= crypto.randomUUID();
+        }
+        if (
+            block.item.parent_id
+            && (
+                !validBlankIds.has(block.item.parent_id)
+                || block.item.parent_id === block.item.id
+                || (block.kind === 'blank' && isDescendantOf(config.value, block.item.parent_id, block.item.id))
+            )
+        ) {
+            block.item.parent_id = null;
+        }
+        block.item.parent_id ??= null;
+        block.item.width ??= block.kind === 'section' || block.kind === 'blank' ? 12 : 6;
         if (block.item.width > 12) block.item.width = 12;
         if (block.item.width < 1) block.item.width = 1;
         block.item.height ??= block.kind === 'section' ? 3 : 5;
         if (block.item.height > 9) block.item.height = 9;
         if (block.item.height < 1) block.item.height = 1;
-        if (block.kind === 'section') {
-            block.item.id ??= crypto.randomUUID();
+
+        if (block.kind === 'blank') {
+            block.item.show_heading ??= true;
+            block.item.rows = Math.min(Math.max(Number(block.item.rows) || 1, 1), 12);
+            block.item.columns = Math.min(Math.max(Number(block.item.columns) || 12, 1), 12);
+            block.item.border_width = Math.min(Math.max(Number(block.item.border_width ?? 1), 0), 16);
+            block.item.border_radius = Math.min(Math.max(Number(block.item.border_radius ?? 16), 0), 48);
+            block.item.border_style ??= 'solid';
+            block.item.border_color ??= '#e7dcc3';
         }
+    });
+
+    const parentBuckets = new Set([null, ...validBlankIds]);
+    parentBuckets.forEach((parentId) => {
+        reportBlocks(config.value, parentId).forEach((block, index) => {
+            block.item.position = index;
+        });
     });
 }
 
@@ -102,6 +141,13 @@ function onBlockWidthChange(item) {
 function onBlockHeightChange(item) {
     if (!item.height || item.height < 1) item.height = 1;
     if (item.height > 9) item.height = 9;
+}
+
+function onBlockParentChange(block) {
+    if (!block) return;
+    const newParentId = block.item.parent_id || null;
+    reorderBlock(config.value, block.key, null, newParentId);
+    normalizeLayout();
 }
 
 function newReport() {
@@ -131,7 +177,17 @@ function selectReport() {
     refreshPreview();
 }
 
-function createChart(question = questions.value[0]) {
+function defaultTargetParentId() {
+    if (selectedBlock.value?.kind === 'blank') {
+        return selectedBlock.value.item.id;
+    }
+    if (selectedBlock.value?.item?.parent_id) {
+        return selectedBlock.value.item.parent_id;
+    }
+    return null;
+}
+
+function createChart(question = questions.value[0], parentId = null) {
     if (!question || config.value.charts.length >= 24) return null;
     const chart = {
         id: crypto.randomUUID(),
@@ -145,21 +201,116 @@ function createChart(question = questions.value[0]) {
         annotation: '',
         width: 6,
         height: 5,
-        position: reportBlocks(config.value).length,
+        parent_id: parentId || null,
+        position: reportBlocks(config.value, parentId || null).length,
     };
     config.value.charts.push(chart);
     return `chart:${chart.id}`;
 }
 
-function createSection() {
-    if (config.value.sections.length >= 12) return null;
+function createCustomChart(parentId = null) {
+    if (config.value.charts.length >= 24) return null;
+    const firstQuestion = questions.value[0] || null;
+    const chart = {
+        id: crypto.randomUUID(),
+        kind: 'custom',
+        title: 'Custom Graph',
+        question: firstQuestion?.id || null,
+        type: 'column',
+        aggregation: 'mean',
+        color: '#24543c',
+        legend: true,
+        labels: true,
+        annotation: '',
+        width: 6,
+        height: 5,
+        parent_id: parentId || null,
+        position: reportBlocks(config.value, parentId || null).length,
+        rows: [
+            firstQuestion
+                ? {
+                    id: crypto.randomUUID(),
+                    label: firstQuestion.particular,
+                    source: 'question',
+                    question: firstQuestion.id,
+                    operation: 'average',
+                    value: null,
+                }
+                : {
+                    id: crypto.randomUUID(),
+                    label: 'Row 1',
+                    source: 'manual',
+                    question: null,
+                    operation: 'average',
+                    value: 0,
+                },
+        ],
+    };
+    config.value.charts.push(chart);
+    return `chart:${chart.id}`;
+}
+
+function addCustomChartRow(chartItem, source = 'question') {
+    chartItem.rows ??= [];
+    if (chartItem.rows.length >= 24) return;
+    const firstQuestion = questions.value[0] || null;
+    const actualSource = source === 'question' && firstQuestion ? 'question' : 'manual';
+    chartItem.rows.push({
+        id: crypto.randomUUID(),
+        label: actualSource === 'question' ? firstQuestion.particular : `Row ${chartItem.rows.length + 1}`,
+        source: actualSource,
+        question: actualSource === 'question' ? firstQuestion.id : null,
+        operation: 'average',
+        value: actualSource === 'manual' ? 0 : null,
+    });
+}
+
+function removeCustomChartRow(chartItem, index) {
+    if (!chartItem.rows || chartItem.rows.length <= 1) return;
+    chartItem.rows.splice(index, 1);
+}
+
+function onCustomRowQuestionChange(row) {
+    const q = questions.value.find((item) => item.id === row.question);
+    if (q && (!row.label || row.label.startsWith('Row '))) {
+        row.label = q.particular;
+    }
+}
+
+function createSection(parentId = null) {
+    if (config.value.sections.length >= 24) return null;
     const section = {
         id: crypto.randomUUID(),
+        kind: 'text',
         title: 'Report notes',
         body: '',
         width: 12,
         height: 3,
-        position: reportBlocks(config.value).length,
+        parent_id: parentId || null,
+        position: reportBlocks(config.value, parentId || null).length,
+    };
+    config.value.sections.push(section);
+    return `section:${section.id}`;
+}
+
+function createBlankSection(parentId = null) {
+    if (config.value.sections.length >= 24) return null;
+    const section = {
+        id: crypto.randomUUID(),
+        kind: 'blank',
+        title: 'Blank section',
+        show_heading: true,
+        body: '',
+        width: 12,
+        height: 5,
+        rows: 1,
+        columns: 12,
+        border_width: 1,
+        border_radius: 16,
+        border_style: 'solid',
+        border_color: '#e7dcc3',
+        parent_id: parentId || null,
+        position: reportBlocks(config.value, parentId || null).length,
     };
     config.value.sections.push(section);
     return `section:${section.id}`;
@@ -179,7 +330,10 @@ function handleBlockSelect(key) {
         pageSettingsOpen.value = true;
     } else if (key?.startsWith('chart:') || key?.startsWith('section:')) {
         pageSettingsOpen.value = true;
-        blockLibraryOpen.value = false;
+        const target = reportBlocks(config.value).find((block) => block.key === key);
+        if (target?.kind === 'blank') {
+            blockLibraryOpen.value = true;
+        }
     }
 
     nextTick(() => {
@@ -187,9 +341,20 @@ function handleBlockSelect(key) {
     });
 }
 
-function addBlock(kind, question = questions.value[0]) {
-    const key = kind === 'section' ? createSection() : createChart(question);
+function addBlock(kind, question = questions.value[0], explicitParentId = undefined) {
+    const parentId = explicitParentId !== undefined ? explicitParentId : defaultTargetParentId();
+    let key = null;
+    if (kind === 'blank') {
+        key = createBlankSection(parentId);
+    } else if (kind === 'section') {
+        key = createSection(parentId);
+    } else if (kind === 'custom-chart') {
+        key = createCustomChart(parentId);
+    } else {
+        key = createChart(question, parentId);
+    }
     if (key) {
+        normalizeLayout();
         handleBlockSelect(key);
     }
 }
@@ -219,18 +384,26 @@ function dragBlock({ event, key }) {
     }));
 }
 
-function dropBlock({ event, beforeKey }) {
+function dropBlock({ event, beforeKey, parentId = null }) {
     try {
         const payload = JSON.parse(event.dataTransfer.getData('application/x-feedback-analytics-block'));
         if (payload.source === 'canvas') {
-            reorderBlock(config.value, payload.key, beforeKey);
+            reorderBlock(config.value, payload.key, beforeKey, parentId);
         }
         if (payload.source === 'library') {
-            const key = payload.kind === 'section'
-                ? createSection()
-                : createChart(questions.value.find((question) => question.id === payload.question));
+            let key = null;
+            if (payload.kind === 'blank') {
+                key = createBlankSection(parentId);
+            } else if (payload.kind === 'section') {
+                key = createSection(parentId);
+            } else if (payload.kind === 'custom-chart') {
+                key = createCustomChart(parentId);
+            } else {
+                key = createChart(questions.value.find((question) => question.id === payload.question), parentId);
+            }
             if (key) {
-                reorderBlock(config.value, key, beforeKey);
+                reorderBlock(config.value, key, beforeKey, parentId);
+                handleBlockSelect(key);
             }
         }
         normalizeLayout();
@@ -242,14 +415,22 @@ function dropBlock({ event, beforeKey }) {
 function updateCanvasText({ key, field, value }) {
     if (key === 'page') {
         config.value[field] = value;
-    } else if (selectedBlock.value?.key === key) {
-        selectedBlock.value.item[field] = value;
+    } else {
+        const target = reportBlocks(config.value).find((block) => block.key === key);
+        if (target) {
+            target.item[field] = value;
+        }
     }
 }
 
 function removeSelected() {
     if (!selectedBlock.value) return;
     const { kind, item } = selectedBlock.value;
+    if (kind === 'blank' && item.id) {
+        reportBlocks(config.value, item.id).forEach((child) => {
+            child.item.parent_id = item.parent_id || null;
+        });
+    }
     const collection = kind === 'chart' ? 'charts' : 'sections';
     config.value[collection] = config.value[collection].filter((entry) => entry !== item);
     normalizeLayout();
@@ -315,7 +496,10 @@ const handleKeyDown = (event) => {
 watch(() => [
     config.value?.period_start,
     config.value?.period_end,
-    config.value?.charts?.map(c => `${c.id}:${c.question}:${c.aggregation}`).join(','),
+    config.value?.charts?.map((c) => {
+        const rowsSig = (c.rows || []).map((r) => `${r.id}:${r.label}:${r.source}:${r.question}:${r.operation}:${r.value}`).join('|');
+        return `${c.id}:${c.kind || 'standard'}:${c.question}:${c.aggregation}:${rowsSig}`;
+    }).join(','),
 ], () => {
     preview.value = null;
 });
@@ -434,7 +618,9 @@ onBeforeUnmount(() => {
 
             <div v-if="selectedKey !== 'page'" class="flex items-center gap-1.5 text-xs text-gray-500">
                 <span class="size-2 rounded-full bg-emerald-500"></span>
-                <span class="font-medium">Selected: {{ selectedBlock ? (selectedBlock.kind === 'chart' ? selectedBlock.item.title : 'Section notes') : 'Page' }}</span>
+                <span class="font-medium">
+                    Selected: {{ selectedBlock ? (selectedBlock.kind === 'chart' ? selectedBlock.item.title : (selectedBlock.kind === 'blank' ? (selectedBlock.item.title || 'Blank section') : 'Section notes')) : 'Page' }}
+                </span>
                 <button type="button" class="text-xs font-bold text-forest-800 underline hover:text-forest-950 ml-1 cursor-pointer" @click="handleBlockSelect('page')">
                     Edit Page Settings
                 </button>
@@ -509,24 +695,52 @@ onBeforeUnmount(() => {
                             <div class="space-y-2.5">
                                 <div>
                                     <p class="mb-1 text-[11px] font-bold text-gray-600">Content</p>
-                                    <button
-                                        type="button"
-                                        draggable="true"
-                                        class="library-block"
-                                        @dragstart="dragLibrary($event, 'section')"
-                                        @click="addBlock('section')"
-                                    >
-                                        <span class="font-bold text-forest-800">¶</span>
-                                        <span class="min-w-0 truncate">
-                                            <b>Text section</b>
-                                            <small>Heading and notes</small>
-                                        </span>
-                                    </button>
+                                    <div class="space-y-1.5">
+                                        <button
+                                            type="button"
+                                            draggable="true"
+                                            class="library-block"
+                                            @dragstart="dragLibrary($event, 'blank')"
+                                            @click="addBlock('blank')"
+                                        >
+                                            <span class="font-bold text-forest-800">▢</span>
+                                            <span class="min-w-0 truncate">
+                                                <b>Blank Section</b>
+                                                <small>Container with rows, cols &amp; borders</small>
+                                            </span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            draggable="true"
+                                            class="library-block"
+                                            @dragstart="dragLibrary($event, 'section')"
+                                            @click="addBlock('section')"
+                                        >
+                                            <span class="font-bold text-forest-800">¶</span>
+                                            <span class="min-w-0 truncate">
+                                                <b>Text section</b>
+                                                <small>Heading and notes</small>
+                                            </span>
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div>
                                     <p class="mb-1 text-[11px] font-bold text-gray-600">Charts & KPI cards</p>
                                     <div class="space-y-1.5">
+                                        <button
+                                            type="button"
+                                            draggable="true"
+                                            class="library-block"
+                                            @dragstart="dragLibrary($event, 'custom-chart')"
+                                            @click="addBlock('custom-chart')"
+                                        >
+                                            <span class="font-bold text-forest-800">📊</span>
+                                            <span class="min-w-0 truncate">
+                                                <b class="truncate">Custom Graph</b>
+                                                <small class="truncate">Custom data table (SUM / AVERAGE)</small>
+                                            </span>
+                                        </button>
                                         <button
                                             v-for="question in questions"
                                             :key="question.id"
@@ -579,10 +793,10 @@ onBeforeUnmount(() => {
                                 </span>
                                 <div class="min-w-0 truncate">
                                     <h3 class="text-xs font-bold text-gray-900 truncate">
-                                        {{ selectedBlock ? `${selectedBlock.kind === 'chart' ? 'Chart' : 'Section'} Settings` : 'Page Settings' }}
+                                        {{ selectedBlock ? `${selectedBlock.kind === 'chart' ? (selectedBlock.item.kind === 'custom' ? 'Custom Graph' : 'Chart') : (selectedBlock.kind === 'blank' ? 'Blank Section' : 'Section')} Settings` : 'Page Settings' }}
                                     </h3>
                                     <p class="text-[10px] text-gray-500 truncate">
-                                        {{ selectedBlock ? (selectedBlock.kind === 'chart' ? selectedBlock.item.title : 'Section text') : 'Title, layout, refresh' }}
+                                        {{ selectedBlock ? (selectedBlock.kind === 'chart' ? selectedBlock.item.title : (selectedBlock.kind === 'blank' ? 'Grid & border design' : 'Section text')) : 'Title, layout, refresh' }}
                                     </p>
                                 </div>
                             </div>
@@ -654,25 +868,122 @@ onBeforeUnmount(() => {
                                 </label>
                             </div>
 
-                            <!-- Chart Settings Form -->
+                            <!-- Chart & Custom Graph Settings Form -->
                             <div v-else-if="selectedBlock.kind === 'chart'" class="space-y-3">
                                 <label class="field">
                                     <span>Chart title</span>
                                     <input v-model="selectedBlock.item.title" maxlength="200" class="text-xs" />
                                 </label>
-                                <label class="field">
-                                    <span>Question</span>
-                                    <select v-model="selectedBlock.item.question" class="text-xs" @change="selectedBlock.item.aggregation = aggregates(selectedBlock.item.question)[0]">
-                                        <option v-for="question in questions" :key="question.id" :value="question.id">{{ question.particular }}</option>
+                                <label v-if="blankSections.length" class="field">
+                                    <span>Parent container</span>
+                                    <select
+                                        v-model="selectedBlock.item.parent_id"
+                                        class="text-xs"
+                                        @change="onBlockParentChange(selectedBlock)"
+                                    >
+                                        <option :value="null">Main Canvas (Root)</option>
+                                        <option v-for="sec in blankSections" :key="sec.id" :value="sec.id">
+                                            {{ sec.title || 'Blank Section' }}
+                                        </option>
                                     </select>
                                 </label>
+
+                                <!-- Custom Data Table Editor for Custom Graph -->
+                                <div v-if="selectedBlock.item.kind === 'custom'" class="space-y-2 rounded-xl border border-cream-400 bg-cream-50/60 p-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-[11px] font-bold text-forest-950">Custom Data Table</span>
+                                        <span class="text-[10px] text-gray-500">{{ (selectedBlock.item.rows || []).length }} row(s)</span>
+                                    </div>
+
+                                    <div class="space-y-2 max-h-64 overflow-y-auto pr-0.5">
+                                        <div
+                                            v-for="(row, rIdx) in selectedBlock.item.rows"
+                                            :key="row.id || rIdx"
+                                            class="rounded-lg border border-cream-300 bg-white p-2 space-y-1.5 shadow-2xs"
+                                        >
+                                            <div class="flex items-center justify-between gap-1">
+                                                <span class="text-[10px] font-bold text-gray-500">Row #{{ rIdx + 1 }}</span>
+                                                <button
+                                                    v-if="selectedBlock.item.rows.length > 1"
+                                                    type="button"
+                                                    class="text-[10px] font-bold text-red-700 hover:underline cursor-pointer"
+                                                    @click="removeCustomChartRow(selectedBlock.item, rIdx)"
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
+
+                                            <label class="field">
+                                                <span>Row Label</span>
+                                                <input v-model="row.label" maxlength="200" placeholder="Row label…" class="text-xs" />
+                                            </label>
+
+                                            <div class="grid grid-cols-2 gap-1.5">
+                                                <label class="field">
+                                                    <span>Data Source</span>
+                                                    <select v-model="row.source" class="text-xs">
+                                                        <option value="question">Question</option>
+                                                        <option value="manual">Custom Value</option>
+                                                    </select>
+                                                </label>
+                                                <label v-if="row.source === 'question'" class="field">
+                                                    <span>Calculation</span>
+                                                    <select v-model="row.operation" class="text-xs font-semibold">
+                                                        <option value="average">AVERAGE</option>
+                                                        <option value="sum">SUM</option>
+                                                    </select>
+                                                </label>
+                                                <label v-else class="field">
+                                                    <span>Value</span>
+                                                    <input v-model.number="row.value" type="number" step="any" class="text-xs" />
+                                                </label>
+                                            </div>
+
+                                            <label v-if="row.source === 'question'" class="field">
+                                                <span>Question (e.g. Ratings)</span>
+                                                <select v-model="row.question" class="text-xs" @change="onCustomRowQuestionChange(row)">
+                                                    <option v-for="question in questions" :key="question.id" :value="question.id">
+                                                        {{ question.particular }}
+                                                    </option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex flex-wrap gap-1.5 pt-1">
+                                        <button
+                                            type="button"
+                                            class="flex-1 rounded-lg border border-forest-700 bg-white hover:bg-emerald-50 px-2 py-1 text-[10px] font-bold text-forest-900 cursor-pointer"
+                                            @click="addCustomChartRow(selectedBlock.item, 'question')"
+                                        >
+                                            ＋ Question Row (SUM/AVG)
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="rounded-lg border border-cream-400 bg-white hover:bg-cream-100 px-2 py-1 text-[10px] font-semibold text-gray-700 cursor-pointer"
+                                            @click="addCustomChartRow(selectedBlock.item, 'manual')"
+                                        >
+                                            ＋ Custom Value
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <template v-else>
+                                    <label class="field">
+                                        <span>Question</span>
+                                        <select v-model="selectedBlock.item.question" class="text-xs" @change="selectedBlock.item.aggregation = aggregates(selectedBlock.item.question)[0]">
+                                            <option v-for="question in questions" :key="question.id" :value="question.id">{{ question.particular }}</option>
+                                        </select>
+                                    </label>
+                                </template>
+
                                 <label class="field">
                                     <span>Visualization</span>
                                     <select v-model="selectedBlock.item.type" class="text-xs">
                                         <option v-for="type in chartTypes" :key="type">{{ type }}</option>
                                     </select>
                                 </label>
-                                <label class="field">
+                                <label v-if="selectedBlock.item.kind !== 'custom'" class="field">
                                     <span>Calculation</span>
                                     <select v-model="selectedBlock.item.aggregation" class="text-xs">
                                         <option v-for="aggregation in aggregates(selectedBlock.item.question)" :key="aggregation">{{ aggregation }}</option>
@@ -719,7 +1030,173 @@ onBeforeUnmount(() => {
                                     class="mt-2 w-full rounded-xl border border-red-300 bg-red-50/50 hover:bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 transition cursor-pointer"
                                     @click="removeSelected"
                                 >
-                                    Remove chart
+                                    {{ selectedBlock.item.kind === 'custom' ? 'Remove custom graph' : 'Remove chart' }}
+                                </button>
+                            </div>
+
+                            <!-- Blank Section Container Settings Form -->
+                            <div v-else-if="selectedBlock.kind === 'blank'" class="space-y-3">
+                                <div class="space-y-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="text-xs font-bold text-[#374151]">Section heading (optional)</span>
+                                        <label class="inline-flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-semibold text-gray-600">
+                                            <input
+                                                type="checkbox"
+                                                :checked="selectedBlock.item.show_heading === false"
+                                                class="sr-only peer"
+                                                @change="selectedBlock.item.show_heading = !$event.target.checked"
+                                            />
+                                            <span class="relative w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-forest-800"></span>
+                                            <span>Hide</span>
+                                        </label>
+                                    </div>
+                                    <label v-if="selectedBlock.item.show_heading !== false" class="field">
+                                        <input v-model="selectedBlock.item.title" maxlength="200" placeholder="Optional heading…" class="text-xs" />
+                                    </label>
+                                </div>
+                                <label v-if="blankSections.filter((s) => !isDescendantOf(config, s.id, selectedBlock.item.id)).length" class="field">
+                                    <span>Parent container</span>
+                                    <select
+                                        v-model="selectedBlock.item.parent_id"
+                                        class="text-xs"
+                                        @change="onBlockParentChange(selectedBlock)"
+                                    >
+                                        <option :value="null">Main Canvas (Root)</option>
+                                        <option
+                                            v-for="sec in blankSections.filter((s) => !isDescendantOf(config, s.id, selectedBlock.item.id))"
+                                            :key="sec.id"
+                                            :value="sec.id"
+                                        >
+                                            {{ sec.title || 'Blank Section' }}
+                                        </option>
+                                    </select>
+                                </label>
+
+                                <div class="grid grid-cols-2 gap-2">
+                                    <label class="field">
+                                        <span>Rows</span>
+                                        <select v-model.number="selectedBlock.item.rows" class="text-xs font-medium">
+                                            <option v-for="r in 12" :key="r" :value="r">
+                                                {{ r }} {{ r === 1 ? 'row' : 'rows' }}
+                                            </option>
+                                        </select>
+                                    </label>
+                                    <label class="field">
+                                        <span>Columns</span>
+                                        <select v-model.number="selectedBlock.item.columns" class="text-xs font-medium">
+                                            <option v-for="c in 12" :key="c" :value="c">
+                                                {{ c }} {{ c === 1 ? 'col' : 'cols' }}
+                                            </option>
+                                        </select>
+                                    </label>
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-2">
+                                    <label class="field">
+                                        <span>Width</span>
+                                        <select
+                                            v-model.number="selectedBlock.item.width"
+                                            class="text-xs font-medium"
+                                            @change="onBlockWidthChange(selectedBlock.item)"
+                                        >
+                                            <option v-for="w in 12" :key="w" :value="w">
+                                                {{ w }} {{ w === 1 ? 'col' : 'cols' }}
+                                            </option>
+                                        </select>
+                                    </label>
+                                    <label class="field">
+                                        <span>Height</span>
+                                        <select
+                                            v-model.number="selectedBlock.item.height"
+                                            class="text-xs font-medium"
+                                            @change="onBlockHeightChange(selectedBlock.item)"
+                                        >
+                                            <option v-for="h in 9" :key="h" :value="h">
+                                                {{ h }} {{ h === 1 ? 'row' : 'rows' }}
+                                            </option>
+                                        </select>
+                                    </label>
+                                </div>
+
+                                <div class="pt-2 border-t border-cream-200 space-y-2.5">
+                                    <p class="text-[11px] font-bold text-gray-700">Border Design</p>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <label class="field">
+                                            <span>Style</span>
+                                            <select v-model="selectedBlock.item.border_style" class="text-xs capitalize">
+                                                <option v-for="style in borderStyles" :key="style" :value="style">{{ style }}</option>
+                                            </select>
+                                        </label>
+                                        <label class="field">
+                                            <span>Thickness (px)</span>
+                                            <input
+                                                v-model.number="selectedBlock.item.border_width"
+                                                type="number"
+                                                min="0"
+                                                max="16"
+                                                class="text-xs"
+                                            />
+                                        </label>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <label class="field">
+                                            <span>Radius (px)</span>
+                                            <input
+                                                v-model.number="selectedBlock.item.border_radius"
+                                                type="number"
+                                                min="0"
+                                                max="48"
+                                                class="text-xs"
+                                            />
+                                        </label>
+                                        <label class="field">
+                                            <span>Border color</span>
+                                            <input v-model="selectedBlock.item.border_color" type="color" class="h-8 p-1" />
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="pt-2 border-t border-cream-200 space-y-1.5">
+                                    <p class="text-[11px] font-bold text-gray-700">Insert block inside</p>
+                                    <div class="flex flex-wrap gap-1.5">
+                                        <button
+                                            type="button"
+                                            class="rounded-lg border border-cream-400 bg-cream-50 hover:bg-cream-100 px-2 py-1 text-[11px] font-semibold text-forest-900 cursor-pointer"
+                                            @click="addBlock('blank', null, selectedBlock.item.id)"
+                                        >
+                                            ＋ Blank section
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="rounded-lg border border-cream-400 bg-cream-50 hover:bg-cream-100 px-2 py-1 text-[11px] font-semibold text-forest-900 cursor-pointer"
+                                            @click="addBlock('section', null, selectedBlock.item.id)"
+                                        >
+                                            ＋ Text section
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="rounded-lg border border-cream-400 bg-cream-50 hover:bg-cream-100 px-2 py-1 text-[11px] font-semibold text-forest-900 cursor-pointer"
+                                            @click="addBlock('custom-chart', null, selectedBlock.item.id)"
+                                        >
+                                            ＋ Custom Graph
+                                        </button>
+                                        <button
+                                            v-if="questions.length"
+                                            type="button"
+                                            class="rounded-lg border border-cream-400 bg-cream-50 hover:bg-cream-100 px-2 py-1 text-[11px] font-semibold text-forest-900 cursor-pointer"
+                                            @click="addBlock('chart', questions[0], selectedBlock.item.id)"
+                                        >
+                                            ＋ Chart / KPI
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    class="mt-2 w-full rounded-xl border border-red-300 bg-red-50/50 hover:bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 transition cursor-pointer"
+                                    @click="removeSelected"
+                                >
+                                    Remove blank section
                                 </button>
                             </div>
 
@@ -728,6 +1205,19 @@ onBeforeUnmount(() => {
                                 <label class="field">
                                     <span>Section title</span>
                                     <input v-model="selectedBlock.item.title" maxlength="200" class="text-xs" />
+                                </label>
+                                <label v-if="blankSections.length" class="field">
+                                    <span>Parent container</span>
+                                    <select
+                                        v-model="selectedBlock.item.parent_id"
+                                        class="text-xs"
+                                        @change="onBlockParentChange(selectedBlock)"
+                                    >
+                                        <option :value="null">Main Canvas (Root)</option>
+                                        <option v-for="sec in blankSections" :key="sec.id" :value="sec.id">
+                                            {{ sec.title || 'Blank Section' }}
+                                        </option>
+                                    </select>
                                 </label>
                                 <label class="field">
                                     <span>Text</span>

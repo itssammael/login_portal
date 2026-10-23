@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue';
-import FeedbackAnalyticsChart from './FeedbackAnalyticsChart.vue';
+import FeedbackAnalyticsBlock from './FeedbackAnalyticsBlock.vue';
 import { reportBlocks } from './feedbackAnalyticsLayout';
 
 const props = defineProps({
@@ -11,77 +11,16 @@ const props = defineProps({
     selectedKey: String,
 });
 
-const aspectW = 8.333333333;
-const aspectH = 11.111111111;
-
 const emit = defineEmits(['select', 'drop-block', 'drag-block', 'move', 'edit-text']);
-const blocks = computed(() => (props.report ? reportBlocks(props.report) : []));
+const blocks = computed(() => (props.report ? reportBlocks(props.report, null) : []));
 const dropTarget = ref(null);
 
-function blockSpanClass(block) {
-    let span = Number(block?.item?.width);
-    if (!span || span < 1) {
-        span = block?.kind === 'section' ? 12 : 6;
-    }
-    span = Math.min(Math.max(span, 1), 12);
-
-    const spanClasses = {
-        1: 'col-span-1',
-        2: 'col-span-2',
-        3: 'col-span-3',
-        4: 'col-span-4',
-        5: 'col-span-5',
-        6: 'col-span-6',
-        7: 'col-span-7',
-        8: 'col-span-8',
-        9: 'col-span-9',
-        10: 'col-span-10',
-        11: 'col-span-11',
-        12: 'col-span-12',
-    };
-
-    return spanClasses[span] || 'col-span-6';
-}
-
-function blockRowSpanClass(block) {
-    let rows = Number(block?.item?.height);
-    if (!rows || rows < 1) {
-        rows = block?.kind === 'section' ? 3 : 5;
-    }
-    rows = Math.min(Math.max(rows, 1), 9);
-
-    const rowClasses = {
-        1: 'row-span-1',
-        2: 'row-span-2',
-        3: 'row-span-3',
-        4: 'row-span-4',
-        5: 'row-span-5',
-        6: 'row-span-6',
-        7: 'row-span-7',
-        8: 'row-span-8',
-        9: 'row-span-9',
-    };
-
-    return rowClasses[rows] || 'row-span-4';
-}
-
-function blockHeightStyle(block) {
-    let rows = Number(block?.item?.height);
-    if (!rows || rows < 1) {
-        rows = block?.kind === 'section' ? 3 : 5;
-    }
-    rows = Math.min(Math.max(rows, 1), 9);
-    return {
-        minHeight: `${rows * 64}px`,
-    };
-}
-
-function drop(event, key) {
+function drop(event, key, parentId = null) {
     if (!props.editable) return;
     event.preventDefault();
     event.stopPropagation();
     dropTarget.value = null;
-    emit('drop-block', { event, beforeKey: key });
+    emit('drop-block', { event, beforeKey: key, parentId });
 }
 
 function edit(key, field, event) {
@@ -127,100 +66,36 @@ function edit(key, field, event) {
         <div
             class="grid grid-cols-12 gap-5"
             @dragover.prevent
-            @drop="drop($event, null)"
+            @drop="drop($event, null, null)"
         >
-            <div
+            <FeedbackAnalyticsBlock
                 v-for="(block, index) in blocks"
                 :key="block.key"
-                class="report-block relative min-w-0 rounded-2xl flex flex-col"
-                :class="[
-                    blockSpanClass(block),
-                    blockRowSpanClass(block),
-                    {
-                        'ring-2 ring-emerald-600 ring-offset-4': editable && selectedKey === block.key,
-                        'outline outline-2 outline-dashed outline-emerald-400': editable && dropTarget === block.key
-                    }
-                ]"
-                :style="blockHeightStyle(block)"
-                @click="editable && emit('select', block.key)"
-                @dragover.prevent.stop="editable && (dropTarget = block.key)"
-                @dragleave="dropTarget = null"
-                @drop="drop($event, block.key)"
-            >
-                <div v-if="editable" class="flex items-center justify-between gap-2 rounded-t-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-                    <button
-                        type="button"
-                        draggable="true"
-                        class="cursor-grab rounded px-1 py-1 font-semibold active:cursor-grabbing"
-                        :aria-label="`Drag ${block.item.title}`"
-                        @dragstart="emit('drag-block', { event: $event, key: block.key })"
-                        @dragend="dropTarget = null"
-                        @click.stop="emit('select', block.key)"
-                    >
-                        ⠿ {{ block.kind === 'chart' ? block.item.type : 'Text section' }}
-                    </button>
-                    <div class="flex gap-1">
-                        <button
-                            type="button"
-                            :disabled="index === 0"
-                            class="rounded px-2 py-1 disabled:opacity-30"
-                            :aria-label="`Move ${block.item.title} up`"
-                            @click.stop="emit('move', { key: block.key, direction: -1 })"
-                        >
-                            ↑
-                        </button>
-                        <button
-                            type="button"
-                            :disabled="index === blocks.length - 1"
-                            class="rounded px-2 py-1 disabled:opacity-30"
-                            :aria-label="`Move ${block.item.title} down`"
-                            @click.stop="emit('move', { key: block.key, direction: 1 })"
-                        >
-                            ↓
-                        </button>
-                        <button
-                            type="button"
-                            class="rounded px-2 py-1 underline font-semibold text-emerald-950 hover:bg-emerald-100 transition cursor-pointer"
-                            @click.stop="emit('select', block.key)"
-                        >
-                            Edit
-                        </button>
-                    </div>
-                </div>
-
-                <FeedbackAnalyticsChart v-if="block.kind === 'chart'" :chart="block.item" :result="data?.charts?.[block.item.id]" />
-                <section v-else class="rounded-2xl bg-white p-6 flex-1 flex flex-col h-full">
-                    <template v-if="editable">
-                        <input
-                            :value="block.item.title"
-                            aria-label="Section title on canvas"
-                            maxlength="200"
-                            class="canvas-input text-xl font-bold"
-                            @input="edit(block.key, 'title', $event)"
-                        >
-                        <textarea
-                            :value="block.item.body"
-                            aria-label="Section text on canvas"
-                            maxlength="3000"
-                            rows="3"
-                            placeholder="Write your report notes here…"
-                            class="canvas-input mt-2 resize-y leading-7 text-gray-600"
-                            @input="edit(block.key, 'body', $event)"
-                        />
-                    </template>
-                    <template v-else>
-                        <h2 class="text-xl font-bold">{{ block.item.title }}</h2>
-                        <p class="mt-2 whitespace-pre-line leading-7 text-gray-600">{{ block.item.body }}</p>
-                    </template>
-                </section>
-            </div>
+                :block="block"
+                :index="index"
+                :sibling-count="blocks.length"
+                :parent-columns="12"
+                :parent-id="null"
+                :depth="0"
+                :report="report"
+                :data="data"
+                :editable="editable"
+                :selected-key="selectedKey"
+                :drop-target="dropTarget"
+                @select="emit('select', $event)"
+                @drop-block="emit('drop-block', $event)"
+                @drag-block="emit('drag-block', $event)"
+                @move="emit('move', $event)"
+                @edit-text="emit('edit-text', $event)"
+                @update:drop-target="dropTarget = $event"
+            />
 
             <button
                 v-if="editable"
                 type="button"
                 class="col-span-full report-drop flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-emerald-200 bg-emerald-50/50 p-6 text-sm text-emerald-800 hover:border-emerald-500 cursor-pointer"
                 @dragover.prevent="dropTarget = 'end'"
-                @drop.stop="drop($event, null)"
+                @drop.stop="drop($event, null, null)"
                 @click="emit('select', 'library')"
             >
                 <span class="text-2xl">＋</span>

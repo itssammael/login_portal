@@ -341,4 +341,146 @@ class FeedbackAnalyticsTest extends TestCase
         $this->assertSame('intro-section', $report->configuration['sections'][0]['id']);
         $this->assertSame(1, $report->configuration['charts'][0]['position']);
     }
+
+    public function test_blank_section_container_and_nested_blocks_are_saved_and_validated(): void
+    {
+        $report = FeedbackAnalyticsReport::factory()->create();
+        $configuration = $report->configuration;
+        $configuration['sections'] = [
+            [
+                'id' => 'container-1',
+                'kind' => 'blank',
+                'title' => 'Main Grid Container',
+                'show_heading' => false,
+                'body' => '',
+                'width' => 12,
+                'height' => 6,
+                'rows' => 2,
+                'columns' => 12,
+                'border_width' => 2,
+                'border_radius' => 16,
+                'border_style' => 'dashed',
+                'border_color' => '#28704a',
+                'parent_id' => null,
+                'position' => 0,
+            ],
+            [
+                'id' => 'inner-container-1',
+                'kind' => 'blank',
+                'title' => 'Nested Blank Section',
+                'show_heading' => true,
+                'body' => '',
+                'width' => 12,
+                'height' => 5,
+                'rows' => 1,
+                'columns' => 12,
+                'border_width' => 1,
+                'border_radius' => 12,
+                'border_style' => 'solid',
+                'border_color' => '#e7dcc3',
+                'parent_id' => 'container-1',
+                'position' => 0,
+            ],
+            [
+                'id' => 'nested-note',
+                'kind' => 'text',
+                'title' => 'Nested Note',
+                'body' => 'Inside nested blank section',
+                'width' => 6,
+                'height' => 3,
+                'parent_id' => 'inner-container-1',
+                'position' => 0,
+            ],
+        ];
+        $configuration['charts'][0]['parent_id'] = 'inner-container-1';
+        $configuration['charts'][0]['position'] = 1;
+
+        $this->actingAs(User::factory()->admin()->create())
+            ->putJson(route('feedback.analytics.update', [$report->feedback_id, $report->id]), ['configuration' => $configuration])
+            ->assertOk()
+            ->assertJsonPath('report.configuration.sections.0.kind', 'blank')
+            ->assertJsonPath('report.configuration.sections.0.show_heading', false)
+            ->assertJsonPath('report.configuration.sections.0.rows', 2)
+            ->assertJsonPath('report.configuration.sections.0.columns', 12)
+            ->assertJsonPath('report.configuration.sections.0.border_width', 2)
+            ->assertJsonPath('report.configuration.sections.0.border_radius', 16)
+            ->assertJsonPath('report.configuration.sections.0.border_style', 'dashed')
+            ->assertJsonPath('report.configuration.sections.1.id', 'inner-container-1')
+            ->assertJsonPath('report.configuration.sections.1.kind', 'blank')
+            ->assertJsonPath('report.configuration.sections.1.parent_id', 'container-1')
+            ->assertJsonPath('report.configuration.sections.2.parent_id', 'inner-container-1')
+            ->assertJsonPath('report.configuration.charts.0.parent_id', 'inner-container-1');
+
+        $invalidConfig = $configuration;
+        $invalidConfig['sections'][0]['border_style'] = 'invalid-style';
+        $this->putJson(route('feedback.analytics.update', [$report->feedback_id, $report->id]), ['configuration' => $invalidConfig])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('configuration.sections.0.border_style');
+    }
+
+    public function test_custom_graph_block_calculates_sum_and_average_rows_in_custom_data_table(): void
+    {
+        $report = FeedbackAnalyticsReport::factory()->create();
+        // FeedbackFactory default overall_rating options:
+        // [0] excellent (score 4), [1] good (score 3), [2] fair (score 2), [3] poor (score 1)
+        FbSubmission::factory()->count(5)->create([
+            'feedback_id' => $report->feedback_id,
+            'data' => ['overall_rating' => 'excellent', 'drill_clarity' => 'very_clear'],
+        ]);
+
+        $configuration = $report->configuration;
+        $configuration['charts'][] = [
+            'id' => 'custom-ratings-graph',
+            'kind' => 'custom',
+            'title' => 'Ratings Summary',
+            'type' => 'column',
+            'aggregation' => 'mean',
+            'color' => '#24543c',
+            'legend' => true,
+            'labels' => true,
+            'annotation' => 'Combined rating metrics',
+            'width' => 6,
+            'height' => 5,
+            'position' => 1,
+            'rows' => [
+                [
+                    'id' => 'row-avg',
+                    'label' => 'Overall Evaluation (Avg)',
+                    'source' => 'question',
+                    'question' => 'overall_rating',
+                    'operation' => 'average',
+                ],
+                [
+                    'id' => 'row-sum',
+                    'label' => 'Overall Evaluation (Sum)',
+                    'source' => 'question',
+                    'question' => 'overall_rating',
+                    'operation' => 'sum',
+                ],
+                [
+                    'id' => 'row-manual',
+                    'label' => 'Target Benchmark',
+                    'source' => 'manual',
+                    'value' => 3.5,
+                ],
+            ],
+        ];
+
+        $admin = User::factory()->admin()->create();
+        $this->actingAs($admin)
+            ->putJson(route('feedback.analytics.update', [$report->feedback_id, $report->id]), ['configuration' => $configuration])
+            ->assertOk()
+            ->assertJsonPath('report.configuration.charts.1.kind', 'custom')
+            ->assertJsonPath('report.configuration.charts.1.rows.0.operation', 'average')
+            ->assertJsonPath('report.configuration.charts.1.rows.1.operation', 'sum');
+
+        $this->postJson(route('feedback.analytics.preview', $report->feedback_id), ['configuration' => $configuration])
+            ->assertOk()
+            ->assertJsonPath('charts.custom-ratings-graph.rows.0.label', 'Overall Evaluation (Avg)')
+            ->assertJsonPath('charts.custom-ratings-graph.rows.0.value', 4)
+            ->assertJsonPath('charts.custom-ratings-graph.rows.1.label', 'Overall Evaluation (Sum)')
+            ->assertJsonPath('charts.custom-ratings-graph.rows.1.value', 20)
+            ->assertJsonPath('charts.custom-ratings-graph.rows.2.label', 'Target Benchmark')
+            ->assertJsonPath('charts.custom-ratings-graph.rows.2.value', 3.5);
+    }
 }

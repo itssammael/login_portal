@@ -66,7 +66,7 @@ const participantData = ref({
 const initAnswers = () => {
     const initial = {};
     sortedFields.value.forEach((field) => {
-        if (field.type === 'section') {
+        if (['section', 'text_only'].includes(field.type)) {
             return;
         }
         if (field.type === 'checkbox') {
@@ -332,7 +332,7 @@ const errorFieldsList = computed(() => {
             }
 
             const field = sortedFields.value.find((f) => String(f.id) === String(fieldId));
-            if (field?.type === 'section') {
+            if (['section', 'text_only'].includes(field?.type)) {
                 return;
             }
             const errorMsg = serverErrors.value[key]?.[0]
@@ -685,11 +685,25 @@ onBeforeUnmount(() => {
                                         <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight">
                                             {{ field.particular }}
                                         </h3>
-                                        <p v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium">
+                                        <p v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium whitespace-pre-line">
                                             {{ field.description }}
                                         </p>
                                     </div>
                                 </div>
+                            </div>
+
+                            <!-- Text Only Instructional Section -->
+                            <div
+                                v-else-if="field.type === 'text_only' && isFieldConditionMet(field)"
+                                :id="`field_container_${field.id}`"
+                                class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-1.5"
+                            >
+                                <h4 class="text-sm sm:text-base font-bold text-forest-950">
+                                    {{ field.particular }}
+                                </h4>
+                                <p v-if="field.description" class="text-xs text-gray-600 leading-relaxed whitespace-pre-line">
+                                    {{ field.description }}
+                                </p>
                             </div>
 
                             <!-- Regular Question Input Tile -->

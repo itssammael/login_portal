@@ -55,7 +55,37 @@ class FeedbackAnalyticsService
             throw ValidationException::withMessages(['configuration.charts' => 'Add at least one chart before publishing.']);
         }
         foreach ($configuration['charts'] as $index => $chart) {
-            $field = $questions[$chart['question']] ?? null;
+            if (($chart['kind'] ?? 'standard') === 'custom') {
+                $rows = $chart['rows'] ?? [];
+                if (empty($rows)) {
+                    throw ValidationException::withMessages(["configuration.charts.$index.rows" => 'Add at least one row to the custom graph data table.']);
+                }
+                foreach ($rows as $rowIndex => $row) {
+                    if (($row['source'] ?? 'question') === 'question') {
+                        $questionId = $row['question'] ?? '';
+                        $field = $questions[$questionId] ?? null;
+                        $error = null;
+                        if (! $field) {
+                            $error = 'Select a valid structured question from this form. Free-text responses cannot be published.';
+                        } elseif ($this->identifying($field)) {
+                            $error = 'Identifying and credential fields cannot be included in analytics.';
+                        } elseif (($field['option_source'] ?? 'static') !== 'static' || ! empty($field['allow_custom_value'])) {
+                            $error = 'Dynamic participant lookups and custom response values cannot be published.';
+                        } elseif ($publishing && $this->sensitive($field) && ! $approveSensitive) {
+                            $error = 'An administrator must explicitly approve this sensitive breakdown.';
+                        } elseif ($field['type'] !== 'number' && empty($field['options'])) {
+                            $error = 'This question has no fixed answer options.';
+                        }
+                        if ($error !== null) {
+                            throw ValidationException::withMessages(["configuration.charts.$index.rows.$rowIndex.question" => $error]);
+                        }
+                    }
+                }
+
+                continue;
+            }
+
+            $field = $questions[$chart['question'] ?? ''] ?? null;
             $error = null;
             if (! $field) {
                 $error = 'Select a valid structured question from this form. Free-text responses cannot be published.';
@@ -86,7 +116,16 @@ class FeedbackAnalyticsService
         $questions = $this->questions($feedback);
         $mappings = [];
         foreach ($configuration['charts'] as $chart) {
-            $mappings[$chart['question']] = hash('sha256', json_encode($questions[$chart['question']] ?? null));
+            if (($chart['kind'] ?? 'standard') === 'custom') {
+                foreach ($chart['rows'] ?? [] as $row) {
+                    if (($row['source'] ?? 'question') === 'question' && ! empty($row['question'])) {
+                        $qId = $row['question'];
+                        $mappings[$qId] = hash('sha256', json_encode($questions[$qId] ?? null));
+                    }
+                }
+            } elseif (! empty($chart['question'])) {
+                $mappings[$chart['question']] = hash('sha256', json_encode($questions[$chart['question']] ?? null));
+            }
         }
 
         return $mappings;
@@ -114,6 +153,40 @@ class FeedbackAnalyticsService
         ];
     }
 
+    /** @param array<string, mixed> $field
+     * @return array<string, float>
+     */
+    private function optionScoreMap(array $field): array
+    {
+        $options = array_values($field['options'] ?? []);
+        $count = count($options);
+        if ($count === 0) {
+            return [];
+        }
+
+        $firstLabel = strtolower(trim((string) ($options[0]['label'] ?? '')));
+        $lastLabel = strtolower(trim((string) ($options[$count - 1]['label'] ?? '')));
+        $descending = (bool) preg_match('/excellent|very\s+good|outstanding|superior|best|strongly\s+agree|always|very\s+clear|very\s+satisfied|high/i', $firstLabel)
+            && ! preg_match('/strongly\s+agree|excellent|outstanding|best/i', $lastLabel);
+
+        $map = [];
+        foreach ($options as $index => $option) {
+            $val = (string) ($option['value'] ?? '');
+            $label = trim((string) ($option['label'] ?? ''));
+            if (is_numeric($label)) {
+                $map[$val] = (float) $label;
+            } elseif (is_numeric($val)) {
+                $map[$val] = (float) $val;
+            } elseif (preg_match('/^option_(\d+)$/i', $val, $m) && ! $descending) {
+                $map[$val] = (float) $m[1];
+            } else {
+                $map[$val] = (float) ($descending ? ($count - $index) : ($index + 1));
+            }
+        }
+
+        return $map;
+    }
+
     /** @param array<string, mixed> $configuration
      * @return array<string, mixed>
      */
@@ -127,14 +200,34 @@ class FeedbackAnalyticsService
             $query->where('created_at', '<=', $configuration['period_end'].' 23:59:59');
         }
         $questions = $this->questions($feedback);
-        $states = [];
-        foreach ($configuration['charts'] as $chart) {
-            $states[$chart['id']] = ['values' => [], 'counts' => [], 'answered' => 0];
+        $scoreMaps = [];
+        foreach ($questions as $qId => $qField) {
+            if ($qField['type'] !== 'number') {
+                $scoreMaps[$qId] = $this->optionScoreMap($qField);
+            }
         }
+
+        $states = [];
+        $questionStats = [];
+        foreach ($configuration['charts'] as $chart) {
+            if (($chart['kind'] ?? 'standard') === 'custom') {
+                foreach ($chart['rows'] ?? [] as $row) {
+                    if (($row['source'] ?? 'question') === 'question' && ! empty($row['question']) && isset($questions[$row['question']])) {
+                        $questionStats[$row['question']] ??= ['values' => [], 'answered' => 0];
+                    }
+                }
+            } else {
+                $states[$chart['id']] = ['values' => [], 'counts' => [], 'answered' => 0];
+            }
+        }
+
         $count = 0;
         foreach ($query->select(['id', 'data'])->lazyById(500) as $submission) {
             $count++;
             foreach ($configuration['charts'] as $chart) {
+                if (($chart['kind'] ?? 'standard') === 'custom') {
+                    continue;
+                }
                 $field = $questions[$chart['question']];
                 $value = $submission->data[$chart['question']] ?? null;
                 $state = &$states[$chart['id']];
@@ -156,9 +249,94 @@ class FeedbackAnalyticsService
                 }
                 unset($state);
             }
+
+            foreach ($questionStats as $qId => &$qState) {
+                $field = $questions[$qId];
+                $value = $submission->data[$qId] ?? null;
+                if ($field['type'] === 'number') {
+                    if (is_numeric($value) && is_finite((float) $value)) {
+                        $qState['values'][] = (float) $value;
+                        $qState['answered']++;
+                    }
+                } else {
+                    $scoreMap = $scoreMaps[$qId] ?? [];
+                    $values = is_array($value) ? $value : [$value];
+                    $values = array_unique(array_filter($values, fn (mixed $item): bool => is_scalar($item) && array_key_exists((string) $item, $scoreMap)));
+                    if ($values !== []) {
+                        $qState['answered']++;
+                        $rowScore = 0.0;
+                        foreach ($values as $item) {
+                            $rowScore += $scoreMap[(string) $item];
+                        }
+                        $qState['values'][] = $rowScore;
+                    }
+                }
+            }
+            unset($qState);
         }
+
         $charts = [];
         foreach ($configuration['charts'] as $chart) {
+            if (($chart['kind'] ?? 'standard') === 'custom') {
+                $customRows = $chart['rows'] ?? [];
+                $hasQuestionRows = false;
+                $maxAnswered = 0;
+                $suppressed = false;
+
+                foreach ($customRows as $row) {
+                    if (($row['source'] ?? 'question') === 'question' && ! empty($row['question'])) {
+                        $hasQuestionRows = true;
+                        $qAns = $questionStats[$row['question']]['answered'] ?? 0;
+                        if ($qAns > $maxAnswered) {
+                            $maxAnswered = $qAns;
+                        }
+                        if ($public && $qAns < 5) {
+                            $suppressed = true;
+                        }
+                    }
+                }
+
+                $rows = [];
+                if (! $suppressed) {
+                    foreach ($customRows as $row) {
+                        $label = (string) ($row['label'] ?? 'Row');
+                        if (($row['source'] ?? 'question') === 'manual') {
+                            $rows[] = [
+                                'label' => $label,
+                                'value' => round((float) ($row['value'] ?? 0), 2),
+                            ];
+                        } else {
+                            $qId = $row['question'] ?? '';
+                            $qState = $questionStats[$qId] ?? ['values' => [], 'answered' => 0];
+                            $op = strtolower((string) ($row['operation'] ?? 'average'));
+                            $vals = $qState['values'];
+                            $n = count($vals);
+                            if ($n === 0) {
+                                $computed = 0;
+                            } elseif ($op === 'sum') {
+                                $computed = round(array_sum($vals), 2);
+                            } elseif ($op === 'count') {
+                                $computed = $qState['answered'];
+                            } else {
+                                $computed = round(array_sum($vals) / $n, 2);
+                            }
+                            $rows[] = [
+                                'label' => $label,
+                                'value' => $computed,
+                            ];
+                        }
+                    }
+                }
+
+                $charts[$chart['id']] = [
+                    'rows' => $rows,
+                    'suppressed' => $suppressed,
+                    'answered' => $suppressed ? null : ($hasQuestionRows ? $maxAnswered : $count),
+                ];
+
+                continue;
+            }
+
             $field = $questions[$chart['question']];
             $state = $states[$chart['id']];
             $suppressed = $public && ($state['answered'] < 5 || collect($state['counts'])->contains(fn (int $value): bool => $value > 0 && $value < 5));

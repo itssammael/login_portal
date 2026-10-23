@@ -151,7 +151,7 @@ class FeedbackController extends Controller
 
                 foreach ($fields as $field) {
                     $type = $field['type'] ?? 'text';
-                    if ($type === 'section') {
+                    if (in_array($type, ['section', 'text_only'], true)) {
                         continue;
                     }
 

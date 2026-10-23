@@ -693,8 +693,13 @@ const getOptionDisplayLabel = (field, val) => {
 
                             <!-- Value Display -->
                             <div class="pt-1">
+                                <!-- Text Only Instructional Section -->
+                                <div v-if="field.type === 'text_only'" class="text-xs text-gray-600 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-line italic">
+                                    {{ field.description || 'Instructional text block (no response required).' }}
+                                </div>
+
                                 <!-- Text Type -->
-                                <div v-if="field.type === 'text'" class="text-xs text-gray-800 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-wrap">
+                                <div v-else-if="field.type === 'text'" class="text-xs text-gray-800 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-wrap">
                                     {{ getFieldValue(selectedSubmission, field.id) || 'No response provided.' }}
                                 </div>
 

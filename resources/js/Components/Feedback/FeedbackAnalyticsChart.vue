@@ -68,12 +68,17 @@ onBeforeUnmount(() => root?.dispose());
 
 <template>
     <section class="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border border-cream-500 bg-white p-5 shadow-sm h-full">
-        <div><h3 class="font-bold text-gray-900">{{ chart.title }}</h3><p class="text-xs capitalize text-gray-500">{{ chart.aggregation }} · {{ result?.answered ?? '—' }} responses</p></div>
+        <div>
+            <h3 class="font-bold text-gray-900">{{ chart.title }}</h3>
+            <p class="text-xs capitalize text-gray-500">
+                {{ chart.kind === 'custom' ? 'Custom data table' : chart.aggregation }} · {{ result?.answered ?? '—' }} responses
+            </p>
+        </div>
         <p v-if="result?.suppressed" class="rounded-xl bg-cream-100 p-6 text-sm text-gray-600">Not enough responses to display this chart safely. Every populated group needs at least five responses.</p>
         <p v-else-if="!result?.rows?.length" class="p-6 text-sm text-gray-500">No data for this reporting period.</p>
-        <dl v-else-if="chart.type === 'kpi'" class="flex flex-wrap gap-6"><div v-for="row in result.rows" :key="row.label"><dt class="text-xs text-gray-500">{{ row.label }}</dt><dd class="text-3xl font-black text-forest-900">{{ row.value }}{{ chart.aggregation === 'percentage' ? '%' : '' }}</dd></div></dl>
+        <dl v-else-if="chart.type === 'kpi'" class="flex flex-wrap gap-6"><div v-for="row in result.rows" :key="row.label"><dt class="text-xs text-gray-500">{{ row.label }}</dt><dd class="text-3xl font-black text-forest-900">{{ row.value }}{{ chart.kind !== 'custom' && chart.aggregation === 'percentage' ? '%' : '' }}</dd></div></dl>
         <div v-if="!['table', 'kpi'].includes(chart.type)" ref="container" class="w-full flex-1 min-h-[160px]" role="img" :aria-label="chart.title" />
-        <details v-if="result?.rows?.length && chart.type !== 'kpi'" :open="chart.type === 'table'" class="text-sm"><summary v-if="chart.type !== 'table'" class="cursor-pointer text-forest-800">View data table</summary><table class="mt-2 w-full text-left"><caption class="sr-only">{{ chart.title }}</caption><thead><tr class="border-b"><th class="py-2">Label</th><th class="py-2 text-right">{{ chart.aggregation }}</th></tr></thead><tbody><tr v-for="row in result.rows" :key="row.label" class="border-b border-gray-100"><td class="py-2">{{ row.label }}</td><td class="py-2 text-right tabular-nums">{{ row.value }}{{ chart.aggregation === 'percentage' ? '%' : '' }}</td></tr></tbody></table></details>
+        <details v-if="result?.rows?.length && chart.type !== 'kpi'" :open="chart.type === 'table'" class="text-sm"><summary v-if="chart.type !== 'table'" class="cursor-pointer text-forest-800">View data table</summary><table class="mt-2 w-full text-left"><caption class="sr-only">{{ chart.title }}</caption><thead><tr class="border-b"><th class="py-2">Label</th><th class="py-2 text-right">{{ chart.kind === 'custom' ? 'Value' : chart.aggregation }}</th></tr></thead><tbody><tr v-for="row in result.rows" :key="row.label" class="border-b border-gray-100"><td class="py-2">{{ row.label }}</td><td class="py-2 text-right tabular-nums">{{ row.value }}{{ chart.kind !== 'custom' && chart.aggregation === 'percentage' ? '%' : '' }}</td></tr></tbody></table></details>
         <p v-if="chart.annotation" class="whitespace-pre-line text-sm leading-6 text-gray-600">{{ chart.annotation }}</p>
     </section>
 </template>

@@ -378,6 +378,7 @@ const addSectionAt = (afterIdx = -1) => {
         type: 'section',
         weight: nextWeight,
         description: '',
+        description_type: 'text',
         section_flow: 'next',
         conditions: [],
         manualId: false,
@@ -494,6 +495,11 @@ const onFieldTypeChange = (field) => {
                 { value: 'option_1', label: 'Option 1', is_other: false, goto_section: null },
                 { value: 'option_2', label: 'Option 2', is_other: false, goto_section: null },
             ];
+        }
+    } else if (field.type === 'text_only') {
+        field.required = false;
+        if (!field.description_type) {
+            field.description_type = 'textarea';
         }
     }
     reindexWeights();
@@ -1081,7 +1087,7 @@ onUnmounted(() => {
                                     </div>
 
                                     <!-- Section Title & Description -->
-                                    <div class="space-y-2">
+                                    <div class="space-y-2.5">
                                         <input
                                             v-model="field.particular"
                                             @blur="onParticularBlur(field)"
@@ -1089,12 +1095,48 @@ onUnmounted(() => {
                                             placeholder="Section Title"
                                             class="w-full text-lg font-bold text-gray-900 border-b border-cream-300 focus:border-indigo-600 focus:outline-none pb-1 placeholder-gray-400"
                                         />
-                                        <input
-                                            v-model="field.description"
-                                            type="text"
-                                            placeholder="Description (optional)"
-                                            class="w-full text-xs text-gray-600 border-b border-transparent hover:border-cream-300 focus:border-indigo-600 focus:outline-none pb-1 placeholder-gray-400"
-                                        />
+                                        <div class="space-y-1.5">
+                                            <div class="flex items-center justify-between gap-2">
+                                                <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Description Format</span>
+                                                <div
+                                                    class="inline-flex items-center rounded-lg bg-cream-100 p-0.5 border border-cream-300/80 text-[11px] font-bold"
+                                                    @click.stop
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        @click="field.description_type = 'text'"
+                                                        class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
+                                                        :class="(!field.description_type || field.description_type === 'text') ? 'bg-white text-indigo-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
+                                                    >
+                                                        <span>📝</span>
+                                                        <span>Short answer</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        @click="field.description_type = 'textarea'"
+                                                        class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
+                                                        :class="field.description_type === 'textarea' ? 'bg-white text-indigo-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
+                                                    >
+                                                        <span>📄</span>
+                                                        <span>Paragraph</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <textarea
+                                                v-if="field.description_type === 'textarea'"
+                                                v-model="field.description"
+                                                rows="3"
+                                                placeholder="Description (optional)"
+                                                class="w-full text-xs text-gray-600 bg-cream-50/40 rounded-lg border border-cream-300 hover:border-cream-400 focus:border-indigo-600 focus:bg-white focus:outline-none p-2 placeholder-gray-400 transition resize-y"
+                                            ></textarea>
+                                            <input
+                                                v-else
+                                                v-model="field.description"
+                                                type="text"
+                                                placeholder="Description (optional)"
+                                                class="w-full text-xs text-gray-600 border-b border-transparent hover:border-cream-300 focus:border-indigo-600 focus:outline-none pb-1 placeholder-gray-400"
+                                            />
+                                        </div>
                                     </div>
 
                                     <!-- Section Navigation Rules & Conditions Box -->
@@ -1218,7 +1260,7 @@ onUnmounted(() => {
                                                 v-model="field.particular"
                                                 @blur="onParticularBlur(field)"
                                                 type="text"
-                                                placeholder="Question"
+                                                :placeholder="field.type === 'text_only' ? 'Instructional Section Title / Heading' : 'Question'"
                                                 class="w-full text-base font-semibold text-gray-900 bg-cream-50/60 border-b-2 border-cream-400 focus:border-forest-900 focus:bg-white rounded-t-lg px-3 py-2 focus:outline-none transition"
                                             />
                                         </div>
@@ -1237,12 +1279,57 @@ onUnmounted(() => {
                                                 <option value="number">🔢 Linear scale / Number</option>
                                                 <option value="date">📅 Date</option>
                                                 <option value="section">〓 Section header</option>
+                                                <option value="text_only">ℹ️ Text only section</option>
                                             </select>
                                         </div>
                                     </div>
 
+                                    <!-- Text Only Section Instructional Body Editor -->
+                                    <div v-if="field.type === 'text_only'" class="space-y-1.5">
+                                        <div class="flex items-center justify-between gap-2">
+                                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Instructional Text Format</span>
+                                            <div
+                                                class="inline-flex items-center rounded-lg bg-cream-100 p-0.5 border border-cream-300/80 text-[11px] font-bold"
+                                                @click.stop
+                                            >
+                                                <button
+                                                    type="button"
+                                                    @click="field.description_type = 'text'"
+                                                    class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
+                                                    :class="field.description_type === 'text' ? 'bg-white text-forest-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
+                                                >
+                                                    <span>📝</span>
+                                                    <span>Short answer</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    @click="field.description_type = 'textarea'"
+                                                    class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
+                                                    :class="(!field.description_type || field.description_type === 'textarea') ? 'bg-white text-forest-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
+                                                >
+                                                    <span>📄</span>
+                                                    <span>Paragraph</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <input
+                                            v-if="field.description_type === 'text'"
+                                            v-model="field.description"
+                                            type="text"
+                                            placeholder="Instructional text or guidance (optional)"
+                                            class="w-full text-xs text-gray-600 border-b border-cream-300 focus:border-forest-900 focus:outline-none pb-1 placeholder-gray-400"
+                                        />
+                                        <textarea
+                                            v-else
+                                            v-model="field.description"
+                                            rows="3"
+                                            placeholder="Instructional text or guidance for respondents (optional)"
+                                            class="w-full text-xs text-gray-600 bg-cream-50/40 rounded-lg border border-cream-300 hover:border-cream-400 focus:border-forest-900 focus:bg-white focus:outline-none p-2.5 placeholder-gray-400 transition resize-y"
+                                        ></textarea>
+                                    </div>
+
                                     <!-- Question Description / Subtitle if toggled -->
-                                    <div v-if="field._show_description || field.description">
+                                    <div v-else-if="field._show_description || field.description">
                                         <input
                                             v-model="field.description"
                                             type="text"
@@ -1467,7 +1554,7 @@ onUnmounted(() => {
                                         <div class="h-5 w-px bg-cream-400"></div>
 
                                         <!-- Required Toggle -->
-                                        <label class="inline-flex items-center space-x-2.5 cursor-pointer select-none">
+                                        <label v-if="field.type !== 'text_only'" class="inline-flex items-center space-x-2.5 cursor-pointer select-none">
                                             <span
                                                 class="text-xs transition-colors duration-150"
                                                 :class="field.required ? 'font-bold text-forest-900' : 'font-semibold text-gray-700'"
@@ -1505,6 +1592,7 @@ onUnmounted(() => {
                                                 class="absolute right-0 bottom-full mb-1 w-52 rounded-xl bg-white shadow-xl ring-1 ring-black/10 p-1.5 z-40 border border-cream-400 text-xs font-medium"
                                             >
                                                 <button
+                                                    v-if="field.type !== 'text_only'"
                                                     type="button"
                                                     @click="field._show_description = !field._show_description; closeAllFieldMenus()"
                                                     class="w-full flex items-center justify-between px-2.5 py-1.5 hover:bg-cream-100 rounded-lg text-left cursor-pointer"
@@ -1541,17 +1629,20 @@ onUnmounted(() => {
                                     <div class="flex items-center justify-between">
                                         <div class="flex items-center space-x-2">
                                             <span class="text-sm font-bold text-gray-900">
-                                                {{ field.particular || 'Untitled Question' }}
-                                                <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
+                                                {{ field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question') }}
+                                                <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5">*</span>
                                             </span>
                                         </div>
                                         <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600">
-                                            {{ field.type }}
+                                            {{ field.type === 'text_only' ? 'text only' : field.type }}
                                         </span>
                                     </div>
 
-                                    <p v-if="field.description" class="text-xs text-gray-500">
+                                    <p v-if="field.description" class="text-xs text-gray-500 whitespace-pre-line">
                                         {{ field.description }}
+                                    </p>
+                                    <p v-else-if="field.type === 'text_only'" class="text-xs text-gray-400 italic">
+                                        Instructional text block (no answer required)
                                     </p>
 
                                     <!-- Read-only preview of options -->

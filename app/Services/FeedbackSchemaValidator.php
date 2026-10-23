@@ -24,6 +24,7 @@ class FeedbackSchemaValidator
         'select',
         'checkbox',
         'section',
+        'text_only',
     ];
 
     /**
@@ -119,11 +120,14 @@ class FeedbackSchemaValidator
             }
 
             $weight = isset($field['weight']) ? (int) $field['weight'] : ($index + 1);
-            $required = $type === 'section' ? false : (bool) ($field['required'] ?? false);
+            $required = in_array($type, ['section', 'text_only'], true) ? false : (bool) ($field['required'] ?? false);
             $allowOther = (bool) ($field['allow_other'] ?? false);
             $allowCustomValue = (bool) ($field['allow_custom_value'] ?? false);
             $placeholder = isset($field['placeholder']) && is_string($field['placeholder']) ? trim($field['placeholder']) : null;
             $description = isset($field['description']) && is_string($field['description']) ? trim($field['description']) : null;
+            $descriptionType = isset($field['description_type']) && in_array($field['description_type'], ['text', 'textarea'], true)
+                ? $field['description_type']
+                : ($type === 'text_only' || ($type === 'section' && $description !== null && str_contains($description, "\n")) ? 'textarea' : 'text');
             $min = isset($field['min']) && is_numeric($field['min']) ? (float) $field['min'] : null;
             $max = isset($field['max']) && is_numeric($field['max']) ? (float) $field['max'] : null;
 
@@ -165,6 +169,7 @@ class FeedbackSchemaValidator
                     'required' => $required,
                     'placeholder' => $placeholder,
                     'description' => $description,
+                    'description_type' => $descriptionType,
                     'min' => $min,
                     'max' => $max,
                     'allow_other' => $allowOther,
@@ -229,6 +234,7 @@ class FeedbackSchemaValidator
                     'required' => $required,
                     'placeholder' => $placeholder,
                     'description' => $description,
+                    'description_type' => $descriptionType,
                     'min' => $min,
                     'max' => $max,
                     'allow_other' => $allowOther,
@@ -613,7 +619,7 @@ class FeedbackSchemaValidator
             $particular = $field['particular'];
             $type = $field['type'] ?? 'text';
 
-            if ($type === 'section') {
+            if (in_array($type, ['section', 'text_only'], true)) {
                 continue;
             }
 

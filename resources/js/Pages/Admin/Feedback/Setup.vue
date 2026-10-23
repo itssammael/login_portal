@@ -844,6 +844,8 @@ const generateSampleAnswers = (fields = []) => {
             } else {
                 sample[id] = [];
             }
+        } else if (field.type === 'text_only') {
+            return;
         } else {
             sample[id] = 'Satisfactory';
         }
@@ -2816,7 +2818,7 @@ const closeSamplePreviewModal = () => {
                                         Section {{ previewCurrentPageIdx + 1 }} of {{ previewSectionPages.length }}
                                     </span>
                                 </div>
-                                <p v-if="previewCurrentPage?.section?.description" class="text-xs text-gray-600">
+                                <p v-if="previewCurrentPage?.section?.description" class="text-xs text-gray-600 whitespace-pre-line">
                                     {{ previewCurrentPage.section.description }}
                                 </p>
                                 <div v-if="previewForm?.schema?.pagination?.progress_bar !== false" class="h-2 w-full bg-cream-200 rounded-full overflow-hidden">
@@ -2856,11 +2858,24 @@ const closeSamplePreviewModal = () => {
                                                 <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight">
                                                     {{ field.particular }}
                                                 </h3>
-                                                <p v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium">
+                                                <p v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium whitespace-pre-line">
                                                     {{ field.description }}
                                                 </p>
                                             </div>
                                         </div>
+                                    </div>
+
+                                    <!-- Text Only Instructional Section -->
+                                    <div
+                                        v-else-if="field.type === 'text_only' && isPreviewFieldConditionMet(field)"
+                                        class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-1.5"
+                                    >
+                                        <h4 class="text-sm sm:text-base font-bold text-forest-950">
+                                            {{ field.particular }}
+                                        </h4>
+                                        <p v-if="field.description" class="text-xs text-gray-600 leading-relaxed whitespace-pre-line">
+                                            {{ field.description }}
+                                        </p>
                                     </div>
 
                                     <!-- Regular Question Card -->
@@ -3147,7 +3162,20 @@ const closeSamplePreviewModal = () => {
                                                 <h3 class="text-sm font-bold text-forest-950">
                                                     {{ field.particular }}
                                                 </h3>
-                                                <p v-if="field.description" class="text-xs text-gray-500 mt-0.5">
+                                                <p v-if="field.description" class="text-xs text-gray-500 mt-0.5 whitespace-pre-line">
+                                                    {{ field.description }}
+                                                </p>
+                                            </div>
+
+                                            <!-- Text Only Instructional Section in Embed -->
+                                            <div
+                                                v-else-if="field.type === 'text_only' && isPreviewFieldConditionMet(field)"
+                                                class="p-3.5 bg-cream-100/80 rounded-xl border border-cream-400/80 space-y-1"
+                                            >
+                                                <h4 class="text-xs font-bold text-forest-950">
+                                                    {{ field.particular }}
+                                                </h4>
+                                                <p v-if="field.description" class="text-[11px] text-gray-600 whitespace-pre-line">
                                                     {{ field.description }}
                                                 </p>
                                             </div>
