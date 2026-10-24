@@ -19,6 +19,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Proactive PHP runtime hardening against PHP2Shell and fingerprinting
+        @ini_set('session.upload_progress.enabled', '0');
+        @ini_set('expose_php', '0');
     }
 }

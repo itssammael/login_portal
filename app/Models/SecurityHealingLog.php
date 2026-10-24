@@ -19,6 +19,8 @@ class SecurityHealingLog extends Model
         'cleanup_stale_tokens' => 'Stale Token Attack Surface Cleanup',
         'file_permission_remediate' => 'Storage & File Security Hardened',
         'rate_limit_enforce' => 'Dynamic Rate Limiter Applied',
+        'php_runtime_hardening' => 'PHP Runtime & CVE Mitigation',
+        'php_ini_hardening' => 'PHP Server Configuration Hardened',
     ];
 
     /**

@@ -21,6 +21,8 @@ class SecurityThreatLog extends Model
         'path_traversal' => 'Directory / Path Traversal',
         'malicious_scanner' => 'Automated Bot / Exploit Scanner',
         'suspicious_auth' => 'Suspicious Auth Activity',
+        'php_runtime_exploit_probe' => 'PHP Runtime / PHP2Shell Exploit Probe',
+        'php_cgi_argument_injection' => 'PHP CGI / Windows Argument Injection',
     ];
 
     /**

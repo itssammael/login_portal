@@ -80,6 +80,25 @@ class SystemRule extends Model
     }
 
     /**
+     * Set or update a system rule value by key.
+     */
+    public static function setValue(string $key, mixed $value, string $ruleType = 'string'): self
+    {
+        $encodedValue = is_array($value) ? json_encode($value) : (string) $value;
+        $actualType = is_array($value) ? 'json' : $ruleType;
+
+        return static::updateOrCreate(
+            ['key' => $key],
+            [
+                'name' => ucfirst(str_replace('_', ' ', $key)),
+                'value' => $encodedValue,
+                'rule_type' => $actualType,
+                'is_active' => true,
+            ]
+        );
+    }
+
+    /**
      * Determine if a user is permitted to broadcast system announcements based on system engine rule.
      */
     public static function canUserBroadcastAnnouncements(?User $user): bool

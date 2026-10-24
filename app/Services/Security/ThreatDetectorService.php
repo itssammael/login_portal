@@ -44,6 +44,9 @@ class ThreatDetectorService
         'phpinfo.php',
         'setup.php',
         'install.php',
+        'php-cgi',
+        'php-cgi.exe',
+        'cgi-bin/php',
     ];
 
     /**
@@ -130,7 +133,78 @@ class ThreatDetectorService
             ];
         }
 
-        // 5. Sensitive File Probe in Route
+        // 5. PHP-CGI & Windows Argument Injection (CVE-2024-4577 & variants)
+        $rawQuery = (string) $request->server->get('QUERY_STRING', '');
+        $combinedQuery = strtolower($queryString.' '.$rawQuery);
+        if (
+            preg_match('/(%ad|%80|-d\b|-s\b|-b\b|-c\b|-n\b|-w\b|-z\b).*(allow_url_include|auto_prepend_file|auto_append_file|cgi\.force_redirect|open_basedir|disable_functions|php:\/\/input)/i', $combinedQuery) ||
+            preg_match('/(\b(allow_url_include|auto_prepend_file|auto_append_file)\b\s*=\s*(1|on|true|php:\/\/))/i', $combinedQuery)
+        ) {
+            return [
+                'detected' => true,
+                'type' => 'php_cgi_argument_injection',
+                'severity' => 'critical',
+                'description' => 'PHP-CGI / Windows argument injection signature intercepted',
+            ];
+        }
+
+        // 6. PHP2Shell & Stream Wrapper / Memory Exhaustion Probes (CVE-2026-109618, CVE-2026-109619)
+        if (preg_match('/(php|phar|data):\/\//i', $queryString) || preg_match('/(php|phar|data):\/\//i', $uri)) {
+            return [
+                'detected' => true,
+                'type' => 'php_runtime_exploit_probe',
+                'severity' => 'critical',
+                'description' => 'Malicious PHP stream wrapper injection (php://, phar://, data://) intercepted',
+            ];
+        }
+
+        // Detect PHP_SESSION_UPLOAD_PROGRESS abuse (PHP2Shell primary pre-auth vector)
+        $progressParam = $request->input('PHP_SESSION_UPLOAD_PROGRESS') ?? $request->header('PHP_SESSION_UPLOAD_PROGRESS');
+        if ($progressParam !== null) {
+            $progressStr = is_string($progressParam) ? $progressParam : json_encode($progressParam);
+            if (
+                strlen((string) $progressStr) > 128 ||
+                str_contains((string) $progressStr, "\0") ||
+                str_contains((string) $progressStr, '%00') ||
+                str_contains((string) $progressStr, '../') ||
+                str_contains((string) $progressStr, '..\\') ||
+                preg_match('/[^\w\-_\.]/', (string) $progressStr)
+            ) {
+                return [
+                    'detected' => true,
+                    'type' => 'php_runtime_exploit_probe',
+                    'severity' => 'critical',
+                    'description' => 'Abnormal PHP_SESSION_UPLOAD_PROGRESS payload intercepted (PHP2Shell attack vector)',
+                ];
+            }
+        }
+
+        // Detect oversized headers attempting low-level PHP memory exhaustion
+        $headerTotalLength = 0;
+        foreach ($request->headers->all() as $headerName => $headerValues) {
+            foreach ($headerValues as $headerVal) {
+                $valLen = strlen((string) $headerVal);
+                $headerTotalLength += $valLen;
+                if ($valLen > 8192) {
+                    return [
+                        'detected' => true,
+                        'type' => 'php_runtime_exploit_probe',
+                        'severity' => 'critical',
+                        'description' => "Oversized HTTP header '{$headerName}' ({$valLen} bytes) attempting memory exhaustion",
+                    ];
+                }
+            }
+        }
+        if ($headerTotalLength > 32768) {
+            return [
+                'detected' => true,
+                'type' => 'php_runtime_exploit_probe',
+                'severity' => 'critical',
+                'description' => "Cumulative HTTP header payload ({$headerTotalLength} bytes) attempting memory exhaustion",
+            ];
+        }
+
+        // 7. Sensitive File Probe in Route
         foreach (self::PROBE_PATHS as $probe) {
             if (str_contains($uri, $probe)) {
                 return [
@@ -243,12 +317,43 @@ class ThreatDetectorService
     }
 
     /**
+     * Recursively sanitize strings to valid UTF-8 so binary or non-standard character sets (e.g. %ad soft hyphens)
+     * can be safely encoded as JSON in the database.
+     */
+    protected function sanitizeUtf8(mixed $data): mixed
+    {
+        if (is_string($data)) {
+            return function_exists('mb_scrub')
+                ? mb_scrub($data, 'UTF-8')
+                : mb_convert_encoding($data, 'UTF-8', 'ISO-8859-1');
+        }
+
+        if (is_array($data)) {
+            $cleaned = [];
+            foreach ($data as $key => $val) {
+                $cleanKey = is_string($key)
+                    ? (function_exists('mb_scrub') ? mb_scrub($key, 'UTF-8') : mb_convert_encoding($key, 'UTF-8', 'ISO-8859-1'))
+                    : $key;
+                $cleaned[$cleanKey] = $this->sanitizeUtf8($val);
+            }
+
+            return $cleaned;
+        }
+
+        return $data;
+    }
+
+    /**
      * Log a security threat and check whether self-healing quarantine should trigger.
      *
      * @param  array<string, mixed>  $data
      */
     public function logThreat(array $data): SecurityThreatLog
     {
+        if (isset($data['payload'])) {
+            $data['payload'] = $this->sanitizeUtf8($data['payload']);
+        }
+
         $threat = SecurityThreatLog::create($data);
 
         // Notify Self-Healing Engine to evaluate defense rules
@@ -292,7 +397,9 @@ class ThreatDetectorService
             str_contains($probe, 'adminer') ||
             str_contains($probe, 'actuator') ||
             str_contains($probe, 'solr') ||
-            str_contains($probe, 'telescope')
+            str_contains($probe, 'telescope') ||
+            str_contains($probe, 'php-cgi') ||
+            str_contains($probe, 'cgi-bin')
         ) {
             return 'critical';
         }
