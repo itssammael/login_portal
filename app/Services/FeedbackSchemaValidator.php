@@ -98,7 +98,7 @@ class FeedbackSchemaValidator
 
             // Generate or normalize snake_case id
             $rawId = trim((string) ($field['id'] ?? ''));
-            $id = $rawId !== '' ? Str::snake($rawId) : Str::snake($particular);
+            $id = $rawId !== '' ? Str::snake($rawId) : Str::snake(strip_tags($particular));
             $id = preg_replace('/[^a-z0-9_]/', '', strtolower($id));
 
             if ($id === '') {
@@ -616,7 +616,7 @@ class FeedbackSchemaValidator
 
         foreach ($fields as $field) {
             $id = $field['id'];
-            $particular = $field['particular'];
+            $particular = strip_tags((string) ($field['particular'] ?? $id));
             $type = $field['type'] ?? 'text';
 
             if (in_array($type, ['section', 'text_only'], true)) {

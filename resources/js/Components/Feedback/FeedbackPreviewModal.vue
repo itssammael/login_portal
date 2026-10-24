@@ -97,16 +97,25 @@ watch([fields, state], resetAnswers, { immediate: true });
                             <div class="space-y-6 p-5 sm:p-8">
                                 <div class="rounded-2xl bg-forest-900 p-5 text-white"><p class="text-xs font-bold uppercase tracking-[0.14em] text-emerald-200">{{ mode === 'embedded' ? 'Embedded questionnaire' : 'Deployed web portal' }}</p><h3 class="mt-1 text-xl font-black">{{ form?.event?.name }}</h3><p v-if="form?.event?.details" class="mt-2 text-sm text-emerald-50">{{ form.event.details }}</p></div>
                                 <section v-for="(page, index) in displayedPages" :key="page?.section?.id || index" class="space-y-5">
-                                    <div v-if="page.section"><h4 class="text-base font-black text-gray-950">{{ page.section.particular }}</h4><p v-if="page.section.description || page.section.details" class="text-sm text-gray-600 whitespace-pre-line">{{ page.section.description || page.section.details }}</p></div>
+                                    <div v-if="page.section">
+                                        <h4 class="text-base font-black text-gray-950" v-html="page.section.particular"></h4>
+                                        <div v-if="page.section.description || page.section.details" class="text-sm text-gray-600 form-rich-content" v-html="page.section.description || page.section.details"></div>
+                                    </div>
                                     <div v-for="field in page.fields" :key="field.id" class="space-y-2">
                                         <template v-if="field.type === 'text_only'">
-                                            <div class="rounded-xl border border-cream-400 bg-cream-100/80 p-4 space-y-1">
-                                                <h5 class="text-sm font-bold text-gray-900">{{ field.particular }}</h5>
-                                                <p v-if="field.description" class="text-xs text-gray-600 whitespace-pre-line">{{ field.description }}</p>
+                                            <div class="rounded-xl border border-cream-400 bg-cream-100/80 p-4 space-y-2">
+                                                <h5 class="text-sm font-bold text-gray-900" v-html="field.particular"></h5>
+                                                <div v-if="field.description" class="text-xs text-gray-700 form-rich-content overflow-x-auto" v-html="field.description"></div>
                                             </div>
                                         </template>
                                         <template v-else>
-                                            <label class="block text-sm font-bold text-gray-800">{{ field.particular }} <span v-if="field.required" class="text-red-600">*</span></label>
+                                            <div>
+                                                <label class="block text-sm font-bold text-gray-800">
+                                                    <span v-html="field.particular"></span>
+                                                    <span v-if="field.required" class="text-red-600 ml-0.5">*</span>
+                                                </label>
+                                                <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="field.description"></div>
+                                            </div>
                                             <textarea v-if="field.type === 'textarea'" v-model="answers[field.id]" rows="3" class="w-full rounded-xl border-gray-300 text-sm focus:border-forest-600 focus:ring-forest-600" />
                                             <input v-else-if="['text', 'number', 'date'].includes(field.type)" v-model="answers[field.id]" :type="field.type" class="w-full rounded-xl border-gray-300 text-sm focus:border-forest-600 focus:ring-forest-600">
                                             <select v-else-if="field.type === 'select'" v-model="answers[field.id]" class="w-full rounded-xl border-gray-300 text-sm focus:border-forest-600 focus:ring-forest-600"><option value="">Select an option</option><option v-for="option in field.options || []" :key="option.value" :value="option.value">{{ option.label || option.value }}</option></select>

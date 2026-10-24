@@ -677,18 +677,9 @@ onBeforeUnmount(() => {
                                 :id="`field_container_${field.id}`"
                                 class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
                             >
-                                <div class="flex items-center gap-3">
-                                    <span class="size-7 rounded-xl bg-forest-900 text-emerald-200 text-xs font-black flex items-center justify-center shrink-0 shadow-xs">
-                                        #{{ field.weight || index + 1 }}
-                                    </span>
-                                    <div class="flex-1">
-                                        <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight">
-                                            {{ field.particular }}
-                                        </h3>
-                                        <p v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium whitespace-pre-line">
-                                            {{ field.description }}
-                                        </p>
-                                    </div>
+                                <div>
+                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight" v-html="field.particular"></h3>
+                                    <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="field.description"></div>
                                 </div>
                             </div>
 
@@ -696,14 +687,10 @@ onBeforeUnmount(() => {
                             <div
                                 v-else-if="field.type === 'text_only' && isFieldConditionMet(field)"
                                 :id="`field_container_${field.id}`"
-                                class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-1.5"
+                                class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-2"
                             >
-                                <h4 class="text-sm sm:text-base font-bold text-forest-950">
-                                    {{ field.particular }}
-                                </h4>
-                                <p v-if="field.description" class="text-xs text-gray-600 leading-relaxed whitespace-pre-line">
-                                    {{ field.description }}
-                                </p>
+                                <h4 class="text-sm sm:text-base font-bold text-forest-950" v-html="field.particular"></h4>
+                                <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="field.description"></div>
                             </div>
 
                             <!-- Regular Question Input Tile -->
@@ -720,15 +707,13 @@ onBeforeUnmount(() => {
                                 ]"
                             >
                                 <div class="flex items-start justify-between gap-3">
-                                    <div class="flex items-center space-x-2">
-                                        <span class="size-6 rounded-full bg-forest-900 text-emerald-200 text-xs font-bold flex items-center justify-center shrink-0">
-                                            {{ field.weight || index + 1 }}
-                                        </span>
-                                        <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900">
-                                            {{ field.particular }}
+                                    <div class="flex-1">
+                                        <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block">
+                                            <span v-html="field.particular"></span>
                                             <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
                                             <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>
                                         </label>
+                                        <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="field.description"></div>
                                     </div>
                                     <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cream-200 text-gray-600 shrink-0">
                                         {{ field.type }}
