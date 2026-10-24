@@ -57,8 +57,9 @@ class FeedbackSchemaValidatorTest extends TestCase
 
         $this->assertArrayHasKey('schema.fields.*.description_type', $rules);
         $this->assertSame(['nullable', 'string', 'in:text,textarea'], $rules['schema.fields.*.description_type']);
+        $this->assertSame(['nullable', 'string', 'max:65535'], $rules['schema.title']);
         $this->assertSame(['nullable', 'string', 'max:65535'], $rules['schema.fields.*.description']);
-        $this->assertSame(['required', 'string', 'max:5000'], $rules['schema.fields.*.particular']);
+        $this->assertSame(['required', 'string', 'max:65535'], $rules['schema.fields.*.particular']);
     }
 
     public function test_text_only_field_is_supported_and_not_required(): void
@@ -101,9 +102,9 @@ class FeedbackSchemaValidatorTest extends TestCase
     {
         $validator = new FeedbackSchemaValidator;
 
-        $tableHtml = '<table class="form-rich-table"><thead><tr><th>Header 1</th></tr></thead><tbody><tr><td>Data 1</td></tr></tbody></table>';
-        $richParticular = '<span style="text-align: center"><b>Rate The Overall Experience</b></span>';
-        $richDescription = "<p>Observe <b>Critical Tasks</b>:</p><ul><li>Task 1</li><li>Task 2</li></ul>{$tableHtml}";
+        $tableHtml = '<table class="form-rich-table" style="width: 100%; border: 1px solid rgb(221, 208, 171);"><thead><tr><th style="background-color: #faf4df; color: #1b4332;">Header 1</th></tr></thead><tbody><tr><td>Data 1</td></tr></tbody></table>';
+        $richParticular = '<span style="text-align: center; color: #166534; font-size: 1.25rem; font-family: ui-sans-serif, system-ui, sans-serif;"><b>Rate The Overall Experience</b></span>';
+        $richDescription = "<p>Observe <mark style=\"background-color: #fef08a;\">Critical Tasks</mark>:</p><ul><li>Task 1</li><li>Task 2</li></ul>{$tableHtml}";
 
         $normalized = $validator->validateSchema([
             'fields' => [

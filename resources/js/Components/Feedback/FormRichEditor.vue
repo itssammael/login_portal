@@ -23,6 +23,10 @@ const props = defineProps({
         type: Boolean,
         default: false,
     },
+    allowFontStyles: {
+        type: Boolean,
+        default: true,
+    },
     singleLine: {
         type: Boolean,
         default: false,
@@ -42,12 +46,26 @@ const emit = defineEmits(['update:modelValue', 'blur', 'focus', 'change']);
 const editorRef = ref(null);
 const isFocused = ref(false);
 const showTableMenu = ref(false);
+const showSizeMenu = ref(false);
+const showColorMenu = ref(false);
+const showHighlightMenu = ref(false);
+const showFontMenu = ref(false);
+const customColor = ref('#1b4332');
 const tableGridHover = ref({ rows: 3, cols: 3 });
 const activeTable = ref(null);
 const activeTableCell = ref(null);
 
 const canBullets = computed(() => props.mode === 'rich' || props.allowBullets);
 const canTables = computed(() => props.mode === 'rich' || props.allowTables);
+const canFontStyles = computed(() => props.allowFontStyles);
+
+const closeAllMenus = () => {
+    showTableMenu.value = false;
+    showSizeMenu.value = false;
+    showColorMenu.value = false;
+    showHighlightMenu.value = false;
+    showFontMenu.value = false;
+};
 
 const isEmpty = computed(() => {
     if (!props.modelValue) return true;
@@ -77,10 +95,56 @@ const setAlignment = (align) => {
     onEditorInput();
 };
 
+const setFontSize = (sizeVal) => {
+    if (!editorRef.value) return;
+    editorRef.value.focus();
+    if (sizeVal.startsWith('h')) {
+        document.execCommand('formatBlock', false, `<${sizeVal}>`);
+    } else if (sizeVal === 'p') {
+        document.execCommand('formatBlock', false, '<p>');
+    } else {
+        document.execCommand('fontSize', false, sizeVal);
+    }
+    showSizeMenu.value = false;
+    onEditorInput();
+};
+
+const setFontColor = (color) => {
+    if (!editorRef.value) return;
+    editorRef.value.focus();
+    document.execCommand('foreColor', false, color);
+    showColorMenu.value = false;
+    onEditorInput();
+};
+
+const setHighlightColor = (color) => {
+    if (!editorRef.value) return;
+    editorRef.value.focus();
+    // Try hiliteColor first (standard modern), fallback to backColor
+    try {
+        if (!document.execCommand('hiliteColor', false, color || 'transparent')) {
+            document.execCommand('backColor', false, color || 'transparent');
+        }
+    } catch {
+        document.execCommand('backColor', false, color || 'transparent');
+    }
+    showHighlightMenu.value = false;
+    onEditorInput();
+};
+
+const setFontFamily = (family) => {
+    if (!editorRef.value) return;
+    editorRef.value.focus();
+    document.execCommand('fontName', false, family);
+    showFontMenu.value = false;
+    onEditorInput();
+};
+
 const clearFormatting = () => {
     if (!editorRef.value) return;
     editorRef.value.focus();
     document.execCommand('removeFormat', false, null);
+    closeAllMenus();
     onEditorInput();
 };
 
@@ -248,10 +312,10 @@ const onKeydown = (e) => {
 
 const onPaste = (e) => {
     e.preventDefault();
-    const text = e.clipboardData.getData('text/plain');
     const html = e.clipboardData.getData('text/html');
+    const text = e.clipboardData.getData('text/plain');
 
-    if (html && canTables.value && html.includes('<table')) {
+    if (html) {
         const sanitized = sanitizeHtml(html);
         document.execCommand('insertHTML', false, sanitized);
     } else {
@@ -342,6 +406,269 @@ onMounted(() => {
                 </button>
             </div>
 
+            <!-- Font Size & Heading Dropdown -->
+            <div v-if="canFontStyles" class="relative inline-flex items-center">
+                <button
+                    type="button"
+                    @click="showSizeMenu = !showSizeMenu; showColorMenu = false; showHighlightMenu = false; showFontMenu = false; showTableMenu = false;"
+                    class="h-7 px-2 bg-white rounded-lg border border-cream-300 shadow-2xs flex items-center space-x-1 text-xs font-semibold text-gray-700 hover:bg-cream-50 hover:text-forest-900 transition cursor-pointer"
+                    title="Font Size & Headings"
+                >
+                    <span class="text-[11px]">Size</span>
+                    <span class="text-[9px] text-gray-400">▾</span>
+                </button>
+
+                <div
+                    v-if="showSizeMenu"
+                    class="absolute left-0 top-full mt-1 z-50 py-1 bg-white rounded-xl shadow-xl border border-cream-400 text-xs w-40 space-y-0.5 animate-in fade-in"
+                >
+                    <button
+                        type="button"
+                        @click="setFontSize('h1')"
+                        class="w-full text-left px-3 py-1.5 hover:bg-cream-100 font-extrabold text-sm text-forest-950 flex items-center justify-between"
+                    >
+                        <span>Title (H1)</span>
+                        <span class="text-[10px] text-gray-400">24px</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="setFontSize('h2')"
+                        class="w-full text-left px-3 py-1.5 hover:bg-cream-100 font-bold text-xs text-forest-900 flex items-center justify-between"
+                    >
+                        <span>Heading (H2)</span>
+                        <span class="text-[10px] text-gray-400">20px</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="setFontSize('h3')"
+                        class="w-full text-left px-3 py-1.5 hover:bg-cream-100 font-bold text-xs text-forest-800 flex items-center justify-between"
+                    >
+                        <span>Subheading (H3)</span>
+                        <span class="text-[10px] text-gray-400">16px</span>
+                    </button>
+                    <div class="border-t border-cream-200 my-1"></div>
+                    <button
+                        type="button"
+                        @click="setFontSize('4')"
+                        class="w-full text-left px-3 py-1 hover:bg-cream-100 text-xs text-gray-800 flex items-center justify-between"
+                    >
+                        <span>Large Text</span>
+                        <span class="text-[10px] text-gray-400">18px</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="setFontSize('3')"
+                        class="w-full text-left px-3 py-1 hover:bg-cream-100 text-xs text-gray-800 flex items-center justify-between"
+                    >
+                        <span>Medium Text</span>
+                        <span class="text-[10px] text-gray-400">16px</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="setFontSize('p')"
+                        class="w-full text-left px-3 py-1 hover:bg-cream-100 text-xs text-gray-700 flex items-center justify-between"
+                    >
+                        <span>Normal Text</span>
+                        <span class="text-[10px] text-gray-400">14px</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="setFontSize('1')"
+                        class="w-full text-left px-3 py-1 hover:bg-cream-100 text-xs text-gray-600 flex items-center justify-between"
+                    >
+                        <span>Small Text</span>
+                        <span class="text-[10px] text-gray-400">12px</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Font Family Selector -->
+            <div v-if="canFontStyles" class="relative inline-flex items-center">
+                <button
+                    type="button"
+                    @click="showFontMenu = !showFontMenu; showSizeMenu = false; showColorMenu = false; showHighlightMenu = false; showTableMenu = false;"
+                    class="h-7 px-2 bg-white rounded-lg border border-cream-300 shadow-2xs flex items-center space-x-1 text-xs font-semibold text-gray-700 hover:bg-cream-50 hover:text-forest-900 transition cursor-pointer"
+                    title="Font Family"
+                >
+                    <span class="text-[11px]">Font</span>
+                    <span class="text-[9px] text-gray-400">▾</span>
+                </button>
+
+                <div
+                    v-if="showFontMenu"
+                    class="absolute left-0 top-full mt-1 z-50 py-1 bg-white rounded-xl shadow-xl border border-cream-400 text-xs w-44 space-y-0.5 animate-in fade-in"
+                >
+                    <button
+                        type="button"
+                        @click="setFontFamily('Inter, system-ui, sans-serif')"
+                        class="w-full text-left px-3 py-1.5 hover:bg-cream-100 font-sans text-xs text-gray-900"
+                    >
+                        Sans-serif (Modern)
+                    </button>
+                    <button
+                        type="button"
+                        @click="setFontFamily('Georgia, Cambria, serif')"
+                        class="w-full text-left px-3 py-1.5 hover:bg-cream-100 font-serif text-xs text-gray-900"
+                    >
+                        Serif (Editorial)
+                    </button>
+                    <button
+                        type="button"
+                        @click="setFontFamily('ui-monospace, Consolas, monospace')"
+                        class="w-full text-left px-3 py-1.5 hover:bg-cream-100 font-mono text-xs text-gray-900"
+                    >
+                        Monospace (Technical)
+                    </button>
+                </div>
+            </div>
+
+            <!-- Text Color Picker -->
+            <div v-if="canFontStyles" class="relative inline-flex items-center">
+                <button
+                    type="button"
+                    @click="showColorMenu = !showColorMenu; showSizeMenu = false; showHighlightMenu = false; showFontMenu = false; showTableMenu = false;"
+                    class="h-7 px-2 bg-white rounded-lg border border-cream-300 shadow-2xs flex items-center space-x-1 text-xs font-bold text-gray-700 hover:bg-cream-50 hover:text-forest-900 transition cursor-pointer"
+                    title="Text Color"
+                >
+                    <span class="font-extrabold underline decoration-forest-700 decoration-2">A</span>
+                    <span class="text-[9px] text-gray-400">▾</span>
+                </button>
+
+                <!-- Color Palette Popover -->
+                <div
+                    v-if="showColorMenu"
+                    class="absolute left-0 top-full mt-1 z-50 p-2.5 bg-white rounded-xl shadow-xl border border-cream-400 text-xs w-48 space-y-2 animate-in fade-in"
+                >
+                    <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Text Color</span>
+                    <div class="grid grid-cols-4 gap-1.5">
+                        <button
+                            type="button"
+                            @click="setFontColor('#0f291e')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #0f291e;"
+                            title="Default Forest"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setFontColor('#1b4332')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #1b4332;"
+                            title="Pine Green"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setFontColor('#059669')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #059669;"
+                            title="Emerald"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setFontColor('#2563eb')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #2563eb;"
+                            title="Royal Blue"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setFontColor('#d97706')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #d97706;"
+                            title="Amber"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setFontColor('#dc2626')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #dc2626;"
+                            title="Crimson Red"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setFontColor('#4b5563')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #4b5563;"
+                            title="Gray"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setFontColor('#111827')"
+                            class="size-7 rounded-lg border border-black/10 flex items-center justify-center transition hover:scale-105"
+                            style="background-color: #111827;"
+                            title="Charcoal"
+                        ></button>
+                    </div>
+                    <div class="pt-1.5 border-t border-cream-200 flex items-center justify-between gap-1 text-[11px]">
+                        <span class="text-gray-500 font-medium">Custom:</span>
+                        <input
+                            type="color"
+                            v-model="customColor"
+                            @change="setFontColor(customColor)"
+                            class="size-6 p-0 border border-cream-300 rounded cursor-pointer"
+                        />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Text Highlight Color -->
+            <div v-if="canFontStyles" class="relative inline-flex items-center">
+                <button
+                    type="button"
+                    @click="showHighlightMenu = !showHighlightMenu; showSizeMenu = false; showColorMenu = false; showFontMenu = false; showTableMenu = false;"
+                    class="size-7 bg-white rounded-lg border border-cream-300 shadow-2xs flex items-center justify-center text-xs font-bold text-gray-700 hover:bg-cream-50 hover:text-forest-900 transition cursor-pointer"
+                    title="Highlight Background Color"
+                >
+                    <span class="px-1 py-0.2 bg-amber-200 rounded text-[11px] font-bold text-gray-900">HL</span>
+                </button>
+
+                <div
+                    v-if="showHighlightMenu"
+                    class="absolute left-0 top-full mt-1 z-50 p-2.5 bg-white rounded-xl shadow-xl border border-cream-400 text-xs w-44 space-y-2 animate-in fade-in"
+                >
+                    <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Highlight Color</span>
+                    <div class="grid grid-cols-3 gap-1.5">
+                        <button
+                            type="button"
+                            @click="setHighlightColor('#fef08a')"
+                            class="h-6 rounded border border-amber-300 bg-yellow-200 hover:scale-105 transition"
+                            title="Yellow"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setHighlightColor('#dcfce7')"
+                            class="h-6 rounded border border-emerald-300 bg-emerald-100 hover:scale-105 transition"
+                            title="Green"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setHighlightColor('#dbeafe')"
+                            class="h-6 rounded border border-blue-300 bg-blue-100 hover:scale-105 transition"
+                            title="Blue"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setHighlightColor('#fef3c7')"
+                            class="h-6 rounded border border-amber-300 bg-amber-100 hover:scale-105 transition"
+                            title="Amber"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setHighlightColor('#fee2e2')"
+                            class="h-6 rounded border border-red-300 bg-red-100 hover:scale-105 transition"
+                            title="Red"
+                        ></button>
+                        <button
+                            type="button"
+                            @click="setHighlightColor('')"
+                            class="h-6 rounded border border-cream-300 bg-white hover:bg-cream-100 text-[10px] font-bold text-gray-600 flex items-center justify-center"
+                            title="None"
+                        >
+                            ✕
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Alignment Buttons -->
             <div class="inline-flex items-center space-x-0.5 bg-white rounded-lg p-0.5 border border-cream-300 shadow-2xs">
                 <button
@@ -386,7 +713,7 @@ onMounted(() => {
                 </button>
             </div>
 
-            <!-- Bullet & Number Lists (Exclusive to Text Only) -->
+            <!-- Bullet & Number Lists -->
             <div v-if="canBullets" class="inline-flex items-center space-x-0.5 bg-white rounded-lg p-0.5 border border-cream-300 shadow-2xs">
                 <button
                     type="button"
@@ -408,11 +735,11 @@ onMounted(() => {
                 </button>
             </div>
 
-            <!-- Draw Table (Exclusive to Text Only) -->
+            <!-- Draw Table -->
             <div v-if="canTables" class="relative inline-flex items-center">
                 <button
                     type="button"
-                    @click="showTableMenu = !showTableMenu"
+                    @click="showTableMenu = !showTableMenu; showSizeMenu = false; showColorMenu = false; showHighlightMenu = false; showFontMenu = false;"
                     class="h-7 px-2 bg-white rounded-lg border border-cream-300 shadow-2xs flex items-center space-x-1.5 text-xs font-bold text-gray-700 hover:bg-cream-50 hover:text-forest-900 transition cursor-pointer"
                     title="Draw / Insert Table"
                 >
@@ -572,25 +899,36 @@ onMounted(() => {
 
 <style>
 /* Scoped Table & Rich Text Styling inside the Editor Canvas */
+.form-rich-canvas table,
 .form-rich-canvas .form-rich-table {
     width: 100%;
     border-collapse: collapse;
     margin: 0.5rem 0;
     border: 1px solid #ddd0ab;
+    background-color: #ffffff;
 }
 
+.form-rich-canvas table th,
+.form-rich-canvas table td,
 .form-rich-canvas .form-rich-table th,
 .form-rich-canvas .form-rich-table td {
     border: 1px solid #ddd0ab;
     padding: 6px 8px;
     font-size: 0.75rem;
     min-width: 60px;
+    vertical-align: top;
 }
 
+.form-rich-canvas table th,
 .form-rich-canvas .form-rich-table th {
     background-color: #faf4df;
     font-weight: 700;
     color: #1b4332;
+    text-align: left;
+}
+
+.form-rich-canvas tr:nth-child(even) td {
+    background-color: #fdfbf7;
 }
 
 .form-rich-canvas ul {
@@ -607,5 +945,32 @@ onMounted(() => {
 
 .form-rich-canvas p {
     margin: 0.2rem 0;
+}
+
+.form-rich-canvas h1 {
+    font-size: 1.5rem;
+    font-weight: 800;
+    margin: 0.4rem 0 0.2rem 0;
+    color: #0f291e;
+}
+
+.form-rich-canvas h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin: 0.35rem 0 0.2rem 0;
+    color: #1b4332;
+}
+
+.form-rich-canvas h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin: 0.25rem 0 0.15rem 0;
+    color: #1b4332;
+}
+
+.form-rich-canvas mark {
+    background-color: #fef08a;
+    padding: 0.1em 0.25em;
+    border-radius: 0.2rem;
 }
 </style>

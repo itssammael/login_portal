@@ -2792,18 +2792,16 @@ const closeSamplePreviewModal = () => {
                                         Active Evaluation
                                     </span>
                                     <h1
-                                        class="text-2xl sm:text-3xl font-black tracking-tight"
+                                        class="text-2xl sm:text-3xl font-black tracking-tight form-rich-content"
                                         style="color: #ffffff;"
-                                    >
-                                        {{ previewEvent?.name || 'Evaluation Feedback Form' }}
-                                    </h1>
-                                    <p
-                                        v-if="previewEvent?.details"
-                                        class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium"
+                                        v-html="previewForm?.schema?.title || previewEvent?.name || 'Evaluation Feedback Form'"
+                                    ></h1>
+                                    <div
+                                        v-if="previewForm?.schema?.description || previewEvent?.details"
+                                        class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium form-rich-content"
                                         style="color: #dcfce7;"
-                                    >
-                                        {{ previewEvent.details }}
-                                    </p>
+                                        v-html="previewForm?.schema?.description || previewEvent?.details"
+                                    ></div>
                                 </div>
                             </div>
                         </div>
@@ -2813,14 +2811,12 @@ const closeSamplePreviewModal = () => {
                             <!-- Multi-Page Progress Indicator -->
                             <div v-if="isPreviewPaginated" class="border-b border-cream-400/50 pb-4 space-y-2">
                                 <div class="flex items-center justify-between text-xs font-bold text-forest-900">
-                                    <span>{{ previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}` }}</span>
+                                    <span class="form-rich-content" v-html="previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}`"></span>
                                     <span v-if="previewForm?.schema?.pagination?.show_section_numbers !== false">
                                         Section {{ previewCurrentPageIdx + 1 }} of {{ previewSectionPages.length }}
                                     </span>
                                 </div>
-                                <p v-if="previewCurrentPage?.section?.description" class="text-xs text-gray-600 whitespace-pre-line">
-                                    {{ previewCurrentPage.section.description }}
-                                </p>
+                                <div v-if="previewCurrentPage?.section?.description" class="text-xs text-gray-600 form-rich-content" v-html="previewCurrentPage.section.description"></div>
                                 <div v-if="previewForm?.schema?.pagination?.progress_bar !== false" class="h-2 w-full bg-cream-200 rounded-full overflow-hidden">
                                     <div
                                         class="h-full bg-forest-900 transition-all duration-300 rounded-full"
@@ -2830,10 +2826,10 @@ const closeSamplePreviewModal = () => {
                             </div>
                             <div v-else class="border-b border-cream-400/50 pb-3 flex items-center justify-between">
                                 <div>
-                                    <h3 class="text-base font-bold text-gray-900">
-                                        Feedback Questionnaire
+                                    <h3 class="text-base font-bold text-gray-900 form-rich-content" v-html="previewForm?.schema?.title || 'Feedback Questionnaire'">
                                     </h3>
-                                    <p class="text-xs text-gray-500 mt-0.5">Please provide your honest answers and ratings for each item below.</p>
+                                    <div v-if="previewForm?.schema?.description" class="text-xs text-gray-500 mt-0.5 form-rich-content" v-html="previewForm.schema.description"></div>
+                                    <p v-else class="text-xs text-gray-500 mt-0.5">Please provide your honest answers and ratings for each item below.</p>
                                 </div>
                                 <span class="text-xs font-bold text-forest-900 bg-lime-100 px-2.5 py-1 rounded-lg border border-lime-300">
                                     {{ previewFields.length }} Item{{ previewFields.length > 1 ? 's' : '' }}
@@ -2851,7 +2847,7 @@ const closeSamplePreviewModal = () => {
                                         class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
                                     >
                                         <div>
-                                            <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight" v-html="field.particular"></h3>
+                                            <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="field.particular"></h3>
                                             <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="field.description"></div>
                                         </div>
                                     </div>
@@ -2861,7 +2857,7 @@ const closeSamplePreviewModal = () => {
                                         v-else-if="field.type === 'text_only' && isPreviewFieldConditionMet(field)"
                                         class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-2"
                                     >
-                                        <h4 class="text-sm sm:text-base font-bold text-forest-950" v-html="field.particular"></h4>
+                                        <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="field.particular"></h4>
                                         <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="field.description"></div>
                                     </div>
 
@@ -2872,7 +2868,7 @@ const closeSamplePreviewModal = () => {
                                     >
                                     <div class="flex items-start justify-between gap-3">
                                         <div class="flex-1">
-                                            <label class="text-sm font-bold text-gray-900 block">
+                                            <label class="text-sm font-bold text-gray-900 block form-rich-content">
                                                 <span v-html="field.particular"></span>
                                                 <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
                                                 <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>
@@ -3109,18 +3105,16 @@ const closeSamplePreviewModal = () => {
                                         <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-yellow-300 text-forest-950 mb-2">
                                             Embedded Evaluation
                                         </span>
-                                        <h2 class="text-lg sm:text-xl font-black">
-                                            {{ previewEvent?.name }}
+                                        <h2 class="text-lg sm:text-xl font-black form-rich-content" v-html="previewForm?.schema?.title || previewEvent?.name">
                                         </h2>
-                                        <p v-if="previewEvent?.details" class="text-xs text-emerald-100 mt-1 line-clamp-2">
-                                            {{ previewEvent.details }}
-                                        </p>
+                                        <div v-if="previewForm?.schema?.description || previewEvent?.details" class="text-xs text-emerald-100 mt-1 line-clamp-2 form-rich-content" v-html="previewForm?.schema?.description || previewEvent?.details">
+                                        </div>
                                     </div>
 
                                     <!-- Multi-Page Progress Indicator -->
                                     <div v-if="isPreviewPaginated" class="border-b border-cream-400/50 pb-3 space-y-1.5">
                                         <div class="flex items-center justify-between text-xs font-bold text-forest-900">
-                                            <span>{{ previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}` }}</span>
+                                            <span class="form-rich-content" v-html="previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}`"></span>
                                             <span v-if="previewForm?.schema?.pagination?.show_section_numbers !== false">
                                                 Section {{ previewCurrentPageIdx + 1 }} of {{ previewSectionPages.length }}
                                             </span>
@@ -3144,7 +3138,7 @@ const closeSamplePreviewModal = () => {
                                                 v-if="field.type === 'section'"
                                                 class="pt-3 pb-1 border-b border-forest-900/15 first:pt-0"
                                             >
-                                                <h3 class="text-sm font-bold text-forest-950" v-html="field.particular"></h3>
+                                                <h3 class="text-sm font-bold text-forest-950 form-rich-content" v-html="field.particular"></h3>
                                                 <div v-if="field.description" class="text-xs text-gray-500 mt-0.5 form-rich-content" v-html="field.description"></div>
                                             </div>
 
@@ -3153,7 +3147,7 @@ const closeSamplePreviewModal = () => {
                                                 v-else-if="field.type === 'text_only' && isPreviewFieldConditionMet(field)"
                                                 class="p-3.5 bg-cream-100/80 rounded-xl border border-cream-400/80 space-y-1.5"
                                             >
-                                                <h4 class="text-xs font-bold text-forest-950" v-html="field.particular"></h4>
+                                                <h4 class="text-xs font-bold text-forest-950 form-rich-content" v-html="field.particular"></h4>
                                                 <div v-if="field.description" class="text-[11px] text-gray-700 form-rich-content overflow-x-auto" v-html="field.description"></div>
                                             </div>
 
@@ -3163,7 +3157,7 @@ const closeSamplePreviewModal = () => {
                                             >
                                             <div class="flex items-start justify-between gap-2">
                                                 <div class="flex-1">
-                                                    <label class="text-xs font-bold text-gray-900 block">
+                                                    <label class="text-xs font-bold text-gray-900 block form-rich-content">
                                                         <span v-html="field.particular"></span>
                                                         <span v-if="field.required" class="text-red-500 ml-0.5">*</span>
                                                     </label>

@@ -25,7 +25,7 @@ class SaveFeedbackFormRequest extends FormRequest
         return [
             'event_id' => ['required', 'integer', 'exists:fb_events,id'],
             'schema' => ['required', 'array'],
-            'schema.title' => ['nullable', 'string', 'max:2000'],
+            'schema.title' => ['nullable', 'string', 'max:65535'],
             'schema.description' => ['nullable', 'string', 'max:65535'],
             'schema.pagination' => ['nullable', 'array'],
             'schema.pagination.enabled' => ['nullable', 'boolean'],
@@ -33,7 +33,7 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.pagination.show_section_numbers' => ['nullable', 'boolean'],
             'schema.fields' => ['required', 'array', 'min:1'],
             'schema.fields.*.id' => ['required', 'string', 'max:100'],
-            'schema.fields.*.particular' => ['required', 'string', 'max:5000'],
+            'schema.fields.*.particular' => ['required', 'string', 'max:65535'],
             'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,date,radio,select,checkbox,section,text_only'],
             'schema.fields.*.weight' => ['required', 'integer', 'min:0'],
             'schema.fields.*.required' => ['nullable', 'boolean'],

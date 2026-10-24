@@ -982,9 +982,12 @@ onUnmounted(() => {
                             <div>
                                 <FormRichEditor
                                     v-model="formConfig.schema.description"
-                                    mode="basic"
+                                    mode="rich"
+                                    :allow-bullets="true"
+                                    :allow-tables="true"
+                                    :allow-font-styles="true"
                                     placeholder="Form description / instructions for respondents..."
-                                    min-height="60px"
+                                    min-height="80px"
                                     input-class="text-xs sm:text-sm text-gray-700 bg-cream-50/40"
                                 />
                             </div>
@@ -1098,6 +1101,7 @@ onUnmounted(() => {
                                                 @blur="onParticularBlur(field)"
                                                 mode="basic"
                                                 single-line
+                                                :allow-font-styles="true"
                                                 placeholder="Section Title"
                                                 input-class="text-base font-bold text-gray-900 bg-cream-50/40"
                                             />
@@ -1106,9 +1110,12 @@ onUnmounted(() => {
                                             <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Section Description</label>
                                             <FormRichEditor
                                                 v-model="field.description"
-                                                mode="basic"
+                                                mode="rich"
+                                                :allow-bullets="true"
+                                                :allow-tables="true"
+                                                :allow-font-styles="true"
                                                 placeholder="Section description or guidance (optional)"
-                                                min-height="65px"
+                                                min-height="75px"
                                                 input-class="text-xs text-gray-700 bg-cream-50/40"
                                             />
                                         </div>
@@ -1236,6 +1243,7 @@ onUnmounted(() => {
                                                 @blur="onParticularBlur(field)"
                                                 mode="basic"
                                                 single-line
+                                                :allow-font-styles="true"
                                                 :placeholder="field.type === 'text_only' ? 'Instructional Section Title / Heading' : 'Question'"
                                                 input-class="text-base font-semibold text-gray-900 bg-cream-50/60"
                                             />
@@ -1270,6 +1278,7 @@ onUnmounted(() => {
                                             mode="rich"
                                             :allow-bullets="true"
                                             :allow-tables="true"
+                                            :allow-font-styles="true"
                                             min-height="160px"
                                             placeholder="Instructional text or guidance for respondents (optional). Use toolbar above for bullets, text styles, or draw tables..."
                                             input-class="text-xs text-gray-700 bg-cream-50/40"
@@ -1281,9 +1290,12 @@ onUnmounted(() => {
                                         <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Description / Subtitle</span>
                                         <FormRichEditor
                                             v-model="field.description"
-                                            mode="basic"
-                                            placeholder="Description / subtitle (optional)"
-                                            min-height="60px"
+                                            mode="rich"
+                                            :allow-bullets="true"
+                                            :allow-tables="true"
+                                            :allow-font-styles="true"
+                                            placeholder="Description / subtitle or rubric table (optional)"
+                                            min-height="75px"
                                             input-class="text-xs text-gray-600"
                                         />
                                     </div>
@@ -1578,7 +1590,7 @@ onUnmounted(() => {
                                 <div v-else class="p-5 space-y-2">
                                     <div class="flex items-center justify-between">
                                         <div class="flex items-center space-x-2">
-                                            <span class="text-sm font-bold text-gray-900 inline-block" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>
+                                            <span class="text-sm font-bold text-gray-900 inline-block form-rich-content" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>
                                             <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5">*</span>
                                         </div>
                                         <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600">
@@ -1586,7 +1598,7 @@ onUnmounted(() => {
                                         </span>
                                     </div>
 
-                                    <div v-if="field.description" class="text-xs text-gray-500 line-clamp-3 overflow-hidden prose prose-xs max-w-none" v-html="field.description"></div>
+                                    <div v-if="field.description" class="text-xs text-gray-600 form-rich-content overflow-x-auto max-h-56 overflow-y-auto" v-html="field.description"></div>
                                     <p v-else-if="field.type === 'text_only'" class="text-xs text-gray-400 italic">
                                         Instructional text block (no answer required)
                                     </p>

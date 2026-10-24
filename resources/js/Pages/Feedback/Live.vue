@@ -638,12 +638,12 @@ onBeforeUnmount(() => {
                         <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-cream-200 text-forest-900 border border-cream-400/60">
                             Evaluation Questionnaire
                         </span>
-                        <h2 class="text-xl sm:text-2xl font-black text-forest-950 tracking-tight">
-                            {{ form.schema?.title || event.name }}
-                        </h2>
-                        <p v-if="form.schema?.description || event.details" class="text-xs sm:text-sm text-gray-600 leading-relaxed font-medium">
-                            {{ form.schema?.description || event.details }}
-                        </p>
+                        <h2 class="text-xl sm:text-2xl font-black text-forest-950 tracking-tight" v-html="form.schema?.title || event.name"></h2>
+                        <div
+                            v-if="form.schema?.description || event.details"
+                            class="text-xs sm:text-sm text-gray-700 leading-relaxed font-medium form-rich-content"
+                            v-html="form.schema?.description || event.details"
+                        ></div>
                     </div>
 
                     <!-- Pagination Step Indicator / Progress Bar -->
@@ -653,7 +653,7 @@ onBeforeUnmount(() => {
                                 <span class="size-5 rounded-full bg-forest-900 text-emerald-200 text-[10px] flex items-center justify-center font-bold">
                                     {{ currentPageIdx + 1 }}
                                 </span>
-                                <span>Section {{ currentPageIdx + 1 }} of {{ sectionPages.length }}: {{ currentPage?.section?.particular || 'Evaluation Questions' }}</span>
+                                <span>Section {{ currentPageIdx + 1 }} of {{ sectionPages.length }}: <span v-html="currentPage?.section?.particular || 'Evaluation Questions'"></span></span>
                             </span>
                             <span class="font-mono text-gray-500 text-[11px]">
                                 {{ Math.round(((currentPageIdx + 1) / sectionPages.length) * 100) }}%
@@ -678,7 +678,7 @@ onBeforeUnmount(() => {
                                 class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
                             >
                                 <div>
-                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight" v-html="field.particular"></h3>
+                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="field.particular"></h3>
                                     <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="field.description"></div>
                                 </div>
                             </div>
@@ -689,7 +689,7 @@ onBeforeUnmount(() => {
                                 :id="`field_container_${field.id}`"
                                 class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-2"
                             >
-                                <h4 class="text-sm sm:text-base font-bold text-forest-950" v-html="field.particular"></h4>
+                                <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="field.particular"></h4>
                                 <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="field.description"></div>
                             </div>
 
@@ -708,7 +708,7 @@ onBeforeUnmount(() => {
                             >
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="flex-1">
-                                        <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block">
+                                        <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block form-rich-content">
                                             <span v-html="field.particular"></span>
                                             <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
                                             <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>

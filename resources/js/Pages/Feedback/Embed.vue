@@ -562,16 +562,14 @@ const getOtherFieldError = (fieldId) => {
                     >
                         Feedback Form
                     </span>
-                    <h1 class="text-2xl sm:text-3xl font-black tracking-tight" style="color: #ffffff;">
-                        {{ event.name }}
+                    <h1 class="text-2xl sm:text-3xl font-black tracking-tight form-rich-content" style="color: #ffffff;" v-html="props.form?.schema?.title || event.name">
                     </h1>
-                    <p
-                        v-if="event.details"
-                        class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium"
+                    <div
+                        v-if="props.form?.schema?.description || event.details"
+                        class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium form-rich-content"
                         style="color: #dcfce7;"
-                    >
-                        {{ event.details }}
-                    </p>
+                        v-html="props.form?.schema?.description || event.details"
+                    ></div>
                 </div>
 
                 <!-- Schema Fields Container -->
@@ -579,14 +577,13 @@ const getOtherFieldError = (fieldId) => {
                     <!-- Multi-Page Progress Indicator -->
                     <div v-if="isPaginated" class="border-b border-cream-400/50 pb-4 space-y-2">
                         <div class="flex items-center justify-between text-xs font-bold text-forest-900">
-                            <span>{{ currentPage?.section?.particular || `Section ${currentPageIdx + 1}` }}</span>
+                            <span class="form-rich-content" v-html="currentPage?.section?.particular || `Section ${currentPageIdx + 1}`"></span>
                             <span v-if="props.form?.schema?.pagination?.show_section_numbers !== false">
                                 Section {{ currentPageIdx + 1 }} of {{ sectionPages.length }}
                             </span>
                         </div>
-                        <p v-if="currentPage?.section?.description" class="text-xs text-gray-600 whitespace-pre-line">
-                            {{ currentPage.section.description }}
-                        </p>
+                        <div v-if="currentPage?.section?.description" class="text-xs text-gray-600 form-rich-content" v-html="currentPage.section.description">
+                        </div>
                         <div v-if="props.form?.schema?.pagination?.progress_bar !== false" class="h-2 w-full bg-cream-200 rounded-full overflow-hidden">
                             <div
                                 class="h-full bg-forest-900 transition-all duration-300 rounded-full"
@@ -611,7 +608,7 @@ const getOtherFieldError = (fieldId) => {
                                 class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
                             >
                                 <div>
-                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight" v-html="field.particular"></h3>
+                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="field.particular"></h3>
                                     <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="field.description"></div>
                                 </div>
                             </div>
@@ -622,7 +619,7 @@ const getOtherFieldError = (fieldId) => {
                                 :id="`field_container_${field.id}`"
                                 class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-2"
                             >
-                                <h4 class="text-sm sm:text-base font-bold text-forest-950" v-html="field.particular"></h4>
+                                <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="field.particular"></h4>
                                 <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="field.description"></div>
                             </div>
 
@@ -641,7 +638,7 @@ const getOtherFieldError = (fieldId) => {
                             >
                             <div class="flex items-start justify-between gap-3">
                                 <div class="flex-1">
-                                    <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block">
+                                    <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block form-rich-content">
                                         <span v-html="field.particular"></span>
                                         <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
                                         <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>
