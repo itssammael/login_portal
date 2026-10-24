@@ -683,9 +683,7 @@ const getOptionDisplayLabel = (field, val) => {
                             class="p-4 bg-[#fffef9] rounded-2xl border border-cream-500/60 shadow-xs space-y-2"
                         >
                             <div class="flex items-start justify-between gap-2">
-                                <span class="text-xs font-bold text-gray-900 leading-snug">
-                                    {{ fIdx + 1 }}. {{ field.particular }}
-                                </span>
+                                <span class="text-xs font-bold text-gray-900 leading-snug" v-html="field.particular"></span>
                                 <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-lime-200 text-forest-900 shrink-0">
                                     {{ field.type }}
                                 </span>
@@ -694,9 +692,7 @@ const getOptionDisplayLabel = (field, val) => {
                             <!-- Value Display -->
                             <div class="pt-1">
                                 <!-- Text Only Instructional Section -->
-                                <div v-if="field.type === 'text_only'" class="text-xs text-gray-600 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-line italic">
-                                    {{ field.description || 'Instructional text block (no response required).' }}
-                                </div>
+                                <div v-if="field.type === 'text_only'" class="text-xs text-gray-700 bg-cream-100 p-3 rounded-xl border border-cream-400/40 form-rich-content overflow-x-auto" v-html="field.description || 'Instructional text block (no response required).'"></div>
 
                                 <!-- Text Type -->
                                 <div v-else-if="field.type === 'text'" class="text-xs text-gray-800 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-wrap">

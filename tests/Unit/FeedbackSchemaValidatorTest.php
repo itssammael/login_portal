@@ -4,7 +4,8 @@ namespace Tests\Unit;
 
 use App\Http\Requests\Admin\SaveFeedbackFormRequest;
 use App\Services\FeedbackSchemaValidator;
-use PHPUnit\Framework\TestCase;
+use Illuminate\Validation\ValidationException;
+use Tests\TestCase;
 
 class FeedbackSchemaValidatorTest extends TestCase
 {
@@ -56,7 +57,8 @@ class FeedbackSchemaValidatorTest extends TestCase
 
         $this->assertArrayHasKey('schema.fields.*.description_type', $rules);
         $this->assertSame(['nullable', 'string', 'in:text,textarea'], $rules['schema.fields.*.description_type']);
-        $this->assertSame(['nullable', 'string', 'max:2000'], $rules['schema.fields.*.description']);
+        $this->assertSame(['nullable', 'string', 'max:65535'], $rules['schema.fields.*.description']);
+        $this->assertSame(['required', 'string', 'max:5000'], $rules['schema.fields.*.particular']);
     }
 
     public function test_text_only_field_is_supported_and_not_required(): void
@@ -93,5 +95,51 @@ class FeedbackSchemaValidatorTest extends TestCase
         ]);
 
         $this->assertSame(['question_1' => 'My answer'], $submission);
+    }
+
+    public function test_schema_validator_preserves_rich_text_html_in_particular_and_description(): void
+    {
+        $validator = new FeedbackSchemaValidator;
+
+        $tableHtml = '<table class="form-rich-table"><thead><tr><th>Header 1</th></tr></thead><tbody><tr><td>Data 1</td></tr></tbody></table>';
+        $richParticular = '<span style="text-align: center"><b>Rate The Overall Experience</b></span>';
+        $richDescription = "<p>Observe <b>Critical Tasks</b>:</p><ul><li>Task 1</li><li>Task 2</li></ul>{$tableHtml}";
+
+        $normalized = $validator->validateSchema([
+            'fields' => [
+                [
+                    'id' => '',
+                    'particular' => $richParticular,
+                    'type' => 'text',
+                    'weight' => 1,
+                    'required' => true,
+                ],
+                [
+                    'id' => 'instruction_block',
+                    'particular' => 'Instructions',
+                    'type' => 'text_only',
+                    'weight' => 2,
+                    'description' => $richDescription,
+                ],
+            ],
+        ]);
+
+        // Id was derived by stripping html tags
+        $this->assertSame('rate_the_overall_experience', $normalized['fields'][0]['id']);
+        $this->assertSame($richParticular, $normalized['fields'][0]['particular']);
+        $this->assertSame($richDescription, $normalized['fields'][1]['description']);
+
+        // Test submission validation strips HTML in error messages
+        try {
+            $validator->validateSubmissionData($normalized, []);
+            $this->fail('Expected ValidationException was not thrown');
+        } catch (ValidationException $e) {
+            $errors = $e->errors();
+            $this->assertArrayHasKey('answers.rate_the_overall_experience', $errors);
+            $this->assertSame(
+                "The 'Rate The Overall Experience' field is required.",
+                $errors['answers.rate_the_overall_experience'][0]
+            );
+        }
     }
 }

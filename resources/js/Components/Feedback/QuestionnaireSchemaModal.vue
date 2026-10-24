@@ -2,6 +2,8 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { useForm, router } from '@inertiajs/vue3';
 import axios from 'axios';
+import FormRichEditor from '@/Components/Feedback/FormRichEditor.vue';
+import { stripHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
     show: {
@@ -110,7 +112,7 @@ const formConfig = useForm({
 
 // Helper to convert strings to clean snake_case
 const toSnakeCase = (str) => {
-    return String(str || '')
+    return String(stripHtml(str) || '')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '');
@@ -740,7 +742,7 @@ const saveSchema = () => {
         preserveScroll: true,
         onSuccess: () => {
             emit('saved');
-            emit('close');
+            // emit('close');
         },
         onError: () => {
             if (schemaErrorsList.value.length > 0) {
@@ -978,12 +980,13 @@ onUnmounted(() => {
 
                             <!-- Editable Form Description -->
                             <div>
-                                <textarea
+                                <FormRichEditor
                                     v-model="formConfig.schema.description"
-                                    rows="2"
+                                    mode="basic"
                                     placeholder="Form description / instructions for respondents..."
-                                    class="w-full text-xs sm:text-sm text-gray-600 border-b border-transparent hover:border-cream-300 focus:border-forest-900 focus:outline-none pb-1 placeholder-gray-400 transition resize-none"
-                                ></textarea>
+                                    min-height="60px"
+                                    input-class="text-xs sm:text-sm text-gray-700 bg-cream-50/40"
+                                />
                             </div>
 
                             <!-- Pagination Mode Toggle Box -->
@@ -1088,53 +1091,25 @@ onUnmounted(() => {
 
                                     <!-- Section Title & Description -->
                                     <div class="space-y-2.5">
-                                        <input
-                                            v-model="field.particular"
-                                            @blur="onParticularBlur(field)"
-                                            type="text"
-                                            placeholder="Section Title"
-                                            class="w-full text-lg font-bold text-gray-900 border-b border-cream-300 focus:border-indigo-600 focus:outline-none pb-1 placeholder-gray-400"
-                                        />
-                                        <div class="space-y-1.5">
-                                            <div class="flex items-center justify-between gap-2">
-                                                <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Description Format</span>
-                                                <div
-                                                    class="inline-flex items-center rounded-lg bg-cream-100 p-0.5 border border-cream-300/80 text-[11px] font-bold"
-                                                    @click.stop
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        @click="field.description_type = 'text'"
-                                                        class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
-                                                        :class="(!field.description_type || field.description_type === 'text') ? 'bg-white text-indigo-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
-                                                    >
-                                                        <span>📝</span>
-                                                        <span>Short answer</span>
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        @click="field.description_type = 'textarea'"
-                                                        class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
-                                                        :class="field.description_type === 'textarea' ? 'bg-white text-indigo-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
-                                                    >
-                                                        <span>📄</span>
-                                                        <span>Paragraph</span>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <textarea
-                                                v-if="field.description_type === 'textarea'"
+                                        <div>
+                                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Section Title</label>
+                                            <FormRichEditor
+                                                v-model="field.particular"
+                                                @blur="onParticularBlur(field)"
+                                                mode="basic"
+                                                single-line
+                                                placeholder="Section Title"
+                                                input-class="text-base font-bold text-gray-900 bg-cream-50/40"
+                                            />
+                                        </div>
+                                        <div class="space-y-1">
+                                            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Section Description</label>
+                                            <FormRichEditor
                                                 v-model="field.description"
-                                                rows="3"
-                                                placeholder="Description (optional)"
-                                                class="w-full text-xs text-gray-600 bg-cream-50/40 rounded-lg border border-cream-300 hover:border-cream-400 focus:border-indigo-600 focus:bg-white focus:outline-none p-2 placeholder-gray-400 transition resize-y"
-                                            ></textarea>
-                                            <input
-                                                v-else
-                                                v-model="field.description"
-                                                type="text"
-                                                placeholder="Description (optional)"
-                                                class="w-full text-xs text-gray-600 border-b border-transparent hover:border-cream-300 focus:border-indigo-600 focus:outline-none pb-1 placeholder-gray-400"
+                                                mode="basic"
+                                                placeholder="Section description or guidance (optional)"
+                                                min-height="65px"
+                                                input-class="text-xs text-gray-700 bg-cream-50/40"
                                             />
                                         </div>
                                     </div>
@@ -1256,12 +1231,13 @@ onUnmounted(() => {
                                     <!-- Top Row: Question Title & Question Type Selector -->
                                     <div class="flex items-start justify-between gap-3 flex-wrap sm:flex-nowrap">
                                         <div class="flex-1">
-                                            <input
+                                            <FormRichEditor
                                                 v-model="field.particular"
                                                 @blur="onParticularBlur(field)"
-                                                type="text"
+                                                mode="basic"
+                                                single-line
                                                 :placeholder="field.type === 'text_only' ? 'Instructional Section Title / Heading' : 'Question'"
-                                                class="w-full text-base font-semibold text-gray-900 bg-cream-50/60 border-b-2 border-cream-400 focus:border-forest-900 focus:bg-white rounded-t-lg px-3 py-2 focus:outline-none transition"
+                                                input-class="text-base font-semibold text-gray-900 bg-cream-50/60"
                                             />
                                         </div>
 
@@ -1287,54 +1263,28 @@ onUnmounted(() => {
                                     <!-- Text Only Section Instructional Body Editor -->
                                     <div v-if="field.type === 'text_only'" class="space-y-1.5">
                                         <div class="flex items-center justify-between gap-2">
-                                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Instructional Text Format</span>
-                                            <div
-                                                class="inline-flex items-center rounded-lg bg-cream-100 p-0.5 border border-cream-300/80 text-[11px] font-bold"
-                                                @click.stop
-                                            >
-                                                <button
-                                                    type="button"
-                                                    @click="field.description_type = 'text'"
-                                                    class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
-                                                    :class="field.description_type === 'text' ? 'bg-white text-forest-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
-                                                >
-                                                    <span>📝</span>
-                                                    <span>Short answer</span>
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    @click="field.description_type = 'textarea'"
-                                                    class="px-2 py-0.5 rounded-md transition cursor-pointer flex items-center space-x-1"
-                                                    :class="(!field.description_type || field.description_type === 'textarea') ? 'bg-white text-forest-900 shadow-2xs ring-1 ring-black/5' : 'text-gray-500 hover:text-gray-800'"
-                                                >
-                                                    <span>📄</span>
-                                                    <span>Paragraph</span>
-                                                </button>
-                                            </div>
+                                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Instructional Text & Content (Rich Formatting, Bullets, Draw Tables)</span>
                                         </div>
-                                        <input
-                                            v-if="field.description_type === 'text'"
+                                        <FormRichEditor
                                             v-model="field.description"
-                                            type="text"
-                                            placeholder="Instructional text or guidance (optional)"
-                                            class="w-full text-xs text-gray-600 border-b border-cream-300 focus:border-forest-900 focus:outline-none pb-1 placeholder-gray-400"
+                                            mode="rich"
+                                            :allow-bullets="true"
+                                            :allow-tables="true"
+                                            min-height="160px"
+                                            placeholder="Instructional text or guidance for respondents (optional). Use toolbar above for bullets, text styles, or draw tables..."
+                                            input-class="text-xs text-gray-700 bg-cream-50/40"
                                         />
-                                        <textarea
-                                            v-else
-                                            v-model="field.description"
-                                            rows="3"
-                                            placeholder="Instructional text or guidance for respondents (optional)"
-                                            class="w-full text-xs text-gray-600 bg-cream-50/40 rounded-lg border border-cream-300 hover:border-cream-400 focus:border-forest-900 focus:bg-white focus:outline-none p-2.5 placeholder-gray-400 transition resize-y"
-                                        ></textarea>
                                     </div>
 
                                     <!-- Question Description / Subtitle if toggled -->
-                                    <div v-else-if="field._show_description || field.description">
-                                        <input
+                                    <div v-else-if="field._show_description || field.description" class="space-y-1">
+                                        <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Description / Subtitle</span>
+                                        <FormRichEditor
                                             v-model="field.description"
-                                            type="text"
-                                            placeholder="Description / subtitle"
-                                            class="w-full text-xs text-gray-600 border-b border-cream-300 focus:border-forest-900 focus:outline-none pb-1"
+                                            mode="basic"
+                                            placeholder="Description / subtitle (optional)"
+                                            min-height="60px"
+                                            input-class="text-xs text-gray-600"
                                         />
                                     </div>
 
@@ -1628,19 +1578,15 @@ onUnmounted(() => {
                                 <div v-else class="p-5 space-y-2">
                                     <div class="flex items-center justify-between">
                                         <div class="flex items-center space-x-2">
-                                            <span class="text-sm font-bold text-gray-900">
-                                                {{ field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question') }}
-                                                <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5">*</span>
-                                            </span>
+                                            <span class="text-sm font-bold text-gray-900 inline-block" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>
+                                            <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5">*</span>
                                         </div>
                                         <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600">
                                             {{ field.type === 'text_only' ? 'text only' : field.type }}
                                         </span>
                                     </div>
 
-                                    <p v-if="field.description" class="text-xs text-gray-500 whitespace-pre-line">
-                                        {{ field.description }}
-                                    </p>
+                                    <div v-if="field.description" class="text-xs text-gray-500 line-clamp-3 overflow-hidden prose prose-xs max-w-none" v-html="field.description"></div>
                                     <p v-else-if="field.type === 'text_only'" class="text-xs text-gray-400 italic">
                                         Instructional text block (no answer required)
                                     </p>
