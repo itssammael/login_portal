@@ -8,9 +8,12 @@ use App\Models\ConversationParticipant;
 use App\Models\Message;
 use App\Models\MessageMention;
 use App\Models\MessageReaction;
+use App\Models\MessageRead;
+use App\Models\MessageUserDeletion;
 use App\Models\User;
 use App\Models\UserEncryptionKey;
 use App\Services\MessageEncryptionService;
+use Carbon\Carbon;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -80,7 +83,8 @@ class ChatController extends Controller
         $systemConvIds = $conversations->where('type', 'system')->pluck('id');
         $otherConvIds = $conversations->where('type', '!=', 'system')->pluck('id');
 
-        $latestMessageIdsQuery = Message::query()->whereIn('conversation_id', $conversationIds);
+        $latestMessageIdsQuery = Message::query()
+            ->whereIn('conversation_id', $conversationIds);
         if ($systemConvIds->isNotEmpty() && $otherConvIds->isNotEmpty()) {
             $latestMessageIdsQuery->where(function ($query) use ($systemConvIds, $otherConvIds, $currentUser): void {
                 $query->whereIn('conversation_id', $systemConvIds)
@@ -109,7 +113,10 @@ class ChatController extends Controller
 
         $latestMessages = Message::query()
             ->whereIn('id', $latestMessageIds)
-            ->with('sender:id,name')
+            ->with([
+                'sender:id,name',
+                'userDeletions' => fn ($q) => $q->where('user_id', $currentUser->id),
+            ])
             ->get()
             ->keyBy('conversation_id');
 
@@ -148,10 +155,17 @@ class ChatController extends Controller
 
                 $latestMessage = $latestMessages->get($conversation->id);
                 $latestMessageBody = null;
+                $isLatestDeletedForMe = false;
 
                 if ($latestMessage) {
+                    $isLatestDeletedForMe = $latestMessage->relationLoaded('userDeletions')
+                        ? $latestMessage->userDeletions->isNotEmpty()
+                        : $latestMessage->userDeletions()->where('user_id', $currentUser->id)->exists();
+
                     if ($latestMessage->is_deleted) {
                         $latestMessageBody = 'This message was deleted';
+                    } elseif ($isLatestDeletedForMe) {
+                        $latestMessageBody = 'User has deleted a message';
                     } elseif ($latestMessage->body !== null) {
                         $senderKey = $senderKeys->get($latestMessage->sender_id) ?? $latestMessage->sender?->getOrCreateEncryptionKey();
                         $latestMessageBody = $senderKey
@@ -198,6 +212,7 @@ class ChatController extends Controller
                         'sender_name' => $latestMessage->sender?->name ?? 'System',
                         'created_at' => $latestMessage->created_at->diffForHumans(),
                         'is_deleted' => $latestMessage->is_deleted,
+                        'is_deleted_for_me' => $isLatestDeletedForMe,
                     ] : null,
                     'unread_count' => $unreadCount,
                     'unread_mentions_count' => $unreadMentions,
@@ -242,6 +257,8 @@ class ChatController extends Controller
                     ->where('user_id', $currentUser->id)
                     ->update(['last_read_at' => now()]);
 
+                $this->recordMessageReads($convModel->id, $currentUser->id);
+
                 $otherUser = $convModel->type === 'direct'
                     ? $convModel->getOtherUser($currentUser->id)
                     : null;
@@ -258,8 +275,10 @@ class ChatController extends Controller
                     ->with([
                         'sender:id,name,email,profile_photo_path',
                         'replyTo.sender:id,name',
+                        'replyTo.userDeletions' => fn ($q) => $q->where('user_id', $currentUser->id),
                         'reactions.user:id,name',
                         'mentions',
+                        'userDeletions' => fn ($q) => $q->where('user_id', $currentUser->id),
                     ])
                     ->orderByDesc('id')
                     ->limit(51)
@@ -297,6 +316,7 @@ class ChatController extends Controller
                 })->values();
 
                 $sharedAttachments = $convModel->messages()
+                    ->visibleToUser($currentUser->id)
                     ->where('is_deleted', false)
                     ->whereNotNull('attachment_path')
                     ->orderByDesc('created_at')
@@ -423,7 +443,10 @@ class ChatController extends Controller
 
         $latestMessages = Message::query()
             ->whereIn('id', $latestMessageIds)
-            ->with('sender:id,name')
+            ->with([
+                'sender:id,name',
+                'userDeletions' => fn ($q) => $q->where('user_id', $currentUser->id),
+            ])
             ->get()
             ->keyBy('conversation_id');
 
@@ -460,10 +483,17 @@ class ChatController extends Controller
 
             $latestMessage = $latestMessages->get($conversation->id);
             $latestMessageBody = null;
+            $isLatestDeletedForMe = false;
 
             if ($latestMessage) {
+                $isLatestDeletedForMe = $latestMessage->relationLoaded('userDeletions')
+                    ? $latestMessage->userDeletions->isNotEmpty()
+                    : $latestMessage->userDeletions()->where('user_id', $currentUser->id)->exists();
+
                 if ($latestMessage->is_deleted) {
                     $latestMessageBody = 'This message was deleted';
+                } elseif ($isLatestDeletedForMe) {
+                    $latestMessageBody = 'User has deleted a message';
                 } elseif ($latestMessage->body !== null) {
                     $senderKey = $senderKeys->get($latestMessage->sender_id) ?? $latestMessage->sender?->getOrCreateEncryptionKey();
                     $latestMessageBody = $senderKey
@@ -508,6 +538,7 @@ class ChatController extends Controller
                     'sender_name' => $latestMessage->sender?->name ?? 'System',
                     'created_at' => $latestMessage->created_at->diffForHumans(),
                     'is_deleted' => $latestMessage->is_deleted,
+                    'is_deleted_for_me' => $isLatestDeletedForMe,
                 ] : null,
                 'unread_count' => $unreadCount,
                 'unread_mentions_count' => $unreadMentions,
@@ -556,8 +587,10 @@ class ChatController extends Controller
             ->with([
                 'sender:id,name,email,profile_photo_path',
                 'replyTo.sender:id,name',
+                'replyTo.userDeletions' => fn ($q) => $q->where('user_id', $currentUser->id),
                 'reactions.user:id,name',
                 'mentions',
+                'userDeletions' => fn ($q) => $q->where('user_id', $currentUser->id),
             ])
             ->orderByDesc('id')
             ->limit(51)
@@ -1235,6 +1268,10 @@ class ChatController extends Controller
             abort(400, 'Deleted messages cannot be edited.');
         }
 
+        if ($message->userDeletions()->where('user_id', $currentUser->id)->exists()) {
+            abort(403, 'Cannot edit a message deleted for you.');
+        }
+
         // 15-minute edit window
         if ($message->created_at->diffInMinutes(now()) > 15) {
             abort(403, 'Messages can only be edited within 15 minutes of sending.');
@@ -1342,6 +1379,7 @@ class ChatController extends Controller
         }
 
         $messages = $conversation->messages()
+            ->visibleToUser($currentUser->id)
             ->where('is_deleted', false)
             ->whereNotNull('body')
             ->with('sender:id,name')
@@ -1493,6 +1531,8 @@ class ChatController extends Controller
             ->where('user_id', $currentUser->id)
             ->update(['last_read_at' => now()]);
 
+        $this->recordMessageReads($conversation->id, $currentUser->id);
+
         broadcast(new MessageSent('Conversation read', $conversation->id, [
             'user_id' => $currentUser->id,
             'read_at' => now()->toISOString(),
@@ -1517,6 +1557,10 @@ class ChatController extends Controller
             abort(403);
         }
 
+        if ($message->userDeletions()->where('user_id', $currentUser->id)->exists()) {
+            abort(403, 'Cannot react to a message deleted for you.');
+        }
+
         $validated = $request->validate([
             'reaction' => ['required', 'string', 'in:like,love,laugh,wow,sad,fire'],
         ]);
@@ -1527,18 +1571,21 @@ class ChatController extends Controller
             ->where('user_id', $currentUser->id)
             ->first();
 
-        if ($existing) {
-            if ($existing->reaction === $reactionType) {
-                $existing->delete();
+        try {
+            if ($existing) {
+                if ($existing->reaction === $reactionType) {
+                    $existing->delete();
+                } else {
+                    $existing->update(['reaction' => $reactionType]);
+                }
             } else {
-                $existing->update(['reaction' => $reactionType]);
+                MessageReaction::firstOrCreate(
+                    ['message_id' => $message->id, 'user_id' => $currentUser->id],
+                    ['reaction' => $reactionType]
+                );
             }
-        } else {
-            MessageReaction::create([
-                'message_id' => $message->id,
-                'user_id' => $currentUser->id,
-                'reaction' => $reactionType,
-            ]);
+        } catch (UniqueConstraintViolationException) {
+            // Concurrent request already handled the reaction
         }
 
         $message->load('reactions.user:id,name');
@@ -1560,6 +1607,169 @@ class ChatController extends Controller
     }
 
     /**
+     * Get reaction details for a message.
+     */
+    public function messageReactions(Request $request, Message $message): JsonResponse
+    {
+        $currentUser = $request->user();
+
+        $isParticipant = $message->conversation->participants()
+            ->where('user_id', $currentUser->id)
+            ->exists();
+
+        if (! $isParticipant) {
+            abort(403, 'Unauthorized access to this conversation.');
+        }
+
+        // A member who deleted the message for themselves cannot view it
+        $isDeletedForUser = $message->userDeletions()
+            ->where('user_id', $currentUser->id)
+            ->exists();
+
+        if ($isDeletedForUser) {
+            abort(404, 'Message not found.');
+        }
+
+        $reactions = $message->reactions()
+            ->with('user:id,name,username,email,profile_photo_path')
+            ->orderBy('created_at', 'asc')
+            ->get()
+            ->map(fn (MessageReaction $r): array => [
+                'id' => $r->id,
+                'reaction' => $r->reaction,
+                'user' => [
+                    'id' => $r->user?->id,
+                    'name' => $r->user?->name ?? 'User',
+                    'username' => $r->user?->username,
+                    'profile_photo_url' => $r->user?->profile_photo_url,
+                ],
+                'created_at' => $r->created_at?->format('M j, g:i a'),
+                'created_at_relative' => $r->created_at?->diffForHumans(),
+            ]);
+
+        return response()->json([
+            'message_id' => $message->id,
+            'reactions' => $reactions,
+        ]);
+    }
+
+    /**
+     * Get seen-by details for a message.
+     */
+    public function messageSeenBy(Request $request, Message $message): JsonResponse
+    {
+        $currentUser = $request->user();
+
+        $isParticipant = $message->conversation->participants()
+            ->where('user_id', $currentUser->id)
+            ->exists();
+
+        if (! $isParticipant) {
+            abort(403, 'Unauthorized access to this conversation.');
+        }
+
+        // A member who deleted the message for themselves cannot view it
+        $isDeletedForUser = $message->userDeletions()
+            ->where('user_id', $currentUser->id)
+            ->exists();
+
+        if ($isDeletedForUser) {
+            abort(404, 'Message not found.');
+        }
+
+        // Fetch MessageRead records
+        $reads = MessageRead::where('message_id', $message->id)
+            ->where('user_id', '!=', $message->sender_id)
+            ->with('user:id,name,username,profile_photo_path')
+            ->get();
+
+        $readUserIds = $reads->pluck('user_id')->all();
+
+        // Also check conversation participants who have last_read_at >= message->created_at (backwards compatibility)
+        $historicalParticipants = $message->conversation->participants()
+            ->where('conversation_participants.user_id', '!=', $message->sender_id)
+            ->whereNotIn('conversation_participants.user_id', $readUserIds)
+            ->whereNotNull('conversation_participants.last_read_at')
+            ->where('conversation_participants.last_read_at', '>=', $message->created_at)
+            ->join('users', 'users.id', '=', 'conversation_participants.user_id')
+            ->select('users.id', 'users.name', 'users.username', 'users.profile_photo_path', 'conversation_participants.last_read_at')
+            ->get();
+
+        $historicalUsers = User::whereIn('id', $historicalParticipants->pluck('id'))->get()->keyBy('id');
+
+        $seenList = collect();
+
+        foreach ($reads as $read) {
+            if ($read->user) {
+                $seenAt = $read->read_at ?? $read->created_at;
+                $seenList->push([
+                    'user' => [
+                        'id' => $read->user->id,
+                        'name' => $read->user->name,
+                        'username' => $read->user->username,
+                        'profile_photo_url' => $read->user->profile_photo_url,
+                    ],
+                    'seen_at' => $seenAt?->format('M j, g:i a'),
+                    'seen_at_relative' => $seenAt?->diffForHumans(),
+                    'raw_seen_at' => $seenAt?->toISOString(),
+                ]);
+            }
+        }
+
+        foreach ($historicalParticipants as $hp) {
+            $lastRead = Carbon::parse($hp->last_read_at);
+            $userModel = $historicalUsers->get($hp->id);
+            $seenList->push([
+                'user' => [
+                    'id' => $hp->id,
+                    'name' => $hp->name,
+                    'username' => $hp->username,
+                    'profile_photo_url' => $userModel?->profile_photo_url,
+                ],
+                'seen_at' => $lastRead->format('M j, g:i a'),
+                'seen_at_relative' => $lastRead->diffForHumans(),
+                'raw_seen_at' => $lastRead->toISOString(),
+            ]);
+        }
+
+        $sortedSeenList = $seenList->sortByDesc('raw_seen_at')->values()->all();
+
+        return response()->json([
+            'message_id' => $message->id,
+            'seen_by' => $sortedSeenList,
+            'count' => count($sortedSeenList),
+        ]);
+    }
+
+    /**
+     * Delete a message for the authenticated user only.
+     */
+    public function deleteMessageForMe(Request $request, Message $message): RedirectResponse|JsonResponse
+    {
+        $currentUser = $request->user();
+
+        // Check if user is a participant in the conversation
+        $isParticipant = $message->conversation->participants()
+            ->where('user_id', $currentUser->id)
+            ->exists();
+
+        if (! $isParticipant) {
+            abort(403, 'Unauthorized to delete this message.');
+        }
+
+        MessageUserDeletion::firstOrCreate([
+            'message_id' => $message->id,
+            'user_id' => $currentUser->id,
+        ]);
+
+        if ($request->wantsJson()) {
+            return response()->json(['success' => true, 'message_id' => $message->id]);
+        }
+
+        return back()->with('success', 'Message deleted for you.');
+    }
+
+    /**
      * Soft delete a message.
      */
     public function deleteMessage(Request $request, Message $message): RedirectResponse
@@ -1572,6 +1782,10 @@ class ChatController extends Controller
 
         if ($message->sender_id !== $currentUser->id && ! $currentUser->isAdmin()) {
             abort(403, 'Unauthorized to delete this message.');
+        }
+
+        if ($message->userDeletions()->where('user_id', $currentUser->id)->exists()) {
+            abort(403, 'Cannot delete a message deleted for you.');
         }
 
         $attachmentDeleted = ! (bool) $message->attachment_path;
@@ -1611,30 +1825,73 @@ class ChatController extends Controller
     }
 
     /**
+     * Record message read receipts for unread messages in a conversation for a given user.
+     */
+    protected function recordMessageReads(int $conversationId, int $userId): void
+    {
+        $unreadMessageIds = Message::where('conversation_id', $conversationId)
+            ->where('sender_id', '!=', $userId)
+            ->whereDoesntHave('reads', function ($q) use ($userId): void {
+                $q->where('user_id', $userId);
+            })
+            ->pluck('id');
+
+        if ($unreadMessageIds->isNotEmpty()) {
+            $now = now();
+            $records = $unreadMessageIds->map(fn ($msgId) => [
+                'message_id' => $msgId,
+                'user_id' => $userId,
+                'read_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ])->all();
+
+            MessageRead::insertOrIgnore($records);
+        }
+    }
+
+    /**
      * Format a message model into an array with decrypted body and metadata.
      *
      * @return array<string, mixed>
      */
     private function formatMessage(Message $message, User $currentUser, ?string $senderKey = null, ?\DateTimeInterface $otherUserLastReadAt = null): array
     {
-        $senderKey = $senderKey ?? $message->sender?->getOrCreateEncryptionKey();
-        $decryptedBody = (! $message->is_deleted && $message->body !== null && $senderKey)
-            ? MessageEncryptionService::decrypt($message->body, $senderKey)
-            : ($message->is_deleted ? 'This message was deleted' : $message->body);
+        $isDeletedForMe = $message->relationLoaded('userDeletions')
+            ? $message->userDeletions->isNotEmpty()
+            : $message->userDeletions()->where('user_id', $currentUser->id)->exists();
+
+        if ($isDeletedForMe) {
+            $decryptedBody = 'User has deleted a message';
+        } else {
+            $senderKey = $senderKey ?? $message->sender?->getOrCreateEncryptionKey();
+            $decryptedBody = (! $message->is_deleted && $message->body !== null && $senderKey)
+                ? MessageEncryptionService::decrypt($message->body, $senderKey)
+                : ($message->is_deleted ? 'This message was deleted' : $message->body);
+        }
 
         $replyTo = null;
-        if ($message->replyTo) {
-            $replySenderKey = $message->replyTo->sender?->getOrCreateEncryptionKey();
-            $replyBody = (! $message->replyTo->is_deleted && $message->replyTo->body !== null && $replySenderKey)
-                ? MessageEncryptionService::decrypt($message->replyTo->body, $replySenderKey)
-                : ($message->replyTo->is_deleted ? 'This message was deleted' : ($message->replyTo->attachment_name ? '📎 Attachment' : ''));
+        if (! $isDeletedForMe && $message->replyTo) {
+            $replyIsDeletedForMe = $message->replyTo->relationLoaded('userDeletions')
+                ? $message->replyTo->userDeletions->isNotEmpty()
+                : $message->replyTo->userDeletions()->where('user_id', $currentUser->id)->exists();
+
+            if ($replyIsDeletedForMe) {
+                $replyBody = 'User has deleted a message';
+            } else {
+                $replySenderKey = $message->replyTo->sender?->getOrCreateEncryptionKey();
+                $replyBody = (! $message->replyTo->is_deleted && $message->replyTo->body !== null && $replySenderKey)
+                    ? MessageEncryptionService::decrypt($message->replyTo->body, $replySenderKey)
+                    : ($message->replyTo->is_deleted ? 'This message was deleted' : ($message->replyTo->attachment_name ? '📎 Attachment' : ''));
+            }
 
             $replyTo = [
                 'id' => $message->replyTo->id,
                 'sender_id' => $message->replyTo->sender_id,
                 'sender_name' => $message->replyTo->sender?->name ?? 'User',
                 'body' => $replyBody,
-                'is_deleted' => (bool) $message->replyTo->is_deleted,
+                'is_deleted' => (bool) ($message->replyTo->is_deleted || $replyIsDeletedForMe),
+                'is_deleted_for_me' => (bool) $replyIsDeletedForMe,
             ];
         }
 
@@ -1647,7 +1904,7 @@ class ChatController extends Controller
             'id' => $message->id,
             'conversation_id' => $message->conversation_id,
             'sender_id' => $message->sender_id,
-            'reply_to_id' => $message->reply_to_id,
+            'reply_to_id' => $isDeletedForMe ? null : $message->reply_to_id,
             'reply_to' => $replyTo,
             'sender' => [
                 'id' => $message->sender?->id ?? $message->sender_id,
@@ -1657,19 +1914,20 @@ class ChatController extends Controller
             ],
             'body' => $decryptedBody,
             'type' => $message->type,
-            'attachment_url' => $message->is_deleted ? null : $message->attachment_url,
-            'attachment_name' => $message->is_deleted ? null : $message->attachment_name,
-            'attachment_type' => $message->is_deleted ? null : $message->attachment_type,
+            'attachment_url' => ($message->is_deleted || $isDeletedForMe) ? null : $message->attachment_url,
+            'attachment_name' => ($message->is_deleted || $isDeletedForMe) ? null : $message->attachment_name,
+            'attachment_type' => ($message->is_deleted || $isDeletedForMe) ? null : $message->attachment_type,
             'status' => $isSeen ? Message::STATUS_READ : ($message->status ?? Message::STATUS_SENT),
             'is_seen' => $isSeen,
-            'is_edited' => (bool) $message->edited_at,
-            'edited_at' => $message->edited_at?->diffForHumans(),
+            'is_edited' => $isDeletedForMe ? false : (bool) $message->edited_at,
+            'edited_at' => $isDeletedForMe ? null : $message->edited_at?->diffForHumans(),
             'is_deleted' => (bool) $message->is_deleted,
+            'is_deleted_for_me' => (bool) $isDeletedForMe,
             'is_sender' => $message->sender_id === $currentUser->id,
             'created_at' => $message->created_at->format('M j, g:i a'),
             'created_at_relative' => $message->created_at->diffForHumans(),
             'raw_created_at' => $message->created_at->toISOString(),
-            'reactions' => $message->reactions->groupBy('reaction')->map(function ($group, $reaction) use ($currentUser) {
+            'reactions' => $isDeletedForMe ? [] : $message->reactions->groupBy('reaction')->map(function ($group, $reaction) use ($currentUser) {
                 return [
                     'reaction' => $reaction,
                     'count' => $group->count(),
@@ -1678,9 +1936,9 @@ class ChatController extends Controller
                     'user_ids' => $group->pluck('user_id')->map(fn ($id) => (int) $id)->values()->all(),
                 ];
             })->values()->all(),
-            'mentioned_user_ids' => $message->relationLoaded('mentions')
+            'mentioned_user_ids' => $isDeletedForMe ? [] : ($message->relationLoaded('mentions')
                 ? $message->mentions->pluck('user_id')->map(fn ($id) => (int) $id)->values()->all()
-                : MessageMention::where('message_id', $message->id)->pluck('user_id')->map(fn ($id) => (int) $id)->values()->all(),
+                : MessageMention::where('message_id', $message->id)->pluck('user_id')->map(fn ($id) => (int) $id)->values()->all()),
         ];
     }
 
@@ -1773,6 +2031,10 @@ class ChatController extends Controller
 
         if (! $isParticipant) {
             abort(403, 'Unauthorized access to this conversation attachment.');
+        }
+
+        if ($message->userDeletions()->where('user_id', $currentUser->id)->exists()) {
+            abort(404, 'Attachment not found.');
         }
 
         $disk = Storage::disk('local')->exists($message->attachment_path)

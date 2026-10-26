@@ -756,8 +756,20 @@ const isWithin15Minutes = (rawDate) => {
 const canEditMessage = (message) => {
     return message.is_sender &&
         !message.is_deleted &&
+        !message.is_deleted_for_me &&
         message.type === 'text' &&
         isWithin15Minutes(message.raw_created_at || message.created_at);
+};
+
+const toggleMessageMenu = (message) => {
+    if (!message || message.is_deleted || message.is_deleted_for_me || message.status === 'sending' || message.status === 'failed') {
+        return;
+    }
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+        return;
+    }
+    activeMessageMenuId.value = activeMessageMenuId.value === message.id ? null : message.id;
 };
 
 const startEditMessage = (message) => {
@@ -1013,7 +1025,7 @@ const toggleReaction = (messageId, reactionKey) => {
     });
 };
 
-// Delete message state & actions
+// Delete message (for everyone) state & actions
 const deletingMessageId = ref(null);
 
 const promptDeleteMessage = (messageId) => {
@@ -1036,6 +1048,135 @@ const confirmDeleteMessage = () => {
         preserveScroll: true,
         onFinish: () => closeDeleteModal(),
     });
+};
+
+// Delete message for me state & actions
+const deletingForMeMessageId = ref(null);
+const isDeletingForMe = ref(false);
+
+const promptDeleteForMe = (messageId) => {
+    deletingForMeMessageId.value = messageId;
+    activeMessageMenuId.value = null;
+};
+
+const closeDeleteForMeModal = () => {
+    deletingForMeMessageId.value = null;
+    isDeletingForMe.value = false;
+};
+
+const confirmDeleteForMe = () => {
+    if (!deletingForMeMessageId.value) return;
+    const msgId = deletingForMeMessageId.value;
+
+    if (typeof msgId === 'string' && msgId.startsWith('pending-')) {
+        removePendingMessage(msgId);
+        closeDeleteForMeModal();
+        return;
+    }
+
+    isDeletingForMe.value = true;
+    router.post(route('chat.delete-message-for-me', msgId), {}, {
+        preserveScroll: true,
+        onSuccess: () => {
+            const targetMsg = activeMessages.value.find(m => m.id === msgId);
+            if (targetMsg) {
+                targetMsg.body = 'User has deleted a message';
+                targetMsg.is_deleted_for_me = true;
+                targetMsg.attachment_url = null;
+                targetMsg.attachment_name = null;
+                targetMsg.attachment_type = null;
+                targetMsg.reply_to = null;
+                targetMsg.reply_to_id = null;
+                targetMsg.reactions = [];
+                targetMsg.mentioned_user_ids = [];
+                targetMsg.is_edited = false;
+                targetMsg.edited_at = null;
+            }
+            const conv = conversationsList.value.find(c => c.id === props.activeConversation?.id);
+            if (conv && conv.latest_message && conv.latest_message.id === msgId) {
+                conv.latest_message.body = 'User has deleted a message';
+                conv.latest_message.is_deleted_for_me = true;
+            }
+            closeDeleteForMeModal();
+        },
+        onError: () => {
+            closeDeleteForMeModal();
+        },
+        onFinish: () => {
+            isDeletingForMe.value = false;
+        },
+    });
+};
+
+// Reaction details modal state & actions
+const reactionDetailsMessage = ref(null);
+const reactionDetailsList = ref([]);
+const isLoadingReactionDetails = ref(false);
+const activeReactionFilter = ref('all');
+
+const uniqueReactionTypes = computed(() => {
+    const types = new Set();
+    reactionDetailsList.value.forEach(r => {
+        if (r.reaction) types.add(r.reaction);
+    });
+    return Array.from(types);
+});
+
+const filteredReactionDetailsList = computed(() => {
+    if (activeReactionFilter.value === 'all') {
+        return reactionDetailsList.value;
+    }
+    return reactionDetailsList.value.filter(r => r.reaction === activeReactionFilter.value);
+});
+
+const openReactionDetails = async (message) => {
+    reactionDetailsMessage.value = message;
+    activeMessageMenuId.value = null;
+    isLoadingReactionDetails.value = true;
+    activeReactionFilter.value = 'all';
+    reactionDetailsList.value = [];
+
+    try {
+        const response = await axios.get(route('chat.message-reactions', message.id));
+        reactionDetailsList.value = response.data?.reactions || [];
+    } catch (e) {
+        console.error('Failed to load reaction details', e);
+    } finally {
+        isLoadingReactionDetails.value = false;
+    }
+};
+
+const closeReactionDetailsModal = () => {
+    reactionDetailsMessage.value = null;
+    reactionDetailsList.value = [];
+    isLoadingReactionDetails.value = false;
+};
+
+// Seen-by details modal state & actions
+const seenByDetailsMessage = ref(null);
+const seenByList = ref([]);
+const isLoadingSeenBy = ref(false);
+
+const openSeenByDetails = async (message) => {
+    seenByDetailsMessage.value = message;
+    activeMessageMenuId.value = null;
+    isLoadingSeenBy.value = true;
+    seenByList.value = [];
+
+    try {
+        const response = await axios.get(route('chat.message-seen-by', message.id));
+        seenByList.value = response.data?.seen_by || [];
+    } catch (e) {
+        console.error('Failed to load seen-by details', e);
+    } finally {
+        isLoadingSeenBy.value = false;
+    }
+};
+
+const closeSeenByDetailsModal = () => {
+    seenByDetailsMessage.value = null;
+    seenByList.value = [];
+    isLoadingSeenBy.value = false;
 };
 
 // Group Admin Management State & Actions
@@ -1309,7 +1450,7 @@ const handleUserChannelEvent = (e) => {
         }
     } else if (e.action === 'edited') {
         const conv = conversationsList.value.find(c => c.id === e.conversation_id);
-        if (conv && conv.latest_message?.id === e.data?.message_id) {
+        if (conv && conv.latest_message?.id === e.data?.message_id && !conv.latest_message.is_deleted_for_me) {
             conv.latest_message.body = e.data?.body ?? conv.latest_message.body;
         }
         if (conv && props.activeConversation?.id !== e.conversation_id) {
@@ -1396,7 +1537,7 @@ const handleConversationChannelEvent = (e) => {
     } else if (e.action === 'edited') {
         const messageId = e.data?.message_id;
         const targetMsg = activeMessages.value.find(m => m.id === messageId);
-        if (targetMsg) {
+        if (targetMsg && !targetMsg.is_deleted_for_me) {
             targetMsg.body = e.data?.body ?? targetMsg.body;
             targetMsg.is_edited = true;
             targetMsg.edited_at = e.data?.edited_at_relative ?? 'just now';
@@ -1435,7 +1576,7 @@ const handleConversationChannelEvent = (e) => {
         const reactions = e.data?.reactions;
         if (messageId && Array.isArray(reactions)) {
             const targetMsg = activeMessages.value.find(m => m.id === messageId);
-            if (targetMsg) {
+            if (targetMsg && !targetMsg.is_deleted_for_me) {
                 targetMsg.reactions = reactions.map(r => ({
                     ...r,
                     reacted_by_me: r.user_ids ? r.user_ids.includes(currentUser.value.id) : false,
@@ -1574,24 +1715,27 @@ const closeActiveConversation = () => {
 // Close open menus and modals on Escape, or close active conversation
 const handleGlobalKeydown = (e) => {
     if (e.key === 'Escape') {
+        if (
+            deletingMessageId.value !== null ||
+            deletingForMeMessageId.value !== null ||
+            reactionDetailsMessage.value !== null ||
+            seenByDetailsMessage.value !== null ||
+            memberToRemove.value !== null ||
+            memberToPromote.value !== null ||
+            showDeleteGroupModal.value ||
+            showRenameGroupModal.value ||
+            showAddMembersModal.value ||
+            (showMentionDropdown.value && filteredMentionMembers.value.length > 0)
+        ) {
+            return;
+        }
+
         if (lightboxImage.value) {
             closeLightbox();
             return;
         }
         if (showNewChatModal.value) {
             showNewChatModal.value = false;
-            return;
-        }
-        if (showRenameGroupModal.value) {
-            showRenameGroupModal.value = false;
-            return;
-        }
-        if (showAddMembersModal.value) {
-            showAddMembersModal.value = false;
-            return;
-        }
-        if (showDeleteGroupModal.value) {
-            showDeleteGroupModal.value = false;
             return;
         }
         if (activeMessageMenuId.value !== null || activeConversationMenuId.value !== null) {
@@ -1619,18 +1763,6 @@ const handleGlobalKeydown = (e) => {
             showInfoPanel.value = false;
             return;
         }
-        if (deletingMessageId.value !== null) {
-            closeDeleteModal();
-            return;
-        }
-        if (memberToRemove.value !== null) {
-            memberToRemove.value = null;
-            return;
-        }
-        if (memberToPromote.value !== null) {
-            memberToPromote.value = null;
-            return;
-        }
 
         if (props.activeConversation) {
             closeActiveConversation();
@@ -1651,6 +1783,19 @@ const handleWindowFocus = () => {
     }
 };
 
+const handleGlobalClick = (e) => {
+    if (activeMessageMenuId.value !== null) {
+        if (!e.target.closest('[data-message-menu]')) {
+            activeMessageMenuId.value = null;
+        }
+    }
+    if (activeConversationMenuId.value !== null) {
+        if (!e.target.closest('[data-conversation-menu]')) {
+            activeConversationMenuId.value = null;
+        }
+    }
+};
+
 onMounted(() => {
     scrollToBottom(false);
     setupEchoListeners();
@@ -1664,19 +1809,21 @@ onMounted(() => {
         resizeComposer();
         focusComposer();
     });
-    window.addEventListener('keydown', handleGlobalKeydown);
+    window.addEventListener('keydown', handleGlobalKeydown, true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('focus', handleWindowFocus);
     document.addEventListener('visibilitychange', handleWindowFocus);
+    document.addEventListener('click', handleGlobalClick);
 });
 
 onBeforeUnmount(() => {
-    window.removeEventListener('keydown', handleGlobalKeydown);
+    window.removeEventListener('keydown', handleGlobalKeydown, true);
     window.removeEventListener('online', handleOnline);
     window.removeEventListener('offline', handleOffline);
     window.removeEventListener('focus', handleWindowFocus);
     document.removeEventListener('visibilitychange', handleWindowFocus);
+    document.removeEventListener('click', handleGlobalClick);
     if (window.Echo) {
         if (currentUser.value.id) {
             window.Echo.private(`App.Models.User.${currentUser.value.id}`)
@@ -1895,6 +2042,7 @@ onBeforeUnmount(() => {
                                     <div
                                         class="absolute right-2 top-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-within:opacity-100 transition z-10"
                                         :class="{ '!opacity-100': activeConversationMenuId === conv.id }"
+                                        data-conversation-menu
                                     >
                                         <button
                                             type="button"
@@ -2228,13 +2376,15 @@ onBeforeUnmount(() => {
                                                     
                                                     <!-- Actions Menu Toggle (Left of sender's bubble) -->
                                                     <div
-                                                        v-if="message.is_sender && !message.is_deleted && message.status !== 'sending' && message.status !== 'failed'"
+                                                        v-if="message.is_sender && !message.is_deleted && !message.is_deleted_for_me && message.status !== 'sending' && message.status !== 'failed'"
                                                         class="relative shrink-0 z-10"
+                                                        data-message-menu
                                                     >
                                                         <button
                                                             type="button"
                                                             @click.stop="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
-                                                            class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                                                            class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition"
+                                                            :class="activeMessageMenuId === message.id ? 'bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
                                                         >
                                                             <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -2245,7 +2395,7 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Sender -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute right-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-36 z-30 text-xs"
+                                                            class="absolute right-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-30 text-xs"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
@@ -2283,11 +2433,26 @@ onBeforeUnmount(() => {
                                                                 <span>📋 Copy text</span>
                                                             </button>
                                                             <button
+                                                                v-if="activeConversation?.type === 'group'"
+                                                                type="button"
+                                                                @click="openSeenByDetails(message)"
+                                                                class="w-full text-left px-3 py-1 hover:bg-cream-300 text-gray-800 flex items-center space-x-1.5"
+                                                            >
+                                                                <span>👁 Seen by</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                @click="promptDeleteForMe(message.id)"
+                                                                class="w-full text-left px-3 py-1 hover:bg-red-50 text-red-600 flex items-center space-x-1.5 border-t border-cream-300/60 mt-0.5 pt-1"
+                                                            >
+                                                                <span>🗑 Delete for me</span>
+                                                            </button>
+                                                            <button
                                                                 type="button"
                                                                 @click="promptDeleteMessage(message.id)"
-                                                                class="w-full text-left px-3 py-1 hover:bg-red-100 text-red-600 flex items-center space-x-1.5"
+                                                                class="w-full text-left px-3 py-1 hover:bg-red-100 text-red-700 flex items-center space-x-1.5 font-medium"
                                                             >
-                                                                <span>🗑 Delete</span>
+                                                                <span>🗑 Delete for everyone</span>
                                                             </button>
                                                         </div>
                                                     </div>
@@ -2296,7 +2461,7 @@ onBeforeUnmount(() => {
                                                     <div class="flex flex-col min-w-0 max-w-full" :class="message.is_sender ? 'items-end' : 'items-start'">
                                                         <!-- Quoted Reply Box (if message is a reply) -->
                                                         <div
-                                                            v-if="message.reply_to"
+                                                            v-if="message.reply_to && !message.is_deleted_for_me"
                                                             @click="scrollToMessage(message.reply_to.id)"
                                                             class="mb-1 px-3 py-1.5 rounded-lg text-xs border border-cream-500/40 bg-cream-100/90 hover:bg-cream-200/90 transition cursor-pointer max-w-full shadow-2xs break-words"
                                                             :class="message.is_sender ? 'border-r-4 border-r-golden-600' : 'border-l-4 border-l-forest-600'"
@@ -2316,16 +2481,18 @@ onBeforeUnmount(() => {
                                                                 message.is_sender
                                                                     ? 'bg-golden-500 text-gray-950 font-medium rounded-2xl rounded-tr-xs border border-golden-600/30'
                                                                     : 'bg-golden-400 text-gray-900 font-medium rounded-2xl rounded-tl-xs border border-golden-500/30',
-                                                                message.is_deleted ? 'italic opacity-60 text-xs' : '',
+                                                                (message.is_deleted || message.is_deleted_for_me) ? 'italic opacity-60 text-xs' : 'cursor-pointer select-text',
                                                                 message.status === 'sending' ? 'opacity-90' : '',
                                                                 message.status === 'failed' ? 'border-red-400 bg-amber-100' : ''
                                                             ]"
+                                                            data-message-menu
+                                                            @click.stop="toggleMessageMenu(message)"
                                                         >
                                                             <!-- Image Attachment with Inline Lightbox trigger -->
-                                                            <div v-if="message.attachment_url && message.type === 'image'" class="mb-2 overflow-hidden rounded-xl">
+                                                            <div v-if="!message.is_deleted_for_me && message.attachment_url && message.type === 'image'" class="mb-2 overflow-hidden rounded-xl">
                                                                 <button
                                                                     type="button"
-                                                                    @click="openLightbox(message.attachment_url, message.attachment_name || 'Photo')"
+                                                                    @click.stop="openLightbox(message.attachment_url, message.attachment_name || 'Photo')"
                                                                     class="block cursor-pointer focus:outline-hidden"
                                                                     aria-label="View photo in lightbox"
                                                                 >
@@ -2338,11 +2505,12 @@ onBeforeUnmount(() => {
                                                             </div>
 
                                                             <!-- Document / File Attachment -->
-                                                            <div v-else-if="(message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1">
+                                                            <div v-else-if="!message.is_deleted_for_me && (message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1">
                                                                 <a
                                                                     :href="message.attachment_url || '#'"
                                                                     :target="message.attachment_url ? '_blank' : '_self'"
                                                                     :download="!!message.attachment_url"
+                                                                    @click.stop
                                                                     class="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold shadow-xs"
                                                                     :class="message.is_sender ? 'bg-golden-600/20 text-gray-950 hover:bg-golden-600/30' : 'bg-golden-500/80 text-gray-950 hover:bg-golden-500'"
                                                                 >
@@ -2361,7 +2529,7 @@ onBeforeUnmount(() => {
 
                                                         <!-- Reaction Badges Attached Below Bubble -->
                                                         <div 
-                                                            v-if="message.reactions && message.reactions.length > 0"
+                                                            v-if="!message.is_deleted_for_me && message.reactions && message.reactions.length > 0"
                                                             class="flex flex-wrap gap-1 mt-1"
                                                             :class="message.is_sender ? 'justify-end' : 'justify-start'"
                                                         >
@@ -2369,10 +2537,11 @@ onBeforeUnmount(() => {
                                                                 v-for="reaction in message.reactions"
                                                                 :key="reaction.reaction"
                                                                 type="button"
-                                                                @click="toggleReaction(message.id, reaction.reaction)"
+                                                                @click="activeConversation?.type === 'group' ? openReactionDetails(message) : toggleReaction(message.id, reaction.reaction)"
                                                                 class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium border shadow-xs transition cursor-pointer"
                                                                 :class="reaction.reacted_by_me ? 'bg-cream-100 border-forest-600 text-forest-900 font-bold' : 'bg-cream-200 border-cream-500/50 text-gray-700'"
                                                                 :aria-label="`Reacted ${reaction.count} times with ${reaction.reaction}`"
+                                                                :title="activeConversation?.type === 'group' ? 'Click to view who reacted' : (reactionMap[reaction.reaction] || reaction.reaction)"
                                                             >
                                                                 <span>{{ reactionMap[reaction.reaction] || reaction.reaction }}</span>
                                                                 <span v-if="reaction.count > 1" class="text-[10px] font-bold">{{ reaction.count }}</span>
@@ -2382,13 +2551,15 @@ onBeforeUnmount(() => {
 
                                                     <!-- Actions Menu Toggle (Right of receiver's bubble) -->
                                                     <div
-                                                        v-if="!message.is_sender && !message.is_deleted"
+                                                        v-if="!message.is_sender && !message.is_deleted && !message.is_deleted_for_me"
                                                         class="relative shrink-0 z-10"
+                                                        data-message-menu
                                                     >
                                                         <button
                                                             type="button"
                                                             @click.stop="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
                                                             class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                                                            :class="activeMessageMenuId === message.id ? 'opacity-100 bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
                                                         >
                                                             <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -2399,7 +2570,7 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Receiver -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute left-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-36 z-30 text-xs"
+                                                            class="absolute left-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-30 text-xs"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
@@ -2428,6 +2599,21 @@ onBeforeUnmount(() => {
                                                             >
                                                                 <span>📋 Copy text</span>
                                                             </button>
+                                                            <button
+                                                                v-if="activeConversation?.type === 'group'"
+                                                                type="button"
+                                                                @click="openSeenByDetails(message)"
+                                                                class="w-full text-left px-3 py-1 hover:bg-cream-300 text-gray-800 flex items-center space-x-1.5"
+                                                            >
+                                                                <span>👁 Seen by</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                @click="promptDeleteForMe(message.id)"
+                                                                class="w-full text-left px-3 py-1 hover:bg-red-50 text-red-600 flex items-center space-x-1.5 border-t border-cream-300/60 mt-0.5 pt-1"
+                                                            >
+                                                                <span>🗑 Delete for me</span>
+                                                            </button>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2439,7 +2625,7 @@ onBeforeUnmount(() => {
                                                 >
                                                     <span>{{ message.created_at }}</span>
                                                     <!-- Edited indicator -->
-                                                    <span v-if="message.is_edited" class="text-gray-400 italic font-medium">(edited)</span>
+                                                    <span v-if="message.is_edited && !message.is_deleted_for_me" class="text-gray-400 italic font-medium">(edited)</span>
                                                     <template v-if="message.is_sender">
                                                         <span class="text-gray-400">•</span>
                                                         <!-- Sending Status -->
@@ -2472,6 +2658,16 @@ onBeforeUnmount(() => {
                                                             </button>
                                                         </span>
                                                         <!-- Seen Status -->
+                                                        <button 
+                                                            v-else-if="message.is_seen && activeConversation?.type === 'group'"
+                                                            type="button"
+                                                            @click="openSeenByDetails(message)"
+                                                            class="text-forest-700 hover:text-forest-900 font-bold inline-flex items-center space-x-0.5 cursor-pointer hover:underline"
+                                                            title="Click to view who saw this message"
+                                                        >
+                                                            <span>Seen</span>
+                                                            <span class="text-xs">✓✓</span>
+                                                        </button>
                                                         <span v-else-if="message.is_seen" class="text-forest-700 font-bold inline-flex items-center space-x-0.5" title="Seen by recipient">
                                                             <span>Seen</span>
                                                             <span class="text-xs">✓✓</span>
@@ -3293,7 +3489,7 @@ onBeforeUnmount(() => {
             </div>
         </div>
 
-        <!-- Delete Message Confirmation Dialog Modal -->
+        <!-- Delete Message (for everyone) Confirmation Dialog Modal -->
         <DialogModal :show="deletingMessageId !== null" max-width="sm" @close="closeDeleteModal">
             <template #title>
                 <div class="flex items-center space-x-3 pt-2">
@@ -3303,7 +3499,7 @@ onBeforeUnmount(() => {
                         </svg>
                     </div>
                     <div>
-                        <h3 class="text-base font-bold text-gray-900">Delete Message</h3>
+                        <h3 class="text-base font-bold text-gray-900">Delete Message for Everyone</h3>
                     </div>
                 </div>
             </template>
@@ -3331,6 +3527,221 @@ onBeforeUnmount(() => {
                         Delete for Everyone
                     </button>
                 </div>
+            </template>
+        </DialogModal>
+
+        <!-- Delete For Me Confirmation Dialog Modal -->
+        <DialogModal :show="deletingForMeMessageId !== null" max-width="sm" @close="closeDeleteForMeModal">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Delete Message for Me</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    This message will be removed from your chat view only. Other participants in this conversation will still be able to see it.
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="closeDeleteForMeModal"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="isDeletingForMe"
+                        @click="confirmDeleteForMe"
+                        class="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isDeletingForMe ? 'Deleting...' : 'Delete for Me' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Reaction Details Dialog Modal -->
+        <DialogModal :show="reactionDetailsMessage !== null" max-width="md" @close="closeReactionDetailsModal">
+           
+
+            <template #content>
+                <!-- Reaction filter tabs if multiple reactions exist -->
+                <div v-if="uniqueReactionTypes.length > 1" class="flex items-center space-x-1 mb-3 border-b border-cream-400/60 pb-2 overflow-x-auto">
+                    <button
+                        type="button"
+                        @click="activeReactionFilter = 'all'"
+                        class="px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer"
+                        :class="activeReactionFilter === 'all' ? 'bg-forest-900 text-white' : 'text-gray-600 hover:bg-cream-200'"
+                    >
+                        All ({{ reactionDetailsList.length }})
+                    </button>
+                    <button
+                        v-for="type in uniqueReactionTypes"
+                        :key="type"
+                        type="button"
+                        @click="activeReactionFilter = type"
+                        class="px-2.5 py-1 rounded-lg text-xs font-semibold transition flex items-center space-x-1 cursor-pointer"
+                        :class="activeReactionFilter === type ? 'bg-forest-900 text-white' : 'text-gray-600 hover:bg-cream-200'"
+                    >
+                        <span>{{ reactionMap[type] || type }}</span>
+                        <span>{{ reactionDetailsList.filter(r => r.reaction === type).length }}</span>
+                    </button>
+                </div>
+
+                <!-- Loading State -->
+                <div v-if="isLoadingReactionDetails" class="py-8 flex flex-col items-center justify-center space-y-2 text-gray-500">
+                    <svg class="size-6 animate-spin text-forest-700" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span class="text-xs">Loading reactions...</span>
+                </div>
+
+                <!-- Reactions List -->
+                <div v-else-if="filteredReactionDetailsList.length > 0" class="divide-y divide-cream-300/60 max-h-72 overflow-y-auto pr-1">
+                    <div
+                        v-for="item in filteredReactionDetailsList"
+                        :key="item.id"
+                        class="py-2.5 flex items-center justify-between"
+                    >
+                        <div class="flex items-center space-x-3 min-w-0">
+                            <img
+                                v-if="item.user?.profile_photo_url"
+                                :src="item.user.profile_photo_url"
+                                :alt="item.user.name"
+                                class="size-9 rounded-full object-cover shrink-0"
+                            />
+                            <div
+                                v-else
+                                class="size-9 rounded-full bg-forest-800 text-white flex items-center justify-center text-xs font-bold shrink-0"
+                            >
+                                {{ item.user?.name ? item.user.name.charAt(0).toUpperCase() : 'U' }}
+                            </div>
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold text-gray-900 truncate">
+                                    {{ item.user?.name }}
+                                    <span v-if="item.user?.id === currentUser?.id" class="text-xs font-normal text-forest-700">(You)</span>
+                                </p>
+                                <p v-if="item.created_at" class="text-xs text-gray-500" :title="item.created_at">
+                                    {{ item.created_at_relative || item.created_at }}
+                                </p>
+                            </div>
+                        </div>
+                        <span class="text-xl shrink-0 ml-3" :title="item.reaction">
+                            {{ reactionMap[item.reaction] || item.reaction }}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                <div v-else class="py-8 text-center text-gray-500 text-xs">
+                    No reactions to display.
+                </div>
+            </template>
+
+            <template #footer>
+                <button
+                    type="button"
+                    @click="closeReactionDetailsModal"
+                    class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                >
+                    Close
+                </button>
+            </template>
+        </DialogModal>
+
+        <!-- Seen By Details Dialog Modal -->
+        <DialogModal :show="seenByDetailsMessage !== null" max-width="md" @close="closeSeenByDetailsModal">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-forest-100 text-forest-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </div>
+                    <div>
+                      
+                        <p class="text-xs text-gray-500">
+                            {{ seenByList.length }} {{ seenByList.length === 1 ? 'member' : 'members' }} saw this message
+                        </p>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <!-- Loading State -->
+                <div v-if="isLoadingSeenBy" class="py-8 flex flex-col items-center justify-center space-y-2 text-gray-500">
+                    <svg class="size-6 animate-spin text-forest-700" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span class="text-xs">Loading seen receipts...</span>
+                </div>
+
+                <!-- Seen By List -->
+                <div v-else-if="seenByList.length > 0" class="divide-y divide-cream-300/60 max-h-72 overflow-y-auto pr-1">
+                    <div
+                        v-for="item in seenByList"
+                        :key="item.user?.id"
+                        class="py-2.5 flex items-center justify-between"
+                    >
+                        <div class="flex items-center space-x-3 min-w-0">
+                            <img
+                                v-if="item.user?.profile_photo_url"
+                                :src="item.user.profile_photo_url"
+                                :alt="item.user.name"
+                                class="size-9 rounded-full object-cover shrink-0"
+                            />
+                            <div
+                                v-else
+                                class="size-9 rounded-full bg-forest-800 text-white flex items-center justify-center text-xs font-bold shrink-0"
+                            >
+                                {{ item.user?.name ? item.user.name.charAt(0).toUpperCase() : 'U' }}
+                            </div>
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold text-gray-900 truncate">
+                                    {{ item.user?.name }}
+                                    <span v-if="item.user?.id === currentUser?.id" class="text-xs font-normal text-forest-700">(You)</span>
+                                </p>
+                                <p v-if="item.user?.username" class="text-xs text-gray-500 truncate">
+                                    @{{ item.user.username }}
+                                </p>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0 ml-3">
+                            <p class="text-xs font-medium text-gray-700">{{ item.seen_at }}</p>
+                            <p class="text-[10px] text-gray-500">{{ item.seen_at_relative }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                <div v-else class="py-8 text-center text-gray-500 text-xs">
+                    No one has seen this message yet.
+                </div>
+            </template>
+
+            <template #footer>
+                <button
+                    type="button"
+                    @click="closeSeenByDetailsModal"
+                    class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                >
+                    Close
+                </button>
             </template>
         </DialogModal>
 

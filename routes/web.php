@@ -142,6 +142,9 @@ Route::middleware([
     Route::patch('/chat/{conversation}/notifications', [ChatController::class, 'updateNotificationPreference'])->name('chat.notification-preference');
     Route::post('/chat/{conversation}/typing', [ChatController::class, 'typing'])->name('chat.typing');
     Route::post('/chat/messages/{message}/reaction', [ChatController::class, 'toggleReaction'])->name('chat.reaction');
+    Route::get('/chat/messages/{message}/reactions', [ChatController::class, 'messageReactions'])->name('chat.message-reactions');
+    Route::get('/chat/messages/{message}/seen-by', [ChatController::class, 'messageSeenBy'])->name('chat.message-seen-by');
+    Route::post('/chat/messages/{message}/delete-for-me', [ChatController::class, 'deleteMessageForMe'])->name('chat.delete-message-for-me');
     Route::delete('/chat/messages/{message}', [ChatController::class, 'deleteMessage'])->name('chat.delete-message');
 
     // User Feedback Form Routes
