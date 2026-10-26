@@ -129,4 +129,14 @@ class Message extends Model
     {
         return $this->hasMany(MessageReaction::class);
     }
+
+    /**
+     * The user mentions in this message.
+     *
+     * @return HasMany<MessageMention>
+     */
+    public function mentions(): HasMany
+    {
+        return $this->hasMany(MessageMention::class);
+    }
 }

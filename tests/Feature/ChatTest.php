@@ -1268,4 +1268,93 @@ class ChatTest extends TestCase
         $this->actingAs($user1)->post(route('chat.promote-member', [$directConv, $user2]))->assertStatus(403);
         $this->actingAs($user1)->delete(route('chat.delete-group', $directConv))->assertStatus(403);
     }
+
+    public function test_search_conversations_excludes_current_user_name_match_but_matches_other_participants(): void
+    {
+        $currentUser = User::factory()->create(['name' => 'Alice Wonderland']);
+        $bob = User::factory()->create(['name' => 'Bob Smith']);
+        $charlie = User::factory()->create(['name' => 'Charlie Brown']);
+
+        $convBob = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $convBob->id, 'user_id' => $currentUser->id]);
+        ConversationParticipant::create(['conversation_id' => $convBob->id, 'user_id' => $bob->id]);
+
+        $convCharlie = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $convCharlie->id, 'user_id' => $currentUser->id]);
+        ConversationParticipant::create(['conversation_id' => $convCharlie->id, 'user_id' => $charlie->id]);
+
+        // Searching for current user's own name should NOT match conversations via participant name
+        $response = $this->actingAs($currentUser)->getJson(route('chat.search-conversations', ['q' => 'Alice']));
+        $response->assertOk();
+        $response->assertJsonCount(0, 'conversations');
+
+        // Searching for another participant's name should match
+        $responseBob = $this->actingAs($currentUser)->getJson(route('chat.search-conversations', ['q' => 'Bob']));
+        $responseBob->assertOk();
+        $responseBob->assertJsonCount(1, 'conversations');
+        $this->assertEquals($convBob->id, $responseBob->json('conversations.0.id'));
+
+        // Group title matching should still match even if title includes query
+        $groupConv = Conversation::create(['type' => 'group', 'title' => 'Alice Group Project', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $groupConv->id, 'user_id' => $currentUser->id]);
+
+        $responseGroup = $this->actingAs($currentUser)->getJson(route('chat.search-conversations', ['q' => 'Alice']));
+        $responseGroup->assertOk();
+        $responseGroup->assertJsonCount(1, 'conversations');
+        $this->assertEquals($groupConv->id, $responseGroup->json('conversations.0.id'));
+    }
+
+    public function test_start_direct_queries_by_direct_key_first(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+        $directKey = Conversation::generateDirectKey($user1->id, $user2->id);
+
+        $existing = Conversation::create([
+            'type' => 'direct',
+            'direct_key' => $directKey,
+            'last_message_at' => now(),
+        ]);
+        ConversationParticipant::create(['conversation_id' => $existing->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $existing->id, 'user_id' => $user2->id]);
+
+        $response = $this->actingAs($user1)->post(route('chat.start-direct'), [
+            'recipient_id' => $user2->id,
+        ]);
+
+        $response->assertRedirect(route('chat.index', ['conversation' => $existing->id]));
+        $this->assertSame(1, Conversation::where('type', 'direct')->count());
+    }
+
+    public function test_start_direct_falls_back_deterministically_to_unkeyed_conversation(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+        $directKey = Conversation::generateDirectKey($user1->id, $user2->id);
+
+        $olderUnkeyed = Conversation::create([
+            'type' => 'direct',
+            'direct_key' => null,
+            'last_message_at' => now(),
+        ]);
+        ConversationParticipant::create(['conversation_id' => $olderUnkeyed->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $olderUnkeyed->id, 'user_id' => $user2->id]);
+
+        $newerUnkeyed = Conversation::create([
+            'type' => 'direct',
+            'direct_key' => null,
+            'last_message_at' => now(),
+        ]);
+        ConversationParticipant::create(['conversation_id' => $newerUnkeyed->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $newerUnkeyed->id, 'user_id' => $user2->id]);
+
+        $response = $this->actingAs($user1)->post(route('chat.start-direct'), [
+            'recipient_id' => $user2->id,
+        ]);
+
+        // Deterministically selects the older one (ordered by id)
+        $response->assertRedirect(route('chat.index', ['conversation' => $olderUnkeyed->id]));
+        $this->assertEquals($directKey, $olderUnkeyed->fresh()->direct_key);
+        $this->assertNull($newerUnkeyed->fresh()->direct_key);
+    }
 }

@@ -121,6 +121,7 @@ Route::middleware([
     Route::get('/chat', [ChatController::class, 'index'])->name('chat.index');
     Route::get('/chat/contacts', [ChatController::class, 'searchContacts'])->name('chat.contacts');
     Route::get('/chat/unread-count', [ChatController::class, 'unreadCount'])->name('chat.unread-count');
+    Route::get('/chat/conversations/search', [ChatController::class, 'searchConversations'])->name('chat.search-conversations');
     Route::get('/chat/{conversation}/messages', [ChatController::class, 'messages'])->name('chat.messages');
     Route::get('/chat/{conversation}/search', [ChatController::class, 'searchMessages'])->name('chat.search-messages');
     Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])->name('chat.download-attachment');
@@ -130,6 +131,7 @@ Route::middleware([
     Route::post('/chat/{conversation}/members', [ChatController::class, 'addMembers'])->name('chat.add-members');
     Route::delete('/chat/{conversation}/members/{user}', [ChatController::class, 'removeMember'])->name('chat.remove-member');
     Route::post('/chat/{conversation}/members/{user}/promote', [ChatController::class, 'promoteMember'])->name('chat.promote-member');
+    Route::post('/chat/{conversation}/leave', [ChatController::class, 'leaveGroup'])->name('chat.leave-group');
     Route::delete('/chat/{conversation}', [ChatController::class, 'deleteGroup'])->name('chat.delete-group');
     Route::post('/chat/{conversation}/messages', [ChatController::class, 'sendMessage'])->middleware('throttle:60,1')->name('chat.send-message');
     Route::patch('/chat/messages/{message}', [ChatController::class, 'editMessage'])->name('chat.edit-message');
@@ -137,6 +139,7 @@ Route::middleware([
     Route::post('/chat/mark-all-read', [ChatController::class, 'markAllAsRead'])->name('chat.mark-all-read');
     Route::post('/chat/{conversation}/pin', [ChatController::class, 'togglePin'])->name('chat.toggle-pin');
     Route::post('/chat/{conversation}/mute', [ChatController::class, 'toggleMute'])->name('chat.toggle-mute');
+    Route::patch('/chat/{conversation}/notifications', [ChatController::class, 'updateNotificationPreference'])->name('chat.notification-preference');
     Route::post('/chat/{conversation}/typing', [ChatController::class, 'typing'])->name('chat.typing');
     Route::post('/chat/messages/{message}/reaction', [ChatController::class, 'toggleReaction'])->name('chat.reaction');
     Route::delete('/chat/messages/{message}', [ChatController::class, 'deleteMessage'])->name('chat.delete-message');

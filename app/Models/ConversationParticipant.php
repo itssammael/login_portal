@@ -14,6 +14,12 @@ class ConversationParticipant extends Model
 
     public const ROLE_MEMBER = 'member';
 
+    public const NOTIFICATION_ALL = 'all';
+
+    public const NOTIFICATION_MENTIONS = 'mentions';
+
+    public const NOTIFICATION_NONE = 'none';
+
     /**
      * The attributes that are mass assignable.
      *
@@ -26,6 +32,7 @@ class ConversationParticipant extends Model
         'last_read_at',
         'is_muted',
         'is_pinned',
+        'notification_preference',
     ];
 
     /**
@@ -47,6 +54,7 @@ class ConversationParticipant extends Model
             'last_read_at' => 'datetime',
             'is_muted' => 'boolean',
             'is_pinned' => 'boolean',
+            'notification_preference' => 'string',
         ];
     }
 
