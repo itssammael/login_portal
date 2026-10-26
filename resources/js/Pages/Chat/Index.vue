@@ -853,6 +853,15 @@ const markConversationAsRead = (conv) => {
         .catch(() => {});
 };
 
+// Trigger seen event when a conversation is opened
+const markCurrentConversationAsSeen = (convId) => {
+    if (!convId) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+    }
+    axios.post(route('chat.mark-read', convId)).catch(() => {});
+};
+
 // Mark all conversations as read
 const markAllConversationsAsRead = () => {
     router.post(route('chat.mark-all-read'), {}, {
@@ -1380,8 +1389,8 @@ const handleConversationChannelEvent = (e) => {
                 newIncomingCount.value++;
             }
 
-            if (!isMe) {
-                axios.post(route('chat.mark-read', e.conversation_id)).catch(() => {});
+            if (!isMe && props.activeConversation?.id === e.conversation_id && document.visibilityState === 'visible') {
+                markCurrentConversationAsSeen(e.conversation_id);
             }
         }
     } else if (e.action === 'edited') {
@@ -1514,6 +1523,10 @@ watch(() => props.activeConversation?.id, (newId, oldId) => {
         // Restore draft for this conversation
         messageForm.body = loadDraft(newId);
 
+        if (newId && document.visibilityState === 'visible') {
+            markCurrentConversationAsSeen(newId);
+        }
+
         scrollToBottom(false);
         nextTick(() => {
             resizeComposer();
@@ -1545,32 +1558,107 @@ watch(() => props.activeConversation?.messages, (newMsgs) => {
     activeMessages.value = updated;
 }, { deep: true });
 
-// Close open menus and modals on Escape
+// Close active conversation
+const closeActiveConversation = () => {
+    if (!props.activeConversation) return;
+
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+    }
+
+    router.visit(route('chat.index'), {
+        preserveScroll: true,
+    });
+};
+
+// Close open menus and modals on Escape, or close active conversation
 const handleGlobalKeydown = (e) => {
     if (e.key === 'Escape') {
-        activeMessageMenuId.value = null;
-        activeConversationMenuId.value = null;
-        showEmojiPicker.value = false;
         if (lightboxImage.value) {
             closeLightbox();
+            return;
+        }
+        if (showNewChatModal.value) {
+            showNewChatModal.value = false;
+            return;
+        }
+        if (showRenameGroupModal.value) {
+            showRenameGroupModal.value = false;
+            return;
+        }
+        if (showAddMembersModal.value) {
+            showAddMembersModal.value = false;
+            return;
+        }
+        if (showDeleteGroupModal.value) {
+            showDeleteGroupModal.value = false;
+            return;
+        }
+        if (activeMessageMenuId.value !== null || activeConversationMenuId.value !== null) {
+            activeMessageMenuId.value = null;
+            activeConversationMenuId.value = null;
+            return;
+        }
+        if (showEmojiPicker.value) {
+            showEmojiPicker.value = false;
+            return;
         }
         if (editingMessage.value) {
             cancelEditMessage();
+            return;
         }
         if (replyingToMessage.value) {
             cancelReply();
+            return;
+        }
+        if (showChatSearch.value) {
+            clearChatSearch();
+            return;
+        }
+        if (showInfoPanel.value) {
+            showInfoPanel.value = false;
+            return;
+        }
+        if (deletingMessageId.value !== null) {
+            closeDeleteModal();
+            return;
+        }
+        if (memberToRemove.value !== null) {
+            memberToRemove.value = null;
+            return;
+        }
+        if (memberToPromote.value !== null) {
+            memberToPromote.value = null;
+            return;
+        }
+
+        if (props.activeConversation) {
+            closeActiveConversation();
+            return;
+        }
+
+        if (searchQuery.value) {
+            searchQuery.value = '';
         }
     }
 };
 
 const handleOnline = () => { isOnline.value = true; isReconnecting.value = false; };
 const handleOffline = () => { isOnline.value = false; isReconnecting.value = true; };
+const handleWindowFocus = () => {
+    if (props.activeConversation?.id && document.visibilityState === 'visible') {
+        markCurrentConversationAsSeen(props.activeConversation.id);
+    }
+};
 
 onMounted(() => {
     scrollToBottom(false);
     setupEchoListeners();
     if (props.activeConversation?.id) {
         messageForm.body = loadDraft(props.activeConversation.id);
+        if (document.visibilityState === 'visible') {
+            markCurrentConversationAsSeen(props.activeConversation.id);
+        }
     }
     nextTick(() => {
         resizeComposer();
@@ -1579,12 +1667,16 @@ onMounted(() => {
     window.addEventListener('keydown', handleGlobalKeydown);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleWindowFocus);
 });
 
 onBeforeUnmount(() => {
     window.removeEventListener('keydown', handleGlobalKeydown);
     window.removeEventListener('online', handleOnline);
     window.removeEventListener('offline', handleOffline);
+    window.removeEventListener('focus', handleWindowFocus);
+    document.removeEventListener('visibilitychange', handleWindowFocus);
     if (window.Echo) {
         if (currentUser.value.id) {
             window.Echo.private(`App.Models.User.${currentUser.value.id}`)
@@ -2003,6 +2095,18 @@ onBeforeUnmount(() => {
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 8.25h.008v.008H12V8.25z" />
                                         </svg>
                                     </button>
+
+                                    <!-- Close Conversation Button -->
+                                    <button
+                                        @click="closeActiveConversation"
+                                        class="p-2 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-xl transition cursor-pointer"
+                                        title="Close chat (Esc)"
+                                        aria-label="Close currently opened conversation"
+                                    >
+                                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </button>
                                 </div>
                             </div>
 
@@ -2189,18 +2293,18 @@ onBeforeUnmount(() => {
                                                     </div>
 
                                                     <!-- Message Content Container (Bubble & Reaction Badges) -->
-                                                    <div class="flex flex-col" :class="message.is_sender ? 'items-end' : 'items-start'">
+                                                    <div class="flex flex-col min-w-0 max-w-full" :class="message.is_sender ? 'items-end' : 'items-start'">
                                                         <!-- Quoted Reply Box (if message is a reply) -->
                                                         <div
                                                             v-if="message.reply_to"
                                                             @click="scrollToMessage(message.reply_to.id)"
-                                                            class="mb-1 px-3 py-1.5 rounded-lg text-xs border border-cream-500/40 bg-cream-100/90 hover:bg-cream-200/90 transition cursor-pointer max-w-full truncate shadow-2xs"
+                                                            class="mb-1 px-3 py-1.5 rounded-lg text-xs border border-cream-500/40 bg-cream-100/90 hover:bg-cream-200/90 transition cursor-pointer max-w-full shadow-2xs break-words"
                                                             :class="message.is_sender ? 'border-r-4 border-r-golden-600' : 'border-l-4 border-l-forest-600'"
                                                         >
                                                             <div class="font-bold text-[10px] text-forest-900 truncate">
                                                                 {{ message.reply_to.sender_name }}
                                                             </div>
-                                                            <div class="text-gray-700 truncate italic text-[11px]">
+                                                            <div class="text-gray-700 italic text-[11px] break-words whitespace-normal line-clamp-3">
                                                                 {{ message.reply_to.body || 'Attachment' }}
                                                             </div>
                                                         </div>
@@ -2426,12 +2530,12 @@ onBeforeUnmount(() => {
 
                                     <div v-else class="p-3 sm:p-4 border-t border-cream-500/40 bg-cream-300 relative">
                                         <!-- Replying-to Preview Bar -->
-                                        <div v-if="replyingToMessage" class="mb-2 p-2 bg-cream-100 rounded-xl border border-cream-500/60 flex items-center justify-between text-xs animate-fadeIn">
-                                            <div class="flex items-center space-x-2 truncate">
-                                                <span class="text-forest-800 font-bold">Replying to {{ replyingToMessage.sender_name }}:</span>
-                                                <span class="text-gray-600 truncate italic">{{ replyingToMessage.body }}</span>
+                                        <div v-if="replyingToMessage" class="mb-2 p-2 bg-cream-100 rounded-xl border border-cream-500/60 flex items-center justify-between text-xs animate-fadeIn gap-2">
+                                            <div class="flex items-start space-x-2 min-w-0 flex-1">
+                                                <span class="text-forest-800 font-bold shrink-0">Replying to {{ replyingToMessage.sender_name }}:</span>
+                                                <span class="text-gray-600 italic break-words line-clamp-2">{{ replyingToMessage.body }}</span>
                                             </div>
-                                            <button type="button" @click="cancelReply" class="text-gray-400 hover:text-gray-700 p-1 cursor-pointer" aria-label="Cancel reply">
+                                            <button type="button" @click="cancelReply" class="text-gray-400 hover:text-gray-700 p-1 cursor-pointer shrink-0" aria-label="Cancel reply">
                                                 <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                                                 </svg>
@@ -2521,10 +2625,6 @@ onBeforeUnmount(() => {
                                             role="listbox"
                                             aria-label="Mention members"
                                         >
-                                            <div class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-forest-800 flex items-center justify-between">
-                                                <span>Mention member</span>
-                                                <span class="text-gray-500 font-normal hidden sm:inline">↑↓ to navigate, Enter to select</span>
-                                            </div>
                                             <div class="space-y-0.5 pt-1">
                                                 <button
                                                     v-for="(member, idx) in filteredMentionMembers"
