@@ -33,7 +33,7 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.pagination.progress_bar' => ['nullable', 'boolean'],
             'schema.pagination.show_section_numbers' => ['nullable', 'boolean'],
             'schema.fields' => ['required', 'array', 'min:1'],
-            'schema.fields.*.id' => ['required', 'string', 'max:100'],
+            'schema.fields.*.id' => ['required', 'string', 'max:150'],
             'schema.fields.*.particular' => ['required', 'string', 'max:5000'],
             'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,date,radio,select,checkbox,section,text_only'],
             'schema.fields.*.weight' => ['required', 'integer', 'min:0'],
@@ -48,13 +48,13 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.fields.*.option_source' => ['nullable', 'string', 'in:static,fb_functions,agencies,designations'],
             'schema.fields.*.function_ids' => ['nullable', 'array'],
             'schema.fields.*.function_ids.*' => ['integer'],
-            'schema.fields.*.section_flow' => ['nullable', 'string', 'max:100'],
+            'schema.fields.*.section_flow' => ['nullable', 'string', 'max:150'],
             'schema.fields.*.conditions' => ['nullable', 'array'],
             'schema.fields.*.options' => ['nullable', 'array'],
             'schema.fields.*.options.*.value' => ['nullable', 'string'],
             'schema.fields.*.options.*.label' => ['nullable', 'string'],
             'schema.fields.*.options.*.is_other' => ['nullable', 'boolean'],
-            'schema.fields.*.options.*.goto_section' => ['nullable', 'string', 'max:100'],
+            'schema.fields.*.options.*.goto_section' => ['nullable', 'string', 'max:150'],
         ];
     }
 }
