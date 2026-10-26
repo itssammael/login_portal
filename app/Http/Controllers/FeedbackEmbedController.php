@@ -43,6 +43,35 @@ class FeedbackEmbedController extends Controller
             abort(404);
         }
 
+        // When unpublished or saved as draft, public users/embeds see a proper "Not Available" message
+        if ($feedback->isDraft() && ! $request->user()?->isAdmin()) {
+            $csp = $this->buildContentSecurityPolicy($embed->allowed_origins, $request->isSecure());
+
+            $token = (string) $request->query('token', $request->input('token', ''));
+
+            $inertiaResponse = Inertia::render('Feedback/Embed', [
+                'event' => [
+                    'id' => $event->id,
+                    'name' => $event->name,
+                    'details' => $event->details,
+                ],
+                'form' => null,
+                'isAvailable' => false,
+                'unavailableReason' => 'draft',
+                'unavailableMessage' => 'This embedded feedback form is currently unpublished or still saved as draft and is not available for submissions.',
+                'publicId' => $publicId,
+                'sessionToken' => $token,
+                'userDefaults' => [],
+                'allowedOrigins' => $embed->allowed_origins ?? [],
+            ]);
+
+            $response = $inertiaResponse->toResponse($request);
+            $response->headers->set('Content-Security-Policy', $csp);
+            $response->headers->remove('X-Frame-Options');
+
+            return $response;
+        }
+
         $token = (string) $request->query('token', $request->input('token', ''));
         if (empty($token)) {
             abort(404);
@@ -71,8 +100,13 @@ class FeedbackEmbedController extends Controller
             ],
             'form' => [
                 'id' => $feedback->id,
+                'status' => $feedback->status ?? 'published',
+                'is_draft' => $feedback->isDraft(),
                 'schema' => $resolvedSchema,
             ],
+            'isAvailable' => true,
+            'unavailableReason' => null,
+            'unavailableMessage' => null,
             'publicId' => $publicId,
             'sessionToken' => $token,
             'userDefaults' => $session->metadata['user_defaults'] ?? [],
@@ -109,6 +143,16 @@ class FeedbackEmbedController extends Controller
 
         if (! $event || ! $feedback) {
             abort(404);
+        }
+
+        if ($feedback->isDraft()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
+                'errors' => [
+                    'general' => ['This feedback form is currently in draft mode and is not accepting responses.'],
+                ],
+            ], 422);
         }
 
         $token = (string) $request->input('token', $request->query('token', ''));

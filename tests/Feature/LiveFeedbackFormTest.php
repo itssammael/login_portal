@@ -875,4 +875,178 @@ class LiveFeedbackFormTest extends TestCase
             ->where('turnstile.site_key', '0x4AAAAAAFgvUmyPPMRyS5WR')
         );
     }
+
+    public function test_guest_visiting_draft_live_form_sees_not_available_page_without_form_fields(): void
+    {
+        $event = FbEvent::factory()->create(['name' => 'Unpublished Conference']);
+        Feedback::factory()->draft()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'q1',
+                        'particular' => 'Draft Question',
+                        'type' => 'text',
+                        'weight' => 1,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response = $this->get(route('forms.live', $event->api_key));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Feedback/Live')
+            ->where('event.name', 'Unpublished Conference')
+            ->where('isAvailable', false)
+            ->where('unavailableReason', 'draft')
+            ->where('form', null)
+        );
+    }
+
+    public function test_admin_can_preview_draft_feedback_form(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create(['name' => 'Admin Preview Event']);
+        Feedback::factory()->draft()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'q1',
+                        'particular' => 'Draft Question',
+                        'type' => 'text',
+                        'weight' => 1,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response = $this->actingAs($admin)->get(route('forms.live', $event->api_key));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Feedback/Live')
+            ->where('form.is_draft', true)
+            ->where('form.status', 'draft')
+        );
+    }
+
+    public function test_guest_cannot_submit_to_draft_feedback_form(): void
+    {
+        $this->fakeValidTurnstile();
+        $event = FbEvent::factory()->create(['name' => 'Draft Form Submit Protection']);
+        Feedback::factory()->draft()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'q1',
+                        'particular' => 'Draft Question',
+                        'type' => 'text',
+                        'weight' => 1,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response = $this->post(route('forms.live.submit', $event->api_key), [
+            'q1' => 'Trying to submit to draft form',
+            'cf-turnstile-response' => 'valid-turnstile-token',
+        ]);
+
+        $response->assertStatus(422);
+        $this->assertSame(0, FbSubmission::count());
+    }
+
+    public function test_non_admin_only_sees_published_forms_in_feedback_index(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $admin = User::factory()->admin()->create();
+
+        $publishedEvent = FbEvent::factory()->create(['name' => 'Published Form Event']);
+        $draftEvent = FbEvent::factory()->create(['name' => 'Draft Form Event']);
+
+        $publishedForm = Feedback::factory()->published()->create([
+            'event_id' => $publishedEvent->id,
+            'schema' => ['fields' => []],
+        ]);
+
+        $draftForm = Feedback::factory()->draft()->create([
+            'event_id' => $draftEvent->id,
+            'schema' => ['fields' => []],
+        ]);
+
+        // Regular non-admin user
+        $response = $this->actingAs($user)->get(route('feedback.form'));
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Feedback/Form')
+            ->has('forms', 1)
+            ->where('forms.0.id', $publishedForm->id)
+        );
+
+        // Admin user
+        $adminResponse = $this->actingAs($admin)->get(route('feedback.form'));
+        $adminResponse->assertOk();
+        $adminResponse->assertInertia(fn ($page) => $page
+            ->component('Feedback/Form')
+            ->has('forms', 2)
+        );
+    }
+
+    public function test_non_admin_visiting_feedback_page_with_active_event_draft_form_does_not_crash(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $event = FbEvent::factory()->create(['name' => 'Active Event with Draft Form']);
+        Feedback::factory()->draft()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    ['id' => 'q1', 'particular' => 'Draft Question', 'type' => 'text'],
+                ],
+            ],
+        ]);
+
+        config(['services.feedback.api_key' => $event->api_key]);
+
+        $response = $this->actingAs($user)->get(route('feedback.form'));
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Feedback/Form')
+            ->where('form', null)
+        );
+    }
+
+    public function test_user_cannot_submit_to_internal_draft_feedback_form(): void
+    {
+        $user = User::factory()->create();
+        $event = FbEvent::factory()->create(['name' => 'Internal Event with Draft Form']);
+        $feedback = Feedback::factory()->draft()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    ['id' => 'q1', 'particular' => 'Draft Question', 'type' => 'text'],
+                ],
+            ],
+        ]);
+
+        config(['services.feedback.api_key' => $event->api_key]);
+
+        $response = $this->actingAs($user)->postJson(route('feedback.submit'), [
+            'event_id' => $event->id,
+            'feedback_id' => $feedback->id,
+            'answers' => [
+                'q1' => 'Trying to submit to internal draft form',
+            ],
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJson([
+            'status' => 'error',
+            'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
+        ]);
+        $this->assertSame(0, FbSubmission::count());
+    }
 }

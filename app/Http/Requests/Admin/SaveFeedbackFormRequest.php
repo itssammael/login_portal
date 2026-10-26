@@ -24,6 +24,7 @@ class SaveFeedbackFormRequest extends FormRequest
     {
         return [
             'event_id' => ['required', 'integer', 'exists:fb_events,id'],
+            'status' => ['nullable', 'string', 'in:published,draft'],
             'schema' => ['required', 'array'],
             'schema.title' => ['nullable', 'string', 'max:2000'],
             'schema.description' => ['nullable', 'string', 'max:65535'],

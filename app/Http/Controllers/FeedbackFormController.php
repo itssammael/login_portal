@@ -36,6 +36,7 @@ class FeedbackFormController extends Controller
             ])
             ->withCount('submissions')
             ->whereHas('event')
+            ->when(! $user?->isAdmin(), fn ($q) => $q->where('status', Feedback::STATUS_PUBLISHED))
             ->latest('id')
             ->get()
             ->map(function (Feedback $feedback) use ($schemaValidator, $analytics, $user): array {
@@ -44,6 +45,8 @@ class FeedbackFormController extends Controller
 
                 return [
                     'id' => $feedback->id,
+                    'status' => $feedback->status ?? Feedback::STATUS_PUBLISHED,
+                    'is_draft' => $feedback->isDraft(),
                     'schema' => $schema,
                     'submissions_count' => $feedback->submissions_count,
                     'analytics' => $analytics->publication($feedback),
@@ -93,6 +96,9 @@ class FeedbackFormController extends Controller
         }
 
         $feedback = $event->feedback()->first();
+        if ($feedback && $feedback->isDraft() && ! $user?->isAdmin()) {
+            $feedback = null;
+        }
         $resolvedSchema = $feedback ? $schemaValidator->resolveSchemaForEvent($feedback->schema, $event) : null;
 
         $functions = $event->functions()
@@ -106,10 +112,12 @@ class FeedbackFormController extends Controller
                 'details' => $event->details,
             ],
             'forms' => $forms,
-            'form' => [
+            'form' => $feedback ? [
                 'id' => $feedback->id,
+                'status' => $feedback->status ?? Feedback::STATUS_PUBLISHED,
+                'is_draft' => $feedback->isDraft(),
                 'schema' => $resolvedSchema,
-            ],
+            ] : null,
             'functions' => $functions,
             'lookups' => [
                 'agencies' => Agency::getCachedList(),
@@ -166,6 +174,16 @@ class FeedbackFormController extends Controller
                     'message' => 'No questionnaire has been configured for this event.',
                 ], 404);
             }
+        }
+
+        if ($feedback->isDraft()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
+                'errors' => [
+                    'general' => ['This feedback form is currently in draft mode and is not accepting responses.'],
+                ],
+            ], 422);
         }
 
         $pData = $request->getParticipantData();

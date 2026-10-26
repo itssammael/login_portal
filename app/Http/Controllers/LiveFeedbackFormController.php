@@ -9,6 +9,7 @@ use App\Models\Designation;
 use App\Models\FbEvent;
 use App\Models\FbParticipant;
 use App\Models\FbSubmission;
+use App\Models\Feedback;
 use App\Rules\TurnstileRule;
 use App\Services\FeedbackSchemaValidator;
 use Illuminate\Http\JsonResponse;
@@ -48,6 +49,27 @@ class LiveFeedbackFormController extends Controller
             abort(404);
         }
 
+        // When unpublished or saved as draft, public respondents see a proper "Not Available" message
+        if ($feedback->isDraft() && ! $request->user()?->isAdmin()) {
+            return Inertia::render('Feedback/Live', [
+                'event' => [
+                    'name' => $event->name,
+                    'details' => $event->details,
+                ],
+                'form' => null,
+                'isAvailable' => false,
+                'unavailableReason' => 'draft',
+                'unavailableMessage' => 'This feedback form is currently unpublished or still saved as draft and is not accepting responses at this time.',
+                'functions' => [],
+                'lookups' => [
+                    'agencies' => [],
+                    'designations' => [],
+                ],
+                'apiKey' => $api_key,
+                'turnstileSiteKey' => config('services.turnstile.key'),
+            ]);
+        }
+
         try {
             $resolvedSchema = $schemaValidator->resolveSchemaForEvent($feedback->schema, $event);
         } catch (Throwable) {
@@ -69,8 +91,13 @@ class LiveFeedbackFormController extends Controller
             ],
             'form' => [
                 'id' => $feedback->id,
+                'status' => $feedback->status ?? Feedback::STATUS_PUBLISHED,
+                'is_draft' => $feedback->isDraft(),
                 'schema' => $resolvedSchema,
             ],
+            'isAvailable' => true,
+            'unavailableReason' => null,
+            'unavailableMessage' => null,
             'functions' => $functions,
             'lookups' => [
                 'agencies' => Agency::getCachedList(),
@@ -106,6 +133,16 @@ class LiveFeedbackFormController extends Controller
         $feedback = $event->feedback;
         if (empty($feedback->schema) || ! is_array($feedback->schema) || empty($feedback->schema['fields']) || ! is_array($feedback->schema['fields'])) {
             abort(404);
+        }
+
+        if ($feedback->isDraft()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
+                'errors' => [
+                    'general' => ['This feedback form is currently in draft mode and is not accepting responses.'],
+                ],
+            ], 422);
         }
 
         // Anti-tampering verification: ensure client is not attempting to target another event or form

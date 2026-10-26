@@ -234,8 +234,9 @@ Route::middleware([
             Route::post('/designations', [FeedbackController::class, 'storeDesignation'])->name('designations.store');
             Route::delete('/designations/{designation}', [FeedbackController::class, 'destroyDesignation'])->name('designations.destroy');
 
-            // Feedback Form Configuration & Import
+            // Feedback Form Configuration, Status & Import
             Route::post('/forms', [FeedbackController::class, 'saveForm'])->name('forms.save');
+            Route::post('/forms/{feedback}/status', [FeedbackController::class, 'toggleFormStatus'])->name('forms.status');
             Route::post('/forms/import', [FeedbackController::class, 'importForm'])->name('forms.import');
         });
 

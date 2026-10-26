@@ -5,6 +5,7 @@ import axios from 'axios';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
 import QuestionnaireSchemaModal from '@/Components/Feedback/QuestionnaireSchemaModal.vue';
+import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
 
 const page = usePage();
 
@@ -36,6 +37,42 @@ const props = defineProps({
 });
 
 const activeTab = ref('events'); // 'events' | 'functions' | 'lookups' | 'forms'
+const formFilterStatus = ref('all'); // 'all' | 'published' | 'draft'
+const togglingFormStatusId = ref(null);
+
+const filteredFeedbackForms = computed(() => {
+    if (formFilterStatus.value === 'published') {
+        return props.feedbackForms.filter((f) => f.status !== 'draft');
+    }
+    if (formFilterStatus.value === 'draft') {
+        return props.feedbackForms.filter((f) => f.status === 'draft');
+    }
+    return props.feedbackForms;
+});
+
+const publishedFormsCount = computed(() => {
+    return props.feedbackForms.filter((f) => f.status !== 'draft').length;
+});
+
+const draftFormsCount = computed(() => {
+    return props.feedbackForms.filter((f) => f.status === 'draft').length;
+});
+
+const toggleFeedbackFormStatus = (formItem) => {
+    const nextStatus = formItem.status === 'draft' ? 'published' : 'draft';
+    togglingFormStatusId.value = formItem.id;
+    router.post(
+        route('admin.feedback.forms.status', formItem.id),
+        { status: nextStatus },
+        {
+            preserveScroll: true,
+            onFinish: () => {
+                togglingFormStatusId.value = null;
+            },
+        }
+    );
+};
+
 const copiedKeyId = ref(null);
 const copiedRef = ref(null);
 const visibleKeys = ref({});
@@ -535,6 +572,18 @@ const closeConfigModal = () => {
     showConfigModal.value = false;
     configTargetFormRecord.value = null;
     configTargetEventId.value = null;
+};
+
+const onFormConfigSaved = (savedEventId = null) => {
+    // Keep form builder open after saving as requested by user
+    const targetId = savedEventId || configTargetEventId.value;
+    if (targetId) {
+        configTargetEventId.value = Number(targetId);
+        const updated = props.feedbackForms?.find((f) => f.event_id === Number(targetId));
+        if (updated) {
+            configTargetFormRecord.value = updated;
+        }
+    }
 };
 
 // --- Generic Delete Confirmation State ---
@@ -1704,7 +1753,65 @@ const closeSamplePreviewModal = () => {
                 </div>
 
                 <!-- Tab 4: Form Schemas Section -->
-                <div v-if="activeTab === 'forms'">
+                <div v-if="activeTab === 'forms'" class="space-y-4">
+                    <!-- Filter Sub-nav: All | Published | Drafts -->
+                    <div class="flex items-center justify-between flex-wrap gap-3 bg-cream-200/60 p-2 rounded-2xl border border-cream-400">
+                        <div class="flex items-center space-x-1.5">
+                            <button
+                                type="button"
+                                @click="formFilterStatus = 'all'"
+                                class="px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5"
+                                :class="formFilterStatus === 'all'
+                                    ? 'bg-forest-900 text-white shadow-xs'
+                                    : 'text-gray-700 hover:text-gray-900 hover:bg-cream-300'"
+                            >
+                                <span>All Forms</span>
+                                <span class="px-1.5 py-0.2 rounded-full text-[10px]" :class="formFilterStatus === 'all' ? 'bg-forest-800 text-emerald-200' : 'bg-cream-300 text-gray-700'">
+                                    {{ feedbackForms.length }}
+                                </span>
+                            </button>
+
+                            <button
+                                type="button"
+                                @click="formFilterStatus = 'published'"
+                                class="px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5"
+                                :class="formFilterStatus === 'published'
+                                    ? 'bg-emerald-700 text-white shadow-xs'
+                                    : 'text-gray-700 hover:text-gray-900 hover:bg-cream-300'"
+                            >
+                                <span class="size-2 rounded-full bg-emerald-400"></span>
+                                <span>Published</span>
+                                <span class="px-1.5 py-0.2 rounded-full text-[10px]" :class="formFilterStatus === 'published' ? 'bg-emerald-800 text-emerald-100' : 'bg-cream-300 text-gray-700'">
+                                    {{ publishedFormsCount }}
+                                </span>
+                            </button>
+
+                            <button
+                                type="button"
+                                @click="formFilterStatus = 'draft'"
+                                class="px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center space-x-1.5"
+                                :class="formFilterStatus === 'draft'
+                                    ? 'bg-amber-600 text-white shadow-xs'
+                                    : 'text-gray-700 hover:text-gray-900 hover:bg-cream-300'"
+                            >
+                                <span class="size-2 rounded-full bg-amber-400"></span>
+                                <span>Drafts</span>
+                                <span class="px-1.5 py-0.2 rounded-full text-[10px]" :class="formFilterStatus === 'draft' ? 'bg-amber-700 text-amber-100' : 'bg-cream-300 text-gray-700'">
+                                    {{ draftFormsCount }}
+                                </span>
+                            </button>
+                        </div>
+
+                        <div class="text-xs text-gray-500 font-medium">
+                            <span v-if="draftFormsCount > 0" class="text-amber-800 font-bold">
+                                ⚠ {{ draftFormsCount }} unpublished draft {{ draftFormsCount === 1 ? 'form' : 'forms' }}
+                            </span>
+                            <span v-else class="text-emerald-800 font-bold">
+                                ✓ All configured forms are published
+                            </span>
+                        </div>
+                    </div>
+
                     <div v-if="feedbackForms.length === 0 && unconfiguredEvents.length === 0" class="bg-cream-200 rounded-3xl p-12 text-center border border-cream-500/50">
                         <div class="size-16 rounded-full bg-cream-100 text-gray-400 flex items-center justify-center mx-auto mb-4">
                             <svg class="size-8" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -1721,18 +1828,51 @@ const closeSamplePreviewModal = () => {
                         </button>
                     </div>
 
+                    <div v-else-if="filteredFeedbackForms.length === 0 && formFilterStatus !== 'all'" class="bg-cream-200 rounded-3xl p-10 text-center border border-cream-500/50">
+                        <p class="text-sm font-bold text-gray-800">No {{ formFilterStatus }} forms found.</p>
+                        <button
+                            type="button"
+                            @click="formFilterStatus = 'all'"
+                            class="mt-2 text-xs font-bold text-forest-900 underline hover:text-forest-950 cursor-pointer"
+                        >
+                            View all forms
+                        </button>
+                    </div>
+
                     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                         <!-- Configured Form Schemas -->
                         <div
-                            v-for="formItem in feedbackForms"
+                            v-for="formItem in filteredFeedbackForms"
                             :key="formItem.id"
-                            class="bg-cream-200 rounded-2xl border border-cream-500/50 shadow-xs hover:shadow-md transition-all p-5 flex flex-col justify-between"
+                            class="bg-cream-200 rounded-2xl border shadow-xs hover:shadow-md transition-all p-5 flex flex-col justify-between"
+                            :class="formItem.status === 'draft' ? 'border-amber-400/80 bg-amber-50/20' : 'border-cream-500/50'"
                         >
                             <div>
                                 <div class="flex items-start justify-between gap-2">
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-lime-200 text-forest-900 border border-forest-500/20">
-                                        Form #{{ formItem.id }}
-                                    </span>
+                                    <div class="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-lime-200 text-forest-900 border border-forest-500/20">
+                                            Form #{{ formItem.id }}
+                                        </span>
+
+                                        <!-- Status Badge -->
+                                        <span
+                                            v-if="formItem.status === 'draft'"
+                                            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300"
+                                            title="This form is currently unpublished"
+                                        >
+                                            <span class="size-1.5 rounded-full bg-amber-600"></span>
+                                            Draft
+                                        </span>
+                                        <span
+                                            v-else
+                                            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300"
+                                            title="This form is published and accepting submissions"
+                                        >
+                                            <span class="size-1.5 rounded-full bg-emerald-600"></span>
+                                            Published
+                                        </span>
+                                    </div>
+
                                     <span class="text-xs font-bold text-gray-500">
                                         {{ formItem.schema?.fields ? formItem.schema.fields.length : 0 }} questions
                                     </span>
@@ -1752,7 +1892,7 @@ const closeSamplePreviewModal = () => {
                                             <span class="size-5 rounded-full bg-lime-100 text-forest-900 text-[10px] font-bold flex items-center justify-center shrink-0">
                                                 {{ fld.weight || fldIdx + 1 }}
                                             </span>
-                                            <span class="font-medium text-gray-800 truncate">{{ fld.particular }}</span>
+                                            <span class="font-medium text-gray-800 truncate">{{ stripHtml(fld.particular) }}</span>
                                         </div>
                                         <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cream-200 text-gray-600 shrink-0 uppercase">
                                             {{ fld.option_source === 'fb_functions' ? 'functions' : fld.type }}
@@ -1761,9 +1901,30 @@ const closeSamplePreviewModal = () => {
                                 </div>
                             </div>
 
-                            <div class="mt-4 pt-3 border-t border-cream-500/40 flex items-center justify-between text-xs text-gray-500">
+                            <div class="mt-4 pt-3 border-t border-cream-500/40 flex items-center justify-between text-xs text-gray-500 flex-wrap gap-2">
                                 <span>{{ formItem.submissions_count ?? 0 }} submissions</span>
-                                <div class="flex items-center space-x-2">
+                                <div class="flex items-center space-x-1.5">
+                                    <!-- Quick Toggle Status Button -->
+                                    <button
+                                        type="button"
+                                        @click="toggleFeedbackFormStatus(formItem)"
+                                        :disabled="togglingFormStatusId === formItem.id"
+                                        class="px-2.5 py-1.5 rounded-xl font-semibold text-xs border shadow-2xs transition cursor-pointer flex items-center space-x-1 disabled:opacity-50"
+                                        :class="formItem.status === 'draft'
+                                            ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                                            : 'bg-cream-100 hover:bg-amber-50 text-amber-800 border-amber-300'"
+                                        :title="formItem.status === 'draft' ? 'Publish this form now' : 'Unpublish this form back to draft'"
+                                    >
+                                        <svg v-if="togglingFormStatusId === formItem.id" class="animate-spin size-3.5 text-current" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                                        </svg>
+                                        <template v-else>
+                                            <span v-if="formItem.status === 'draft'">🚀 Publish</span>
+                                            <span v-else>⏸ Unpublish</span>
+                                        </template>
+                                    </button>
+
                                     <button
                                         type="button"
                                         @click="openSamplePreviewModal(formItem.event || { id: formItem.event_id }, formItem)"
@@ -1787,43 +1948,45 @@ const closeSamplePreviewModal = () => {
                             </div>
                         </div>
 
-                        <!-- Unconfigured Events Prompt Cards -->
-                        <div
-                            v-for="unEvent in unconfiguredEvents"
-                            :key="'unconfigured-' + unEvent.id"
-                            class="bg-[#fffef9] rounded-2xl border-2 border-dashed border-cream-500/80 p-5 flex flex-col justify-between hover:border-forest-800 transition"
-                        >
-                            <div>
-                                <div class="flex items-start justify-between gap-2">
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300">
-                                        No Schema Configured
-                                    </span>
-                                    <span class="text-xs font-bold text-gray-400">
-                                        Event #{{ unEvent.id }}
-                                    </span>
+                        <!-- Unconfigured Events Prompt Cards (Show when filter is 'all') -->
+                        <template v-if="formFilterStatus === 'all'">
+                            <div
+                                v-for="unEvent in unconfiguredEvents"
+                                :key="'unconfigured-' + unEvent.id"
+                                class="bg-[#fffef9] rounded-2xl border-2 border-dashed border-cream-500/80 p-5 flex flex-col justify-between hover:border-forest-800 transition"
+                            >
+                                <div>
+                                    <div class="flex items-start justify-between gap-2">
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300">
+                                            No Schema Configured
+                                        </span>
+                                        <span class="text-xs font-bold text-gray-400">
+                                            Event #{{ unEvent.id }}
+                                        </span>
+                                    </div>
+
+                                    <h3 class="text-base font-bold text-gray-900 mt-2">
+                                        {{ unEvent.name }}
+                                    </h3>
+                                    <p class="text-xs text-gray-500 mt-1">
+                                        {{ unEvent.details || 'This event has no feedback questionnaire yet.' }}
+                                    </p>
                                 </div>
 
-                                <h3 class="text-base font-bold text-gray-900 mt-2">
-                                    {{ unEvent.name }}
-                                </h3>
-                                <p class="text-xs text-gray-500 mt-1">
-                                    {{ unEvent.details || 'This event has no feedback questionnaire yet.' }}
-                                </p>
+                                <div class="mt-4 pt-3 border-t border-cream-400/40 flex items-center justify-between">
+                                    <span class="text-xs text-gray-400 italic">0 questions</span>
+                                    <button
+                                        @click="openFormConfigModal(null, unEvent.id)"
+                                        class="inline-flex items-center px-3 py-1.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
+                                    >
+                                        <svg class="size-3.5 me-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                                        </svg>
+                                        Questionnaire
+                                    </button>
+                                </div>
                             </div>
-
-                            <div class="mt-4 pt-3 border-t border-cream-400/40 flex items-center justify-between">
-                                <span class="text-xs text-gray-400 italic">0 questions</span>
-                                <button
-                                    @click="openFormConfigModal(null, unEvent.id)"
-                                    class="inline-flex items-center px-3 py-1.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-semibold rounded-xl shadow-xs transition cursor-pointer"
-                                >
-                                    <svg class="size-3.5 me-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                                    </svg>
-                                    Questionnaire
-                                </button>
-                            </div>
-                        </div>
+                        </template>
                     </div>
                 </div>
             </div>
@@ -2025,7 +2188,7 @@ const closeSamplePreviewModal = () => {
             :agencies="agencies"
             :designations="designations"
             @close="closeConfigModal"
-            @saved="closeConfigModal"
+            @saved="onFormConfigSaved"
             @preview="openSamplePreviewModal"
         />
 
@@ -2794,16 +2957,14 @@ const closeSamplePreviewModal = () => {
                                     <h1
                                         class="text-2xl sm:text-3xl font-black tracking-tight"
                                         style="color: #ffffff;"
-                                    >
-                                        {{ previewEvent?.name || 'Evaluation Feedback Form' }}
-                                    </h1>
-                                    <p
-                                        v-if="previewEvent?.details"
-                                        class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium"
+                                        v-html="sanitizeHtml(previewForm?.schema?.title || previewEvent?.name || 'Evaluation Feedback Form')"
+                                    ></h1>
+                                    <div
+                                        v-if="previewForm?.schema?.description || previewEvent?.details"
+                                        class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium form-rich-content"
                                         style="color: #dcfce7;"
-                                    >
-                                        {{ previewEvent.details }}
-                                    </p>
+                                        v-html="sanitizeHtml(previewForm?.schema?.description || previewEvent?.details)"
+                                    ></div>
                                 </div>
                             </div>
                         </div>
@@ -2813,14 +2974,12 @@ const closeSamplePreviewModal = () => {
                             <!-- Multi-Page Progress Indicator -->
                             <div v-if="isPreviewPaginated" class="border-b border-cream-400/50 pb-4 space-y-2">
                                 <div class="flex items-center justify-between text-xs font-bold text-forest-900">
-                                    <span>{{ previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}` }}</span>
+                                    <span class="form-rich-content inline" v-html="sanitizeHtml(previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}`)"></span>
                                     <span v-if="previewForm?.schema?.pagination?.show_section_numbers !== false">
                                         Section {{ previewCurrentPageIdx + 1 }} of {{ previewSectionPages.length }}
                                     </span>
                                 </div>
-                                <p v-if="previewCurrentPage?.section?.description" class="text-xs text-gray-600 whitespace-pre-line">
-                                    {{ previewCurrentPage.section.description }}
-                                </p>
+                                <div v-if="previewCurrentPage?.section?.description" class="text-xs text-gray-600 leading-relaxed font-medium form-rich-content" v-html="sanitizeHtml(previewCurrentPage.section.description)"></div>
                                 <div v-if="previewForm?.schema?.pagination?.progress_bar !== false" class="h-2 w-full bg-cream-200 rounded-full overflow-hidden">
                                     <div
                                         class="h-full bg-forest-900 transition-all duration-300 rounded-full"
@@ -2851,8 +3010,8 @@ const closeSamplePreviewModal = () => {
                                         class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
                                     >
                                         <div>
-                                            <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight" v-html="field.particular"></h3>
-                                            <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="field.description"></div>
+                                            <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="sanitizeHtml(field.particular)"></h3>
+                                            <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                         </div>
                                     </div>
 
@@ -2861,8 +3020,8 @@ const closeSamplePreviewModal = () => {
                                         v-else-if="field.type === 'text_only' && isPreviewFieldConditionMet(field)"
                                         class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-2"
                                     >
-                                        <h4 class="text-sm sm:text-base font-bold text-forest-950" v-html="field.particular"></h4>
-                                        <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="field.description"></div>
+                                        <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="sanitizeHtml(field.particular)"></h4>
+                                        <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="sanitizeHtml(field.description)"></div>
                                     </div>
 
                                     <!-- Regular Question Card -->
@@ -2873,11 +3032,11 @@ const closeSamplePreviewModal = () => {
                                     <div class="flex items-start justify-between gap-3">
                                         <div class="flex-1">
                                             <label class="text-sm font-bold text-gray-900 block">
-                                                <span v-html="field.particular"></span>
+                                                <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                                 <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
                                                 <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>
                                             </label>
-                                            <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="field.description"></div>
+                                            <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                         </div>
                                         <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cream-200 text-gray-600 shrink-0">
                                             {{ field.type }}
@@ -2889,7 +3048,7 @@ const closeSamplePreviewModal = () => {
                                         <input
                                             v-model="previewAnswers[field.id]"
                                             type="text"
-                                            :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                            :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         />
                                     </div>
@@ -2899,7 +3058,7 @@ const closeSamplePreviewModal = () => {
                                         <textarea
                                             v-model="previewAnswers[field.id]"
                                             rows="3"
-                                            :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                            :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         ></textarea>
                                     </div>
@@ -2948,7 +3107,7 @@ const closeSamplePreviewModal = () => {
                                         <!-- If allow_other is true and an "Other" option is selected -->
                                         <div v-if="isPreviewOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                             <label class="block text-xs font-bold text-amber-900">
-                                                Please specify {{ field.particular }}
+                                                Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                             </label>
                                             <input
                                                 v-model="previewAnswers[`${field.id}_other`]"
@@ -2965,7 +3124,7 @@ const closeSamplePreviewModal = () => {
                                             v-model="previewAnswers[field.id]"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         >
-                                            <option value="" disabled>-- Select {{ field.particular }} --</option>
+                                            <option value="" disabled>-- Select {{ stripHtml(field.particular) }} --</option>
                                             <option v-for="opt in getPreviewFieldOptions(field)" :key="opt.value" :value="opt.value">
                                                 {{ opt.label }}
                                             </option>
@@ -2974,7 +3133,7 @@ const closeSamplePreviewModal = () => {
                                         <!-- If allow_other is true and an "Other" option is selected -->
                                         <div v-if="isPreviewOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                             <label class="block text-xs font-bold text-amber-900">
-                                                Please specify {{ field.particular }}
+                                                Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                             </label>
                                             <input
                                                 v-model="previewAnswers[`${field.id}_other`]"
@@ -2985,7 +3144,7 @@ const closeSamplePreviewModal = () => {
                                         </div>
                                     </div>
 
-                                    <!-- Checkbox Multi-Choice Tiles -->
+                                    <!-- Checkbox Multi-Select -->
                                     <div v-else-if="field.type === 'checkbox'" class="space-y-3">
                                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                                             <label
@@ -3008,7 +3167,7 @@ const closeSamplePreviewModal = () => {
                                         <!-- If allow_other is true and an "Other" option is selected -->
                                         <div v-if="isPreviewOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                             <label class="block text-xs font-bold text-amber-900">
-                                                Please specify {{ field.particular }}
+                                                Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                             </label>
                                             <input
                                                 v-model="previewAnswers[`${field.id}_other`]"
@@ -3109,22 +3268,19 @@ const closeSamplePreviewModal = () => {
                                         <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-yellow-300 text-forest-950 mb-2">
                                             Embedded Evaluation
                                         </span>
-                                        <h2 class="text-lg sm:text-xl font-black">
-                                            {{ previewEvent?.name }}
-                                        </h2>
-                                        <p v-if="previewEvent?.details" class="text-xs text-emerald-100 mt-1 line-clamp-2">
-                                            {{ previewEvent.details }}
-                                        </p>
+                                        <h2 class="text-lg sm:text-xl font-black" v-html="sanitizeHtml(previewForm?.schema?.title || previewEvent?.name)"></h2>
+                                        <div v-if="previewForm?.schema?.description || previewEvent?.details" class="text-xs text-emerald-100 mt-1 form-rich-content" v-html="sanitizeHtml(previewForm?.schema?.description || previewEvent?.details)"></div>
                                     </div>
 
                                     <!-- Multi-Page Progress Indicator -->
                                     <div v-if="isPreviewPaginated" class="border-b border-cream-400/50 pb-3 space-y-1.5">
                                         <div class="flex items-center justify-between text-xs font-bold text-forest-900">
-                                            <span>{{ previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}` }}</span>
+                                            <span class="form-rich-content inline" v-html="sanitizeHtml(previewCurrentPage?.section?.particular || `Section ${previewCurrentPageIdx + 1}`)"></span>
                                             <span v-if="previewForm?.schema?.pagination?.show_section_numbers !== false">
                                                 Section {{ previewCurrentPageIdx + 1 }} of {{ previewSectionPages.length }}
                                             </span>
                                         </div>
+                                        <div v-if="previewCurrentPage?.section?.description" class="text-xs text-gray-600 leading-relaxed font-medium form-rich-content" v-html="sanitizeHtml(previewCurrentPage.section.description)"></div>
                                         <div v-if="previewForm?.schema?.pagination?.progress_bar !== false" class="h-1.5 w-full bg-cream-200 rounded-full overflow-hidden">
                                             <div
                                                 class="h-full bg-forest-900 transition-all duration-300 rounded-full"
@@ -3144,8 +3300,8 @@ const closeSamplePreviewModal = () => {
                                                 v-if="field.type === 'section'"
                                                 class="pt-3 pb-1 border-b border-forest-900/15 first:pt-0"
                                             >
-                                                <h3 class="text-sm font-bold text-forest-950" v-html="field.particular"></h3>
-                                                <div v-if="field.description" class="text-xs text-gray-500 mt-0.5 form-rich-content" v-html="field.description"></div>
+                                                <h3 class="text-sm font-bold text-forest-950 form-rich-content" v-html="sanitizeHtml(field.particular)"></h3>
+                                                <div v-if="field.description" class="text-xs text-gray-500 mt-0.5 form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                             </div>
 
                                             <!-- Text Only Instructional Section in Embed -->
@@ -3153,8 +3309,8 @@ const closeSamplePreviewModal = () => {
                                                 v-else-if="field.type === 'text_only' && isPreviewFieldConditionMet(field)"
                                                 class="p-3.5 bg-cream-100/80 rounded-xl border border-cream-400/80 space-y-1.5"
                                             >
-                                                <h4 class="text-xs font-bold text-forest-950" v-html="field.particular"></h4>
-                                                <div v-if="field.description" class="text-[11px] text-gray-700 form-rich-content overflow-x-auto" v-html="field.description"></div>
+                                                <h4 class="text-xs font-bold text-forest-950 form-rich-content" v-html="sanitizeHtml(field.particular)"></h4>
+                                                <div v-if="field.description" class="text-[11px] text-gray-700 form-rich-content overflow-x-auto" v-html="sanitizeHtml(field.description)"></div>
                                             </div>
 
                                             <div
@@ -3164,10 +3320,10 @@ const closeSamplePreviewModal = () => {
                                             <div class="flex items-start justify-between gap-2">
                                                 <div class="flex-1">
                                                     <label class="text-xs font-bold text-gray-900 block">
-                                                        <span v-html="field.particular"></span>
+                                                        <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                                         <span v-if="field.required" class="text-red-500 ml-0.5">*</span>
                                                     </label>
-                                                    <div v-if="field.description" class="text-[11px] text-gray-600 mt-0.5 form-rich-content" v-html="field.description"></div>
+                                                    <div v-if="field.description" class="text-[11px] text-gray-600 mt-0.5 form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                                 </div>
                                                 <span class="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase bg-gray-100 text-gray-500 shrink-0">
                                                     {{ field.type }}
@@ -3179,7 +3335,7 @@ const closeSamplePreviewModal = () => {
                                                 <input
                                                     v-model="previewAnswers[field.id]"
                                                     type="text"
-                                                    :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                                    :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
                                                     class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
                                                 />
                                             </div>
@@ -3188,7 +3344,7 @@ const closeSamplePreviewModal = () => {
                                                 <textarea
                                                     v-model="previewAnswers[field.id]"
                                                     rows="2"
-                                                    :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                                    :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
                                                     class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
                                                 ></textarea>
                                             </div>
@@ -3243,7 +3399,7 @@ const closeSamplePreviewModal = () => {
                                                     v-model="previewAnswers[field.id]"
                                                     class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
                                                 >
-                                                    <option value="" disabled>-- Select {{ field.particular }} --</option>
+                                                    <option value="" disabled>-- Select {{ stripHtml(field.particular) }} --</option>
                                                     <option v-for="opt in getPreviewFieldOptions(field)" :key="opt.value" :value="opt.value">
                                                         {{ opt.label }}
                                                     </option>

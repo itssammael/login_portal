@@ -107,6 +107,7 @@ const ensureFieldUids = (fields) => {
 
 const formConfig = useForm({
     event_id: '',
+    status: 'published',
     schema: JSON.parse(JSON.stringify(defaultSchemaTemplate)),
 });
 
@@ -230,10 +231,12 @@ const initializeModal = () => {
 
     if (targetForm) {
         formConfig.event_id = targetForm.event_id;
+        formConfig.status = targetForm.status || 'published';
         formConfig.schema = JSON.parse(JSON.stringify(targetForm.schema));
     } else if (targetEventId) {
         formConfig.event_id = Number(targetEventId);
         const existing = props.feedbackForms.find((f) => f.event_id === Number(targetEventId));
+        formConfig.status = existing?.status || 'published';
         formConfig.schema = existing
             ? JSON.parse(JSON.stringify(existing.schema))
             : JSON.parse(JSON.stringify(defaultSchemaTemplate));
@@ -241,15 +244,18 @@ const initializeModal = () => {
         const firstUnconfigured = unconfiguredEvents.value[0];
         if (firstUnconfigured) {
             formConfig.event_id = firstUnconfigured.id;
+            formConfig.status = 'published';
             formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
         } else if (props.events.length > 0) {
             formConfig.event_id = props.events[0].id;
             const existing = props.feedbackForms.find((f) => f.event_id === Number(formConfig.event_id));
+            formConfig.status = existing?.status || 'published';
             formConfig.schema = existing
                 ? JSON.parse(JSON.stringify(existing.schema))
                 : JSON.parse(JSON.stringify(defaultSchemaTemplate));
         } else {
             formConfig.event_id = '';
+            formConfig.status = 'published';
             formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
         }
     }
@@ -296,8 +302,10 @@ const onEventSelectionChange = () => {
     const existing = props.feedbackForms.find((f) => f.event_id === Number(formConfig.event_id));
     if (existing && existing.schema?.fields) {
         formConfig.schema = JSON.parse(JSON.stringify(existing.schema));
+        formConfig.status = existing.status || 'published';
     } else {
         formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
+        formConfig.status = 'published';
         if (currentSelectedEvent.value?.name) {
             formConfig.schema.title = `${currentSelectedEvent.value.name} Evaluation`;
         }
@@ -733,6 +741,16 @@ const applyImportedFields = (strategy) => {
 };
 
 // Save handler
+const saveSuccessMessage = ref('');
+let saveSuccessTimer = null;
+
+const saveWithStatus = (targetStatus) => {
+    if (targetStatus) {
+        formConfig.status = targetStatus;
+    }
+    saveSchema();
+};
+
 const saveSchema = () => {
     if (activeTab.value === 'json') {
         if (!syncJsonToInteractive()) return;
@@ -741,8 +759,14 @@ const saveSchema = () => {
     formConfig.post(route('admin.feedback.forms.save'), {
         preserveScroll: true,
         onSuccess: () => {
-            emit('saved');
-            // emit('close');
+            saveSuccessMessage.value = formConfig.status === 'draft'
+                ? 'Draft saved successfully!'
+                : 'Form published successfully!';
+            if (saveSuccessTimer) clearTimeout(saveSuccessTimer);
+            saveSuccessTimer = setTimeout(() => {
+                saveSuccessMessage.value = '';
+            }, 4000);
+            emit('saved', formConfig.event_id);
         },
         onError: () => {
             if (schemaErrorsList.value.length > 0) {
@@ -857,8 +881,20 @@ onUnmounted(() => {
                 </button>
             </nav>
 
-            <!-- Right Actions: Preview | Reset | Save Button -->
+            <!-- Right Actions: Status Badge | Preview | Reset | Save as Draft / Publish Buttons -->
             <div class="flex items-center space-x-2 shrink-0">
+                <!-- Status Badge -->
+                <div
+                    class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition select-none"
+                    :class="formConfig.status === 'draft'
+                        ? 'bg-amber-50 text-amber-800 border-amber-300'
+                        : 'bg-emerald-50 text-emerald-800 border-emerald-300'"
+                    :title="formConfig.status === 'draft' ? 'Form is currently a Draft (hidden from public respondents)' : 'Form is Published (publicly accessible)'"
+                >
+                    <span class="size-2 rounded-full" :class="formConfig.status === 'draft' ? 'bg-amber-500' : 'bg-emerald-500'"></span>
+                    <span>{{ formConfig.status === 'draft' ? 'Draft' : 'Published' }}</span>
+                </div>
+
                 <button
                     type="button"
                     @click="openPreview"
@@ -881,17 +917,91 @@ onUnmounted(() => {
                     ↺
                 </button>
 
-                <button
-                    type="button"
-                    @click="saveSchema"
-                    :disabled="formConfig.processing"
-                    class="px-4.5 py-1.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                <!-- Save Success Message indicator -->
+                <transition
+                    enter-active-class="transition duration-200 ease-out"
+                    enter-from-class="opacity-0 translate-y-[-4px]"
+                    enter-to-class="opacity-100 translate-y-0"
+                    leave-active-class="transition duration-150 ease-in"
+                    leave-from-class="opacity-100 translate-y-0"
+                    leave-to-class="opacity-0 translate-y-[-4px]"
                 >
-                    <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                    </svg>
-                    <span>{{ formConfig.processing ? 'Saving...' : 'Save Schema' }}</span>
-                </button>
+                    <div
+                        v-if="saveSuccessMessage"
+                        class="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-xl text-xs font-bold shadow-2xs"
+                    >
+                        <svg class="size-3.5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                        <span>{{ saveSuccessMessage }}</span>
+                    </div>
+                </transition>
+
+                <!-- If Form is currently Draft -->
+                <template v-if="formConfig.status === 'draft'">
+                    <button
+                        type="button"
+                        @click="saveWithStatus('draft')"
+                        :disabled="formConfig.processing"
+                        class="px-3.5 py-1.5 bg-cream-100 hover:bg-cream-300 text-forest-900 border border-cream-400 text-xs font-bold rounded-xl shadow-2xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Save current edits as draft"
+                    >
+                        <svg class="size-3.5 text-forest-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.75V16.5L12 14.25 7.5 16.5V3.75m9 0H7.5m9 0a2.25 2.25 0 012.25 2.25v13.5A2.25 2.25 0 0116.5 21h-9a2.25 2.25 0 01-2.25-2.25V6a2.25 2.25 0 012.25-2.25" />
+                        </svg>
+                        <span>Save as Draft</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        @click="saveWithStatus('published')"
+                        :disabled="formConfig.processing"
+                        class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Publish form so respondents can access and submit"
+                    >
+                        <svg v-if="!formConfig.processing" class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.58-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.458 14.96 14.96 0 01.06-.312m7.38-5.84a6.002 6.002 0 015.84 7.38" />
+                        </svg>
+                        <svg v-else class="animate-spin size-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                        </svg>
+                        <span>{{ formConfig.processing ? 'Publishing...' : 'Publish Form' }}</span>
+                    </button>
+                </template>
+
+                <!-- If Form is currently Published -->
+                <template v-else>
+                    <button
+                        type="button"
+                        @click="saveWithStatus('draft')"
+                        :disabled="formConfig.processing"
+                        class="px-3 py-1.5 bg-cream-100 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold rounded-xl shadow-2xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Unpublish form back to draft mode"
+                    >
+                        <svg class="size-3.5 text-amber-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5" />
+                        </svg>
+                        <span>Unpublish</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        @click="saveWithStatus('published')"
+                        :disabled="formConfig.processing"
+                        class="px-4 py-1.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Save changes and keep published"
+                    >
+                        <svg v-if="!formConfig.processing" class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                        <svg v-else class="animate-spin size-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                        </svg>
+                        <span>{{ formConfig.processing ? 'Saving...' : 'Save & Publish' }}</span>
+                    </button>
+                </template>
             </div>
         </header>
 
@@ -982,7 +1092,6 @@ onUnmounted(() => {
                             <div>
                                 <FormRichEditor
                                     v-model="formConfig.schema.description"
-                                    mode="basic"
                                     placeholder="Form description / instructions for respondents..."
                                     min-height="60px"
                                     input-class="text-xs sm:text-sm text-gray-700 bg-cream-50/40"
@@ -1096,7 +1205,8 @@ onUnmounted(() => {
                                             <FormRichEditor
                                                 v-model="field.particular"
                                                 @blur="onParticularBlur(field)"
-                                                mode="basic"
+                                                min-height="40px"
+                                                :allow-tables="false"
                                                 single-line
                                                 placeholder="Section Title"
                                                 input-class="text-base font-bold text-gray-900 bg-cream-50/40"
@@ -1106,7 +1216,6 @@ onUnmounted(() => {
                                             <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Section Description</label>
                                             <FormRichEditor
                                                 v-model="field.description"
-                                                mode="basic"
                                                 placeholder="Section description or guidance (optional)"
                                                 min-height="65px"
                                                 input-class="text-xs text-gray-700 bg-cream-50/40"
@@ -1234,7 +1343,8 @@ onUnmounted(() => {
                                             <FormRichEditor
                                                 v-model="field.particular"
                                                 @blur="onParticularBlur(field)"
-                                                mode="basic"
+                                                min-height="40px"
+                                                :allow-tables="false"
                                                 single-line
                                                 :placeholder="field.type === 'text_only' ? 'Instructional Section Title / Heading' : 'Question'"
                                                 input-class="text-base font-semibold text-gray-900 bg-cream-50/60"
@@ -1267,9 +1377,6 @@ onUnmounted(() => {
                                         </div>
                                         <FormRichEditor
                                             v-model="field.description"
-                                            mode="rich"
-                                            :allow-bullets="true"
-                                            :allow-tables="true"
                                             min-height="160px"
                                             placeholder="Instructional text or guidance for respondents (optional). Use toolbar above for bullets, text styles, or draw tables..."
                                             input-class="text-xs text-gray-700 bg-cream-50/40"
@@ -1281,7 +1388,6 @@ onUnmounted(() => {
                                         <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Description / Subtitle</span>
                                         <FormRichEditor
                                             v-model="field.description"
-                                            mode="basic"
                                             placeholder="Description / subtitle (optional)"
                                             min-height="60px"
                                             input-class="text-xs text-gray-600"

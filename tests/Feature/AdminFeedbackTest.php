@@ -1258,4 +1258,149 @@ class AdminFeedbackTest extends TestCase
             ->where('compiledResponses', [])
         );
     }
+
+    public function test_admin_can_save_feedback_form_as_draft(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        $schema = [
+            'title' => 'Draft Evaluation Form',
+            'fields' => [
+                [
+                    'id' => 'q1',
+                    'particular' => 'How was the conference?',
+                    'type' => 'text',
+                    'weight' => 1,
+                    'options' => [],
+                ],
+            ],
+        ];
+
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'status' => Feedback::STATUS_DRAFT,
+            'schema' => $schema,
+        ]);
+
+        $response->assertSessionHas('success');
+        $this->assertDatabaseHas('feedback', [
+            'event_id' => $event->id,
+            'status' => Feedback::STATUS_DRAFT,
+        ]);
+
+        $feedback = Feedback::where('event_id', $event->id)->firstOrFail();
+        $this->assertTrue($feedback->isDraft());
+        $this->assertFalse($feedback->isPublished());
+    }
+
+    public function test_admin_can_save_feedback_form_as_published(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        $schema = [
+            'title' => 'Published Evaluation Form',
+            'fields' => [
+                [
+                    'id' => 'q1',
+                    'particular' => 'Rate overall experience',
+                    'type' => 'text',
+                    'weight' => 1,
+                    'options' => [],
+                ],
+            ],
+        ];
+
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'status' => Feedback::STATUS_PUBLISHED,
+            'schema' => $schema,
+        ]);
+
+        $response->assertSessionHas('success');
+        $this->assertDatabaseHas('feedback', [
+            'event_id' => $event->id,
+            'status' => Feedback::STATUS_PUBLISHED,
+        ]);
+
+        $feedback = Feedback::where('event_id', $event->id)->firstOrFail();
+        $this->assertTrue($feedback->isPublished());
+        $this->assertFalse($feedback->isDraft());
+    }
+
+    public function test_admin_can_toggle_feedback_form_status(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+        $feedback = Feedback::factory()->published()->create([
+            'event_id' => $event->id,
+        ]);
+
+        // Toggle published to draft
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.status', $feedback->id), [
+            'status' => Feedback::STATUS_DRAFT,
+        ]);
+
+        $response->assertSessionHas('success');
+        $feedback->refresh();
+        $this->assertEquals(Feedback::STATUS_DRAFT, $feedback->status);
+
+        $this->assertDatabaseHas('audit_logs', [
+            'admin_id' => $admin->id,
+            'action' => 'unpublished_feedback_form',
+            'target_id' => $feedback->id,
+        ]);
+
+        // Toggle back to published without explicit status parameter
+        $responseToggle = $this->actingAs($admin)->post(route('admin.feedback.forms.status', $feedback->id));
+
+        $responseToggle->assertSessionHas('success');
+        $feedback->refresh();
+        $this->assertEquals(Feedback::STATUS_PUBLISHED, $feedback->status);
+
+        $this->assertDatabaseHas('audit_logs', [
+            'admin_id' => $admin->id,
+            'action' => 'published_feedback_form',
+            'target_id' => $feedback->id,
+        ]);
+    }
+
+    public function test_non_admin_cannot_toggle_feedback_form_status(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $feedback = Feedback::factory()->published()->create();
+
+        $response = $this->actingAs($user)->post(route('admin.feedback.forms.status', $feedback->id), [
+            'status' => Feedback::STATUS_DRAFT,
+        ]);
+
+        $response->assertForbidden();
+    }
+
+    public function test_admin_omitting_status_preserves_existing_draft_status(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+        $feedback = Feedback::factory()->draft()->create([
+            'event_id' => $event->id,
+        ]);
+
+        $schema = [
+            'title' => 'Updated Draft Title',
+            'fields' => [
+                ['id' => 'q1', 'particular' => 'Question 1', 'type' => 'text', 'weight' => 1],
+            ],
+        ];
+
+        // Omit 'status' in payload
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'schema' => $schema,
+        ]);
+
+        $response->assertSessionHas('success');
+        $feedback->refresh();
+        $this->assertEquals(Feedback::STATUS_DRAFT, $feedback->status);
+    }
 }

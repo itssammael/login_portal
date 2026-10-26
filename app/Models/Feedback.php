@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -10,6 +11,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Feedback extends Model
 {
     use HasFactory;
+
+    public const STATUS_PUBLISHED = 'published';
+
+    public const STATUS_DRAFT = 'draft';
 
     /**
      * The table associated with the model.
@@ -26,7 +31,47 @@ class Feedback extends Model
     protected $fillable = [
         'event_id',
         'schema',
+        'status',
+        'created_by',
     ];
+
+    /**
+     * Check if the feedback form is published and open to respondents.
+     */
+    public function isPublished(): bool
+    {
+        return $this->status === self::STATUS_PUBLISHED;
+    }
+
+    /**
+     * Check if the feedback form is in draft mode.
+     */
+    public function isDraft(): bool
+    {
+        return $this->status === self::STATUS_DRAFT;
+    }
+
+    /**
+     * Scope query to published forms.
+     *
+     * @param  Builder<Feedback>  $query
+     * @return Builder<Feedback>
+     */
+    public function scopePublished(Builder $query): Builder
+    {
+        return $query->where('status', self::STATUS_PUBLISHED);
+    }
+
+    /**
+     * Scope query to draft forms.
+     *
+     * @param  Builder<Feedback>  $query
+     * @return Builder<Feedback>
+     */
+    public function scopeDraft(Builder $query): Builder
+    {
+        return $query->where('status', self::STATUS_DRAFT);
+    }
 
     /**
      * The attributes that should be cast.
