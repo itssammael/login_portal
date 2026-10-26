@@ -6,6 +6,7 @@ use App\Events\MessageSent;
 use App\Models\Conversation;
 use App\Models\ConversationParticipant;
 use App\Models\Message;
+use App\Models\MessageMention;
 use App\Models\User;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Filesystem\Filesystem;
@@ -1356,5 +1357,236 @@ class ChatTest extends TestCase
         $response->assertRedirect(route('chat.index', ['conversation' => $olderUnkeyed->id]));
         $this->assertEquals($directKey, $olderUnkeyed->fresh()->direct_key);
         $this->assertNull($newerUnkeyed->fresh()->direct_key);
+    }
+
+    public function test_mention_creation_in_group_chat_records_mention_for_target_user_only(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob Smith']);
+        $charlie = User::factory()->create(['name' => 'Charlie Brown']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Project Group', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $response = $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hello @Bob Smith, please review this draft!',
+        ]);
+
+        $response->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $bob->id,
+        ]);
+
+        $this->assertDatabaseMissing('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $charlie->id,
+        ]);
+
+        $this->assertDatabaseMissing('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $sender->id,
+        ]);
+    }
+
+    public function test_repeated_mentions_in_one_message_do_not_duplicate_records(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob', 'username' => 'bobby']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Dev Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hey @bobby, take a look! Also pinging @bobby again.',
+        ]);
+
+        $this->assertSame(1, MessageMention::where('conversation_id', $group->id)->where('user_id', $bob->id)->count());
+    }
+
+    public function test_sender_mentioning_self_does_not_create_mention_record(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice', 'username' => 'alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Dev Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Note to self: @alice update deployment docs',
+        ]);
+
+        $this->assertSame(0, MessageMention::where('user_id', $sender->id)->count());
+    }
+
+    public function test_chat_list_shows_unread_mention_indicator_only_to_mentioned_user(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $mentionedUser = User::factory()->create(['name' => 'Seanna', 'username' => 'seanna']);
+        $otherUser = User::factory()->create(['name' => 'David']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Design Sync', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id, 'last_read_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $mentionedUser->id, 'last_read_at' => now()->subHour()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $otherUser->id, 'last_read_at' => now()->subHour()]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Welcome to the team @seanna!',
+        ]);
+
+        // Mentioned user views chat index (list of conversations)
+        $responseMentioned = $this->actingAs($mentionedUser)->get(route('chat.index'));
+        $responseMentioned->assertOk();
+        $responseMentioned->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertTrue($target['has_unread_mentions']);
+            $this->assertEquals(1, $target['unread_mentions_count']);
+
+            return true;
+        });
+
+        // Other user views chat index: has unread message but NO unread mention
+        $responseOther = $this->actingAs($otherUser)->get(route('chat.index'));
+        $responseOther->assertOk();
+        $responseOther->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+            $this->assertEquals(1, $target['unread_count']);
+
+            return true;
+        });
+    }
+
+    public function test_viewing_conversation_clears_unread_mention_indicator(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $mentionedUser = User::factory()->create(['name' => 'Seanna', 'username' => 'seanna']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Design Sync', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id, 'last_read_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $mentionedUser->id, 'last_read_at' => now()->subHour()]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Welcome @seanna!',
+        ]);
+
+        // Viewing the conversation explicitly via query param
+        $response = $this->actingAs($mentionedUser)->get(route('chat.index', ['conversation' => $group->id]));
+        $response->assertOk();
+        $response->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+            $this->assertEquals(0, $target['unread_count']);
+
+            return true;
+        });
+    }
+
+    public function test_overlapping_names_resolve_to_longest_full_name_participant_only(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+        $bobSmith = User::factory()->create(['name' => 'Bob Smith']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bobSmith->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hello @Bob Smith please check this',
+        ]);
+
+        $this->assertDatabaseHas('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $bobSmith->id,
+        ]);
+
+        $this->assertDatabaseMissing('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $bob->id,
+        ]);
+    }
+
+    public function test_mention_must_be_preceded_by_start_of_message_or_whitespace(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'myemail@Bob is not a mention',
+        ]);
+
+        $this->assertSame(0, MessageMention::where('conversation_id', $group->id)->count());
+    }
+
+    public function test_editing_message_reconciles_mentions_and_broadcasts_ids(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob', 'username' => 'bobby']);
+        $charlie = User::factory()->create(['name' => 'Charlie', 'username' => 'charlie']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hey @bobby check this',
+        ]);
+
+        $message = Message::where('conversation_id', $group->id)->first();
+        $this->assertNotNull($message);
+        $this->assertDatabaseHas('message_mentions', [
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+        ]);
+
+        // Edit message to mention Charlie instead of Bob
+        $response = $this->actingAs($sender)->patch(route('chat.edit-message', $message), [
+            'body' => 'Hey @charlie check this instead',
+        ]);
+
+        $response->assertSessionHasNoErrors();
+
+        // Mention for Bob is removed, mention for Charlie is created
+        $this->assertDatabaseMissing('message_mentions', [
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+        ]);
+        $this->assertDatabaseHas('message_mentions', [
+            'message_id' => $message->id,
+            'user_id' => $charlie->id,
+        ]);
+
+        // Verify broadcast payload
+        Event::assertDispatched(MessageSent::class, function (MessageSent $event) use ($bob, $charlie) {
+            if ($event->action !== 'edited') {
+                return false;
+            }
+            $data = $event->messageData;
+
+            return in_array($charlie->id, $data['mentioned_user_ids'], true)
+                && in_array($bob->id, $data['previous_mentioned_user_ids'], true);
+        });
     }
 }

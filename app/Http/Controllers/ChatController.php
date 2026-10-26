@@ -39,13 +39,21 @@ class ChatController extends Controller
         // Ensure system conversation exists for current user
         Conversation::getOrCreateSystemConversationForUser($currentUser);
 
+        // Mark active conversation as read early if requested so unread counts reflect viewing state
+        $activeConversationId = $request->query('conversation');
+        if ($activeConversationId) {
+            ConversationParticipant::where('conversation_id', $activeConversationId)
+                ->where('user_id', $currentUser->id)
+                ->update(['last_read_at' => now()]);
+        }
+
         // Fetch user conversations
         $conversations = Conversation::query()
             ->whereHas('participants', function ($query) use ($currentUser): void {
                 $query->where('user_id', $currentUser->id);
             })
             ->with([
-                'users:id,name,email,profile_photo_path,last_seen_at',
+                'users:id,name,username,email,profile_photo_path,last_seen_at,is_banned',
             ])
             ->orderByDesc('last_message_at')
             ->orderByDesc('updated_at')
@@ -167,14 +175,18 @@ class ChatController extends Controller
                     'other_user' => $otherUser ? [
                         'id' => $otherUser->id,
                         'name' => $otherUser->name,
+                        'username' => $otherUser->username,
                         'email' => $otherUser->email,
                         'profile_photo_url' => $otherUser->profile_photo_url,
                         'is_online' => $otherUser->is_online,
                         'last_seen_at' => $otherUser->last_seen_at?->diffForHumans(),
+                        'is_banned' => (bool) $otherUser->is_banned,
                     ] : null,
                     'participants' => $conversation->type === 'group' ? $conversation->users->map(fn (User $user): array => [
                         'id' => $user->id,
                         'name' => $user->name,
+                        'username' => $user->username,
+                        'is_banned' => (bool) $user->is_banned,
                         'role' => $user->pivot?->role ?? 'member',
                         'is_admin' => ($user->pivot?->role === 'admin'),
                     ])->values()->all() : [],
@@ -219,7 +231,7 @@ class ChatController extends Controller
                     $query->where('user_id', $currentUser->id);
                 })
                 ->with([
-                    'users:id,name,email,profile_photo_path,last_seen_at',
+                    'users:id,name,username,email,profile_photo_path,last_seen_at,is_banned',
                     'participants',
                 ])
                 ->first();
@@ -273,12 +285,14 @@ class ChatController extends Controller
                     return [
                         'id' => $u->id,
                         'name' => $u->name,
+                        'username' => $u->username,
                         'email' => $u->email,
                         'profile_photo_url' => $u->profile_photo_url,
                         'is_online' => $u->is_online,
                         'last_seen_at' => $u->last_seen_at?->diffForHumans(),
                         'role' => $role,
                         'is_admin' => $role === 'admin',
+                        'is_banned' => (bool) $u->is_banned,
                     ];
                 })->values();
 
@@ -321,10 +335,12 @@ class ChatController extends Controller
                     'other_user' => $otherUser ? [
                         'id' => $otherUser->id,
                         'name' => $otherUser->name,
+                        'username' => $otherUser->username,
                         'email' => $otherUser->email,
                         'profile_photo_url' => $otherUser->profile_photo_url,
                         'is_online' => $otherUser->is_online,
                         'last_seen_at' => $otherUser->last_seen_at?->diffForHumans(),
+                        'is_banned' => (bool) $otherUser->is_banned,
                     ] : null,
                     'participants' => $participants,
                     'total_messages' => $totalMessages,
@@ -369,7 +385,7 @@ class ChatController extends Controller
                 });
             })
             ->with([
-                'users:id,name,email,profile_photo_path,last_seen_at',
+                'users:id,name,username,email,profile_photo_path,last_seen_at,is_banned',
                 'participants',
             ])
             ->orderByDesc('last_message_at')
@@ -479,6 +495,8 @@ class ChatController extends Controller
                 'participants' => $conversation->type === 'group' ? $conversation->users->map(fn (User $user): array => [
                     'id' => $user->id,
                     'name' => $user->name,
+                    'username' => $user->username,
+                    'is_banned' => (bool) $user->is_banned,
                     'role' => $user->pivot?->role ?? 'member',
                     'is_admin' => ($user->pivot?->role === 'admin'),
                 ])->values()->all() : [],
@@ -1126,21 +1144,15 @@ class ChatController extends Controller
             'status' => Message::STATUS_SENT,
         ]);
 
-        $mentionedUserIds = [];
-        if ($rawBody && $conversation->isGroup()) {
-            $participants = $conversation->users()->where('users.id', '!=', $currentUser->id)->get();
-            foreach ($participants as $partUser) {
-                $escapedName = preg_quote($partUser->name, '/');
-                if (preg_match('/@'.$escapedName.'(?!\w)/i', $rawBody)) {
-                    $mentionedUserIds[] = $partUser->id;
-                    MessageMention::create([
-                        'message_id' => $messageModel->id,
-                        'conversation_id' => $conversation->id,
-                        'user_id' => $partUser->id,
-                        'created_at' => now(),
-                    ]);
-                }
-            }
+        $mentionedUserIds = $this->resolveMentionedUserIds($conversation, $rawBody, $currentUser);
+        foreach ($mentionedUserIds as $userId) {
+            MessageMention::firstOrCreate([
+                'message_id' => $messageModel->id,
+                'conversation_id' => $conversation->id,
+                'user_id' => $userId,
+            ], [
+                'created_at' => now(),
+            ]);
         }
 
         $conversation->update(['last_message_at' => now()]);
@@ -1240,8 +1252,38 @@ class ChatController extends Controller
             'edited_at' => now(),
         ]);
 
-        $message->load(['sender', 'replyTo.sender']);
+        $existingMentionedUserIds = MessageMention::where('message_id', $message->id)
+            ->pluck('user_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $newMentionedUserIds = $this->resolveMentionedUserIds(
+            $message->conversation,
+            $validated['body'],
+            $currentUser
+        );
+
+        $addedUserIds = array_diff($newMentionedUserIds, $existingMentionedUserIds);
+        foreach ($addedUserIds as $userId) {
+            MessageMention::firstOrCreate([
+                'message_id' => $message->id,
+                'conversation_id' => $message->conversation_id,
+                'user_id' => $userId,
+            ], [
+                'created_at' => now(),
+            ]);
+        }
+
+        $removedUserIds = array_diff($existingMentionedUserIds, $newMentionedUserIds);
+        if (! empty($removedUserIds)) {
+            MessageMention::where('message_id', $message->id)
+                ->whereIn('user_id', $removedUserIds)
+                ->delete();
+        }
+
+        $message->load(['sender', 'replyTo.sender', 'mentions']);
         $formatted = $this->formatMessage($message, $currentUser, $senderKey);
+        $formatted['mentioned_user_ids'] = $newMentionedUserIds;
 
         broadcast(new MessageSent('Message edited', $message->conversation_id, [
             'message' => $formatted,
@@ -1249,6 +1291,8 @@ class ChatController extends Controller
             'body' => $validated['body'],
             'edited_at' => $message->edited_at->toISOString(),
             'edited_at_relative' => $message->edited_at->diffForHumans(),
+            'mentioned_user_ids' => $newMentionedUserIds,
+            'previous_mentioned_user_ids' => $existingMentionedUserIds,
         ], 'edited'));
 
         return back();
@@ -1638,6 +1682,77 @@ class ChatController extends Controller
                 ? $message->mentions->pluck('user_id')->map(fn ($id) => (int) $id)->values()->all()
                 : MessageMention::where('message_id', $message->id)->pluck('user_id')->map(fn ($id) => (int) $id)->values()->all(),
         ];
+    }
+
+    /**
+     * Parse and resolve mentioned user IDs from message text for a conversation.
+     * Resolves complete mention tokens to only one participant (e.g. "@Bob Smith" resolves to "Bob Smith", not "Bob").
+     *
+     * @return array<int>
+     */
+    protected function resolveMentionedUserIds(Conversation $conversation, ?string $rawBody, User $currentUser): array
+    {
+        if (! $rawBody || ! in_array($conversation->type, ['group', 'direct'], true)) {
+            return [];
+        }
+
+        $participants = $conversation->users()
+            ->where('users.id', '!=', $currentUser->id)
+            ->where('is_banned', false)
+            ->get();
+
+        if ($participants->isEmpty()) {
+            return [];
+        }
+
+        $candidatesByAtPos = [];
+
+        foreach ($participants as $partUser) {
+            $escapedName = preg_quote($partUser->name, '/');
+            if (preg_match_all('/(?:^|\s)@'.$escapedName.'(?!\w)/i', $rawBody, $nameMatches, PREG_OFFSET_CAPTURE)) {
+                foreach ($nameMatches[0] as $match) {
+                    $matchedStr = $match[0];
+                    $matchOffset = $match[1];
+                    $atPos = $matchOffset + strpos($matchedStr, '@');
+                    $tokenLen = strlen($matchedStr) - strpos($matchedStr, '@');
+
+                    if (! isset($candidatesByAtPos[$atPos]) || $tokenLen > $candidatesByAtPos[$atPos]['length']) {
+                        $candidatesByAtPos[$atPos] = [
+                            'user_id' => $partUser->id,
+                            'length' => $tokenLen,
+                        ];
+                    }
+                }
+            }
+
+            if (! empty($partUser->username)) {
+                $escapedUsername = preg_quote($partUser->username, '/');
+                if (preg_match_all('/(?:^|\s)@'.$escapedUsername.'(?!\w)/i', $rawBody, $userMatches, PREG_OFFSET_CAPTURE)) {
+                    foreach ($userMatches[0] as $match) {
+                        $matchedStr = $match[0];
+                        $matchOffset = $match[1];
+                        $atPos = $matchOffset + strpos($matchedStr, '@');
+                        $tokenLen = strlen($matchedStr) - strpos($matchedStr, '@');
+
+                        if (! isset($candidatesByAtPos[$atPos]) || $tokenLen > $candidatesByAtPos[$atPos]['length']) {
+                            $candidatesByAtPos[$atPos] = [
+                                'user_id' => $partUser->id,
+                                'length' => $tokenLen,
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+
+        $mentionedUserIds = [];
+        foreach ($candidatesByAtPos as $resolved) {
+            if (! in_array($resolved['user_id'], $mentionedUserIds, true)) {
+                $mentionedUserIds[] = $resolved['user_id'];
+            }
+        }
+
+        return $mentionedUserIds;
     }
 
     /**

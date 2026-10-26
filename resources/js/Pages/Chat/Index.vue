@@ -36,8 +36,19 @@ watch(() => props.conversations, (newVal) => {
     conversationsList.value = [...(newVal || [])];
 }, { deep: true });
 
+watch(() => props.activeConversation, (active) => {
+    if (active?.id) {
+        const currentConv = conversationsList.value.find(c => c.id === active.id);
+        if (currentConv) {
+            currentConv.unread_count = 0;
+            currentConv.has_unread_mentions = false;
+            currentConv.unread_mentions_count = 0;
+        }
+    }
+}, { immediate: true });
+
 const unreadConversationsCount = computed(() => {
-    return conversationsList.value.filter(c => (c.unread_count || 0) > 0).length;
+    return conversationsList.value.filter(c => (c.unread_count || 0) > 0 || c.has_unread_mentions).length;
 });
 
 // Filter conversations based on sidebar search and unread filter
@@ -45,7 +56,7 @@ const filteredConversations = computed(() => {
     let list = conversationsList.value;
 
     if (sidebarFilter.value === 'unread') {
-        list = list.filter(c => (c.unread_count || 0) > 0);
+        list = list.filter(c => (c.unread_count || 0) > 0 || c.has_unread_mentions);
     }
 
     if (!searchQuery.value.trim()) return list;
@@ -425,8 +436,146 @@ const emitTyping = () => {
     axios.post(route('chat.typing', props.activeConversation.id)).catch(() => {});
 };
 
-// Enter key sends; Shift+Enter creates a new line
+// Mention autocomplete state & logic
+const showMentionDropdown = ref(false);
+const mentionQuery = ref('');
+const mentionStartIndex = ref(-1);
+const selectedMentionIndex = ref(0);
+
+// Conversation members eligible to be mentioned (excluding current user and banned members)
+const mentionableMembers = computed(() => {
+    if (!props.activeConversation) return [];
+    if (props.activeConversation.is_system || props.activeConversation.type === 'system') return [];
+
+    let members = [];
+    if (Array.isArray(props.activeConversation.participants) && props.activeConversation.participants.length > 0) {
+        members = props.activeConversation.participants.filter(p => p.id !== currentUser.value.id && !p.is_banned);
+    } else if (props.activeConversation.other_user && props.activeConversation.other_user.id !== currentUser.value.id && !props.activeConversation.other_user.is_banned) {
+        members = [props.activeConversation.other_user];
+    }
+    return members;
+});
+
+// Filter mentionable members based on query typed after @
+const filteredMentionMembers = computed(() => {
+    if (!mentionableMembers.value.length) return [];
+    const q = mentionQuery.value.trim().toLowerCase();
+    if (!q) {
+        return mentionableMembers.value;
+    }
+    return mentionableMembers.value.filter(m => {
+        const username = (m.username || '').toLowerCase();
+        const name = (m.name || '').toLowerCase();
+        return username.includes(q) || name.includes(q);
+    });
+});
+
+// Inspect textarea cursor position to check if user is typing an @mention
+const checkMentionTrigger = () => {
+    const el = composerTextarea.value;
+    if (!el || !props.activeConversation || props.activeConversation.is_system) {
+        showMentionDropdown.value = false;
+        return;
+    }
+
+    const cursorPos = el.selectionStart;
+    const textBeforeCursor = messageForm.body.slice(0, cursorPos);
+    const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+
+    if (lastAtIndex === -1) {
+        showMentionDropdown.value = false;
+        return;
+    }
+
+    // Ensure @ is either at the start of text or preceded by whitespace
+    const charBeforeAt = lastAtIndex > 0 ? textBeforeCursor[lastAtIndex - 1] : ' ';
+    if (!/\s/.test(charBeforeAt)) {
+        showMentionDropdown.value = false;
+        return;
+    }
+
+    const query = textBeforeCursor.slice(lastAtIndex + 1);
+    // Dismiss if whitespace has been entered after @ (mention finished or cancelled)
+    if (/\s/.test(query)) {
+        showMentionDropdown.value = false;
+        return;
+    }
+
+    mentionQuery.value = query;
+    mentionStartIndex.value = lastAtIndex;
+    showMentionDropdown.value = true;
+    selectedMentionIndex.value = 0;
+};
+
+// Select and insert a mention into the message
+const selectMention = (member) => {
+    const el = composerTextarea.value;
+    const cursorPos = el ? el.selectionStart : messageForm.body.length;
+    const before = messageForm.body.slice(0, mentionStartIndex.value);
+    const after = messageForm.body.slice(cursorPos);
+    const handle = member.username || member.name;
+    const mentionText = `@${handle} `;
+
+    messageForm.body = before + mentionText + after;
+    showMentionDropdown.value = false;
+    selectedMentionIndex.value = 0;
+
+    nextTick(() => {
+        resizeComposer();
+        if (composerTextarea.value) {
+            const newPos = before.length + mentionText.length;
+            composerTextarea.value.focus();
+            composerTextarea.value.setSelectionRange(newPos, newPos);
+        }
+    });
+};
+
+const onComposerInput = () => {
+    emitTyping();
+    checkMentionTrigger();
+};
+
+const onComposerBlur = () => {
+    setTimeout(() => {
+        showMentionDropdown.value = false;
+    }, 180);
+};
+
+const onComposerKeyup = (e) => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+        checkMentionTrigger();
+    }
+};
+
+// Enter key sends; Shift+Enter creates a new line; Arrow keys & Enter/Tab handle mention navigation
 const onComposerKeydown = (e) => {
+    if (showMentionDropdown.value && filteredMentionMembers.value.length > 0) {
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedMentionIndex.value = (selectedMentionIndex.value + 1) % filteredMentionMembers.value.length;
+            return;
+        }
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedMentionIndex.value = (selectedMentionIndex.value - 1 + filteredMentionMembers.value.length) % filteredMentionMembers.value.length;
+            return;
+        }
+        if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+            e.preventDefault();
+            const member = filteredMentionMembers.value[selectedMentionIndex.value];
+            if (member) {
+                selectMention(member);
+            }
+            return;
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            showMentionDropdown.value = false;
+            return;
+        }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         if (editingMessage.value) {
@@ -697,6 +846,8 @@ const markConversationAsRead = (conv) => {
     axios.post(route('chat.mark-read', conv.id))
         .then(() => {
             conv.unread_count = 0;
+            conv.has_unread_mentions = false;
+            conv.unread_mentions_count = 0;
             showToast('Marked as read');
         })
         .catch(() => {});
@@ -707,7 +858,11 @@ const markAllConversationsAsRead = () => {
     router.post(route('chat.mark-all-read'), {}, {
         preserveScroll: true,
         onSuccess: () => {
-            conversationsList.value.forEach(c => c.unread_count = 0);
+            conversationsList.value.forEach(c => {
+                c.unread_count = 0;
+                c.has_unread_mentions = false;
+                c.unread_mentions_count = 0;
+            });
             showToast('All conversations marked as read');
         },
     });
@@ -1116,6 +1271,11 @@ const handleUserChannelEvent = (e) => {
             }
             if (props.activeConversation?.id !== e.conversation_id && isFromOther) {
                 conv.unread_count = (conv.unread_count || 0) + 1;
+                const mentionedIds = e.data?.mentioned_user_ids || e.data?.message?.mentioned_user_ids || [];
+                if (Array.isArray(mentionedIds) && mentionedIds.includes(currentUser.value.id)) {
+                    conv.has_unread_mentions = true;
+                    conv.unread_mentions_count = (conv.unread_mentions_count || 0) + 1;
+                }
             }
             conversationsList.value.splice(convIndex, 1);
             reorderConversation(conv);
@@ -1123,12 +1283,40 @@ const handleUserChannelEvent = (e) => {
             const newConv = { ...e.data.conversation };
             if (props.activeConversation?.id === e.conversation_id || !isFromOther) {
                 newConv.unread_count = 0;
+                newConv.has_unread_mentions = false;
+                newConv.unread_mentions_count = 0;
+            } else {
+                const mentionedIds = e.data?.mentioned_user_ids || e.data?.message?.mentioned_user_ids || [];
+                if (Array.isArray(mentionedIds) && mentionedIds.includes(currentUser.value.id)) {
+                    newConv.has_unread_mentions = true;
+                    newConv.unread_mentions_count = (newConv.unread_mentions_count || 0) + 1;
+                }
             }
             reorderConversation(newConv);
         }
     } else if (e.action === 'group_created') {
         if (e.data?.conversation && !conversationsList.value.some(c => c.id === e.data.conversation.id)) {
             reorderConversation(e.data.conversation);
+        }
+    } else if (e.action === 'edited') {
+        const conv = conversationsList.value.find(c => c.id === e.conversation_id);
+        if (conv && conv.latest_message?.id === e.data?.message_id) {
+            conv.latest_message.body = e.data?.body ?? conv.latest_message.body;
+        }
+        if (conv && props.activeConversation?.id !== e.conversation_id) {
+            const mentionedIds = e.data?.mentioned_user_ids || [];
+            const prevMentionedIds = e.data?.previous_mentioned_user_ids || [];
+            if (Array.isArray(mentionedIds)) {
+                if (mentionedIds.includes(currentUser.value.id)) {
+                    conv.has_unread_mentions = true;
+                    if (!conv.unread_mentions_count) {
+                        conv.unread_mentions_count = 1;
+                    }
+                } else if (prevMentionedIds.includes(currentUser.value.id)) {
+                    conv.has_unread_mentions = false;
+                    conv.unread_mentions_count = Math.max(0, (conv.unread_mentions_count || 1) - 1);
+                }
+            }
         }
     } else if (e.action === 'deleted') {
         const conv = conversationsList.value.find(c => c.id === e.conversation_id);
@@ -1203,6 +1391,9 @@ const handleConversationChannelEvent = (e) => {
             targetMsg.body = e.data?.body ?? targetMsg.body;
             targetMsg.is_edited = true;
             targetMsg.edited_at = e.data?.edited_at_relative ?? 'just now';
+            if (e.data?.mentioned_user_ids) {
+                targetMsg.mentioned_user_ids = e.data.mentioned_user_ids;
+            }
         }
     } else if (e.action === 'typing') {
         const userId = e.data?.user_id;
@@ -1585,13 +1776,25 @@ onBeforeUnmount(() => {
                                                     {{ conv.latest_message?.body || 'No messages yet' }}
                                                 </p>
 
-                                                <!-- Unread Count Badge -->
-                                                <span
-                                                    v-if="conv.unread_count > 0"
-                                                    class="ms-2 px-2 py-0.5 text-[11px] font-extrabold bg-forest-600 text-white rounded-full shrink-0 shadow-xs animate-bounce"
-                                                >
-                                                    {{ conv.unread_count }}
-                                                </span>
+                                                <!-- Badges Container -->
+                                                <div class="flex items-center gap-1.5 shrink-0 ms-2">
+                                                    <!-- @ Mention Indicator -->
+                                                    <span
+                                                        v-if="conv.has_unread_mentions || (conv.unread_mentions_count || 0) > 0"
+                                                        class="size-5 flex items-center justify-center text-[11px] font-black bg-amber-500 text-white rounded-full shadow-xs ring-1 ring-white/50 shrink-0"
+                                                        title="You were mentioned in this conversation"
+                                                    >
+                                                        @
+                                                    </span>
+
+                                                    <!-- Unread Count Badge -->
+                                                    <span
+                                                        v-if="conv.unread_count > 0"
+                                                        class="px-2 py-0.5 text-[11px] font-extrabold bg-forest-600 text-white rounded-full shrink-0 shadow-xs animate-bounce"
+                                                    >
+                                                        {{ conv.unread_count }}
+                                                    </span>
+                                                </div>
                                             </div>
                                         </div>
                                     </Link>
@@ -2311,6 +2514,46 @@ onBeforeUnmount(() => {
                                             </button>
                                         </div>
 
+                                        <!-- Mention Autocomplete Popover -->
+                                        <div
+                                            v-if="showMentionDropdown && filteredMentionMembers.length > 0"
+                                            class="absolute bottom-16 sm:bottom-20 left-3 right-3 sm:right-auto sm:left-14 sm:w-80 max-h-56 overflow-y-auto bg-[#faf6ed] border border-cream-500/70 shadow-2xl rounded-2xl p-1.5 z-40 divide-y divide-cream-300/60"
+                                            role="listbox"
+                                            aria-label="Mention members"
+                                        >
+                                            <div class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-forest-800 flex items-center justify-between">
+                                                <span>Mention member</span>
+                                                <span class="text-gray-500 font-normal hidden sm:inline">↑↓ to navigate, Enter to select</span>
+                                            </div>
+                                            <div class="space-y-0.5 pt-1">
+                                                <button
+                                                    v-for="(member, idx) in filteredMentionMembers"
+                                                    :key="member.id"
+                                                    type="button"
+                                                    @mousedown.prevent="selectMention(member)"
+                                                    class="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition cursor-pointer"
+                                                    :class="selectedMentionIndex === idx ? 'bg-cream-300 text-forest-950 font-medium' : 'hover:bg-cream-200/80 text-gray-800'"
+                                                    role="option"
+                                                    :aria-selected="selectedMentionIndex === idx"
+                                                >
+                                                    <img
+                                                        :src="member.profile_photo_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(member.name)"
+                                                        :alt="member.name"
+                                                        class="size-7 rounded-full object-cover shrink-0 ring-1 ring-cream-400"
+                                                    />
+                                                    <div class="min-w-0 flex-1 truncate">
+                                                        <div class="text-xs font-semibold truncate text-gray-900 flex items-center gap-1.5">
+                                                            <span>{{ member.name }}</span>
+                                                            <span v-if="member.role === 'admin' || member.is_admin" class="text-[9px] px-1 py-0.2 bg-lime-200 text-forest-900 rounded font-bold">Admin</span>
+                                                        </div>
+                                                        <div class="text-[11px] text-gray-500 truncate">
+                                                            @{{ member.username || member.name }}
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            </div>
+                                        </div>
+
                                         <!-- Input Controls Form -->
                                         <form @submit.prevent="editingMessage ? submitEditMessage() : sendMessage()" class="flex items-center space-x-2 sm:space-x-3">
                                             <!-- Hidden File Input -->
@@ -2356,7 +2599,10 @@ onBeforeUnmount(() => {
                                                 <textarea
                                                     ref="composerTextarea"
                                                     v-model="messageForm.body"
-                                                    @input="emitTyping"
+                                                    @input="onComposerInput"
+                                                    @click="checkMentionTrigger"
+                                                    @keyup="onComposerKeyup"
+                                                    @blur="onComposerBlur"
                                                     rows="1"
                                                     :placeholder="editingMessage ? 'Edit your message...' : 'Type a message... (Enter to send, Shift+Enter for newline)'"
                                                     class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden"
