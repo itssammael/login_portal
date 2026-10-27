@@ -772,7 +772,7 @@ onBeforeUnmount(() => {
                                         v-model="answers[field.id]"
                                         type="text"
                                         :required="field.required"
-                                        :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
+                                        :placeholder="field.placeholder || 'Type your answer here...'"
                                         class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                     />
                                 </div>
@@ -784,7 +784,7 @@ onBeforeUnmount(() => {
                                         v-model="answers[field.id]"
                                         rows="3"
                                         :required="field.required"
-                                        :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
+                                        :placeholder="field.placeholder || 'Type your response here...'"
                                         class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                     ></textarea>
                                 </div>
@@ -862,7 +862,7 @@ onBeforeUnmount(() => {
                                             type="text"
                                             :list="`datalist_${field.id}`"
                                             :required="field.required"
-                                            :placeholder="field.placeholder || `Select or type ${stripHtml(field.particular)}...`"
+                                            :placeholder="field.placeholder || 'Select or type an option...'"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         />
                                         <datalist :id="`datalist_${field.id}`">
@@ -879,7 +879,7 @@ onBeforeUnmount(() => {
                                             :required="field.required"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         >
-                                            <option value="" disabled>-- Select {{ stripHtml(field.particular) }} --</option>
+                                            <option value="" disabled>-- Select an option --</option>
                                             <option v-for="opt in field.options || []" :key="opt.value" :value="opt.value">
                                                 {{ opt.label }}
                                             </option>

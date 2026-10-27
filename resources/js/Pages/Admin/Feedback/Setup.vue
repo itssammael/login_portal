@@ -3048,7 +3048,7 @@ const closeSamplePreviewModal = () => {
                                         <input
                                             v-model="previewAnswers[field.id]"
                                             type="text"
-                                            :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
+                                            :placeholder="field.placeholder || 'Type your answer here...'"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         />
                                     </div>
@@ -3058,7 +3058,7 @@ const closeSamplePreviewModal = () => {
                                         <textarea
                                             v-model="previewAnswers[field.id]"
                                             rows="3"
-                                            :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
+                                            :placeholder="field.placeholder || 'Type your response here...'"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         ></textarea>
                                     </div>
@@ -3124,7 +3124,7 @@ const closeSamplePreviewModal = () => {
                                             v-model="previewAnswers[field.id]"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         >
-                                            <option value="" disabled>-- Select {{ stripHtml(field.particular) }} --</option>
+                                            <option value="" disabled>-- Select an option --</option>
                                             <option v-for="opt in getPreviewFieldOptions(field)" :key="opt.value" :value="opt.value">
                                                 {{ opt.label }}
                                             </option>
@@ -3335,7 +3335,7 @@ const closeSamplePreviewModal = () => {
                                                 <input
                                                     v-model="previewAnswers[field.id]"
                                                     type="text"
-                                                    :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
+                                                    :placeholder="field.placeholder || 'Type your answer here...'"
                                                     class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
                                                 />
                                             </div>
@@ -3344,7 +3344,7 @@ const closeSamplePreviewModal = () => {
                                                 <textarea
                                                     v-model="previewAnswers[field.id]"
                                                     rows="2"
-                                                    :placeholder="field.placeholder || `Enter ${stripHtml(field.particular)}...`"
+                                                    :placeholder="field.placeholder || 'Type your response here...'"
                                                     class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
                                                 ></textarea>
                                             </div>
@@ -3399,7 +3399,7 @@ const closeSamplePreviewModal = () => {
                                                     v-model="previewAnswers[field.id]"
                                                     class="w-full px-3 py-2 bg-[#fffef9] border border-gray-300 rounded-lg text-gray-900 text-xs"
                                                 >
-                                                    <option value="" disabled>-- Select {{ stripHtml(field.particular) }} --</option>
+                                                    <option value="" disabled>-- Select an option --</option>
                                                     <option v-for="opt in getPreviewFieldOptions(field)" :key="opt.value" :value="opt.value">
                                                         {{ opt.label }}
                                                     </option>
