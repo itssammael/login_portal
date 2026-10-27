@@ -112,6 +112,10 @@ class FeedbackSchemaValidator
 
             if ($id === '') {
                 $id = 'field_'.$questionNum;
+            } elseif ($rawId === '' && strlen($id) > 100) {
+                $short = substr($id, 0, 20);
+                $lastUnderscore = strrpos($short, '_');
+                $id = ($lastUnderscore !== false && $lastUnderscore > 5) ? substr($short, 0, $lastUnderscore) : $short;
             }
 
             if (in_array($id, $usedIds, true)) {

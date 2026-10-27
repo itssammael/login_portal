@@ -33,7 +33,7 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.pagination.progress_bar' => ['nullable', 'boolean'],
             'schema.pagination.show_section_numbers' => ['nullable', 'boolean'],
             'schema.fields' => ['required', 'array', 'list', 'min:1'],
-            'schema.fields.*.id' => ['required', 'string', 'max:150'],
+            'schema.fields.*.id' => ['required', 'string', 'max:100'],
             'schema.fields.*.particular' => ['required', 'string', 'max:5000'],
             'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,date,radio,select,checkbox,section,text_only'],
             'schema.fields.*.weight' => ['required', 'integer', 'min:0'],
@@ -48,13 +48,13 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.fields.*.option_source' => ['nullable', 'string', 'in:static,fb_functions,agencies,designations'],
             'schema.fields.*.function_ids' => ['nullable', 'array'],
             'schema.fields.*.function_ids.*' => ['integer'],
-            'schema.fields.*.section_flow' => ['nullable', 'string', 'max:150'],
+            'schema.fields.*.section_flow' => ['nullable', 'string', 'max:350'],
             'schema.fields.*.conditions' => ['nullable', 'array'],
             'schema.fields.*.options' => ['nullable', 'array'],
             'schema.fields.*.options.*.value' => ['nullable', 'string'],
             'schema.fields.*.options.*.label' => ['nullable', 'string'],
             'schema.fields.*.options.*.is_other' => ['nullable', 'boolean'],
-            'schema.fields.*.options.*.goto_section' => ['nullable', 'string', 'max:150'],
+            'schema.fields.*.options.*.goto_section' => ['nullable', 'string', 'max:350'],
         ];
     }
 
@@ -76,7 +76,7 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.fields.min' => 'The questionnaire must contain at least one question or section.',
             'schema.fields.list' => 'The questions list must be a sequential array.',
             'schema.fields.*.id.required' => 'Question #:position identifier is required.',
-            'schema.fields.*.id.max' => 'Question #:position identifier may not exceed 150 characters.',
+            'schema.fields.*.id.max' => 'Question #:position identifier may not exceed 100 characters.',
             'schema.fields.*.particular.required' => 'Question #:position prompt/title is required.',
             'schema.fields.*.particular.max' => 'Question #:position prompt/title may not exceed 5000 characters.',
             'schema.fields.*.type.required' => 'Question #:position type is required.',
@@ -88,8 +88,8 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.fields.*.description.max' => 'Question #:position description may not exceed 65535 characters.',
             'schema.fields.*.description_type.in' => 'Question #:position description type must be text or textarea.',
             'schema.fields.*.option_source.in' => 'Question #:position has an invalid option source.',
-            'schema.fields.*.section_flow.max' => 'Question #:position section destination may not exceed 150 characters.',
-            'schema.fields.*.options.*.goto_section.max' => 'Question #:position option destination may not exceed 150 characters.',
+            'schema.fields.*.section_flow.max' => 'Question #:position section destination may not exceed 350 characters.',
+            'schema.fields.*.options.*.goto_section.max' => 'Question #:position option destination may not exceed 350 characters.',
         ];
     }
 

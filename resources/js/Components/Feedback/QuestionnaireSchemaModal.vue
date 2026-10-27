@@ -111,19 +111,67 @@ const formConfig = useForm({
     schema: JSON.parse(JSON.stringify(defaultSchemaTemplate)),
 });
 
-// Helper to convert strings to clean snake_case
-const toSnakeCase = (str) => {
-    return String(stripHtml(str) || '')
+// Helper to convert strings to clean snake_case limited to maxLength
+const toSnakeCase = (str, maxLength = 20) => {
+    let clean = String(stripHtml(str) || '')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '');
+
+    if (clean.length > maxLength) {
+        clean = clean.slice(0, maxLength);
+        const lastUnderscore = clean.lastIndexOf('_');
+        if (lastUnderscore > 5) {
+            clean = clean.slice(0, lastUnderscore);
+        }
+    }
+    return clean;
+};
+
+const generateUniqueFieldId = (baseId, currentFieldIdx, maxLength = 20) => {
+    let candidate = baseId || `field_${currentFieldIdx + 1}`;
+    if (candidate.length > maxLength) {
+        candidate = candidate.slice(0, maxLength).replace(/_+$/, '');
+    }
+    const otherFields = (formConfig.schema.fields || []).filter((_, idx) => idx !== currentFieldIdx);
+    const existingIds = new Set(otherFields.map((f) => f.id));
+
+    if (!existingIds.has(candidate)) {
+        return candidate;
+    }
+
+    let counter = 2;
+    while (true) {
+        const suffix = `_${counter}`;
+        const prefix = candidate.slice(0, maxLength - suffix.length).replace(/_+$/, '');
+        const suffixedId = `${prefix}${suffix}`;
+        if (!existingIds.has(suffixedId)) {
+            return suffixedId;
+        }
+        counter++;
+    }
+};
+
+const isFieldIdReferenced = (id) => {
+    if (!id) return false;
+    return (formConfig.schema?.fields || []).some((f) => {
+        if (f.section_flow === id) return true;
+        if (f.conditions?.some((c) => c.field_id === id)) return true;
+        if (f.options?.some((opt) => opt.goto_section === id)) return true;
+        return false;
+    });
 };
 
 const onParticularBlur = (field) => {
     if (!field.manualId && field.particular) {
-        const isDefaultPlaceholder = !field.id || /^(question|section|field)_\d+$/.test(field.id);
+        const isDefaultPlaceholder = !field.id || /^(question|section|field|q|sec)_\d+$/.test(field.id);
         if (isDefaultPlaceholder) {
-            field.id = toSnakeCase(field.particular) || (field.type === 'section' ? `section_${field.weight}` : `field_${field.weight}`);
+            if (field.id && isFieldIdReferenced(field.id)) {
+                return;
+            }
+            const currentIdx = formConfig.schema.fields?.indexOf(field) ?? -1;
+            const base = toSnakeCase(field.particular, 20) || (field.type === 'section' ? `sec_${field.weight}` : `q_${field.weight}`);
+            field.id = generateUniqueFieldId(base, currentIdx, 20);
         }
     }
 };
@@ -416,7 +464,12 @@ const duplicateField = (idx) => {
     const original = formConfig.schema.fields[idx];
     const copy = JSON.parse(JSON.stringify(original));
     copy._uid = getUniqueFieldKey();
-    copy.id = `${original.id}_copy_${Date.now().toString().slice(-4)}`;
+    
+    // Ensure duplicated ID stays within 20 chars
+    const suffix = `_${Date.now().toString().slice(-4)}`;
+    const baseId = (original.id || 'field').slice(0, 20 - suffix.length).replace(/_+$/, '');
+    const proposedId = `${baseId}${suffix}`;
+    copy.id = generateUniqueFieldId(proposedId, -1, 20);
     copy.particular = `${original.particular} (Copy)`;
     copy.manualId = true;
 
