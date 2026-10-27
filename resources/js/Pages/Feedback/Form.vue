@@ -4,6 +4,7 @@ import { Head, Link, router, usePage } from '@inertiajs/vue3';
 import FeedbackIntegrationGuideModal from '@/Components/Feedback/FeedbackIntegrationGuideModal.vue';
 import FeedbackPreviewModal from '@/Components/Feedback/FeedbackPreviewModal.vue';
 import FeedbackAnalyticsModal from '@/Components/Feedback/FeedbackAnalyticsModal.vue';
+import FeedbackQrModal from '@/Components/Feedback/FeedbackQrModal.vue';
 import AppLayout from '@/Layouts/AppLayout.vue';
 
 const props = defineProps({
@@ -23,6 +24,7 @@ const togglingStatusId = ref(null);
 const previewForm = ref(null);
 const guideForm = ref(null);
 const analyticsForm = ref(null);
+const qrModalForm = ref(null);
 const publicationOverrides = ref({});
 
 const publicationFor = (item) => publicationOverrides.value[item.id] || item.analytics;
@@ -100,6 +102,10 @@ const shareUrl = async (item) => {
         return;
     }
     await copyUrl(item);
+};
+
+const openQrModal = (item) => {
+    qrModalForm.value = item;
 };
 </script>
 
@@ -353,6 +359,13 @@ const shareUrl = async (item) => {
                                 <button
                                     type="button"
                                     class="rounded-xl bg-white px-3 py-2 text-xs font-bold text-gray-700 shadow-sm ring-1 ring-cream-500 hover:bg-cream-200 cursor-pointer"
+                                    @click="openQrModal(item)"
+                                >
+                                    Show QR
+                                </button>
+                                <button
+                                    type="button"
+                                    class="rounded-xl bg-white px-3 py-2 text-xs font-bold text-gray-700 shadow-sm ring-1 ring-cream-500 hover:bg-cream-200 cursor-pointer"
                                     @click="shareUrl(item)"
                                 >
                                     Share
@@ -407,6 +420,12 @@ const shareUrl = async (item) => {
             v-if="guideForm"
             :form="guideForm"
             @close="guideForm = null"
+        />
+        <FeedbackQrModal
+            v-if="qrModalForm"
+            :form="qrModalForm"
+            :url="liveUrl(qrModalForm)"
+            @close="qrModalForm = null"
         />
     </AppLayout>
 </template>

@@ -149,6 +149,9 @@ Route::middleware([
 
     // User Feedback Form Routes
     Route::get('/feedback', [FeedbackFormController::class, 'show'])->name('feedback.form');
+    Route::get('/feedback/qr-code', [FeedbackFormController::class, 'qrCode'])
+        ->middleware('throttle:60,1')
+        ->name('feedback.qr-code');
     Route::post('/feedback', [FeedbackFormController::class, 'submit'])->name('feedback.submit');
 
     Route::prefix('feedback/{feedback}/analytics')->name('feedback.analytics.')->middleware('throttle:60,1')->group(function () {

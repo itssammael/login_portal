@@ -12,6 +12,10 @@ use App\Models\FbSubmission;
 use App\Models\Feedback;
 use App\Services\FeedbackAnalyticsService;
 use App\Services\FeedbackSchemaValidator;
+use BaconQrCode\Renderer\Image\SvgImageBackEnd;
+use BaconQrCode\Renderer\ImageRenderer;
+use BaconQrCode\Renderer\RendererStyle\RendererStyle;
+use BaconQrCode\Writer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -238,6 +242,27 @@ class FeedbackFormController extends Controller
         return (new FbSubmissionResource($submission->load(['feedback', 'participant.function'])))
             ->response()
             ->setStatusCode(201);
+    }
+
+    /**
+     * Generate an SVG QR code for the given feedback form URL.
+     */
+    public function qrCode(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'url' => ['required', 'string', 'url', 'max:2048'],
+        ]);
+
+        $renderer = new ImageRenderer(
+            new RendererStyle(300, 2),
+            new SvgImageBackEnd
+        );
+        $writer = new Writer($renderer);
+        $svg = $writer->writeString($validated['url']);
+
+        return response()->json([
+            'svg' => $svg,
+        ]);
     }
 
     /**
