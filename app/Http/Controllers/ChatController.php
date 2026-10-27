@@ -1945,6 +1945,8 @@ class ChatController extends Controller
     /**
      * Parse and resolve mentioned user IDs from message text for a conversation.
      * Resolves complete mention tokens to only one participant (e.g. "@Bob Smith" resolves to "Bob Smith", not "Bob").
+     * Supports @everyone in group chats to mention all eligible group members (excluding the sender).
+     * Muted conversations respect existing notification preferences without bypassing them.
      *
      * @return array<int>
      */
@@ -1963,6 +1965,15 @@ class ChatController extends Controller
             return [];
         }
 
+        $mentionedUserIds = [];
+
+        // In group chats only: resolve @everyone to all eligible group members (excluding sender)
+        if ($conversation->type === 'group' && preg_match('/(?:^|\s)@everyone(?![\w-])/i', $rawBody)) {
+            foreach ($participants as $partUser) {
+                $mentionedUserIds[] = (int) $partUser->id;
+            }
+        }
+
         $candidatesByAtPos = [];
 
         foreach ($participants as $partUser) {
@@ -1976,7 +1987,7 @@ class ChatController extends Controller
 
                     if (! isset($candidatesByAtPos[$atPos]) || $tokenLen > $candidatesByAtPos[$atPos]['length']) {
                         $candidatesByAtPos[$atPos] = [
-                            'user_id' => $partUser->id,
+                            'user_id' => (int) $partUser->id,
                             'length' => $tokenLen,
                         ];
                     }
@@ -1994,7 +2005,7 @@ class ChatController extends Controller
 
                         if (! isset($candidatesByAtPos[$atPos]) || $tokenLen > $candidatesByAtPos[$atPos]['length']) {
                             $candidatesByAtPos[$atPos] = [
-                                'user_id' => $partUser->id,
+                                'user_id' => (int) $partUser->id,
                                 'length' => $tokenLen,
                             ];
                         }
@@ -2003,14 +2014,13 @@ class ChatController extends Controller
             }
         }
 
-        $mentionedUserIds = [];
         foreach ($candidatesByAtPos as $resolved) {
             if (! in_array($resolved['user_id'], $mentionedUserIds, true)) {
                 $mentionedUserIds[] = $resolved['user_id'];
             }
         }
 
-        return $mentionedUserIds;
+        return array_values(array_unique(array_map('intval', $mentionedUserIds)));
     }
 
     /**

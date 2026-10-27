@@ -443,9 +443,12 @@ const mentionStartIndex = ref(-1);
 const selectedMentionIndex = ref(0);
 
 // Conversation members eligible to be mentioned (excluding current user and banned members)
+// Group chats include @everyone at the top of the autocomplete list; direct/system chats do not.
 const mentionableMembers = computed(() => {
     if (!props.activeConversation) return [];
     if (props.activeConversation.is_system || props.activeConversation.type === 'system') return [];
+
+    const isGroup = props.activeConversation.type === 'group';
 
     let members = [];
     if (Array.isArray(props.activeConversation.participants) && props.activeConversation.participants.length > 0) {
@@ -453,6 +456,19 @@ const mentionableMembers = computed(() => {
     } else if (props.activeConversation.other_user && props.activeConversation.other_user.id !== currentUser.value.id && !props.activeConversation.other_user.is_banned) {
         members = [props.activeConversation.other_user];
     }
+
+    if (isGroup) {
+        return [
+            {
+                id: 'everyone',
+                is_everyone: true,
+                name: 'everyone',
+                username: 'everyone',
+            },
+            ...members,
+        ];
+    }
+
     return members;
 });
 
@@ -469,6 +485,73 @@ const filteredMentionMembers = computed(() => {
         return username.includes(q) || name.includes(q);
     });
 });
+
+// Parse message body into text and styled mention tokens (@everyone and @user)
+const parseMessageSegments = (text) => {
+    if (!text) return [];
+
+    const isGroup = props.activeConversation?.type === 'group';
+    const participants = props.activeConversation?.participants || [];
+    const participantNames = [];
+    if (props.activeConversation?.other_user) {
+        if (props.activeConversation.other_user.name) participantNames.push(props.activeConversation.other_user.name);
+        if (props.activeConversation.other_user.username) participantNames.push(props.activeConversation.other_user.username);
+    }
+    participants.forEach(p => {
+        if (p.name) participantNames.push(p.name);
+        if (p.username) participantNames.push(p.username);
+    });
+
+    const uniqueNames = Array.from(new Set(participantNames.filter(Boolean)))
+        .sort((a, b) => b.length - a.length);
+
+    const validPatterns = uniqueNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (isGroup) {
+        validPatterns.unshift('everyone');
+    }
+
+    if (validPatterns.length === 0) {
+        return [{ type: 'text', content: text }];
+    }
+
+    const mentionTokenGroup = `(?:${validPatterns.join('|')})`;
+    const regex = new RegExp(`(^|\\s)(@${mentionTokenGroup})(?![\\w-])`, 'gi');
+
+    const segments = [];
+    let lastIndex = 0;
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+        const leadingSpace = match[1];
+        const mentionToken = match[2];
+        const matchIndex = match.index + leadingSpace.length;
+
+        if (matchIndex > lastIndex) {
+            segments.push({
+                type: 'text',
+                content: text.slice(lastIndex, matchIndex),
+            });
+        }
+
+        const isEveryone = isGroup && mentionToken.toLowerCase() === '@everyone';
+        segments.push({
+            type: 'mention',
+            content: mentionToken,
+            isEveryone,
+        });
+
+        lastIndex = matchIndex + mentionToken.length;
+    }
+
+    if (lastIndex < text.length) {
+        segments.push({
+            type: 'text',
+            content: text.slice(lastIndex),
+        });
+    }
+
+    return segments;
+};
 
 // Inspect textarea cursor position to check if user is typing an @mention
 const checkMentionTrigger = () => {
@@ -2523,7 +2606,18 @@ onBeforeUnmount(() => {
 
                                                             <!-- Message Body -->
                                                             <p v-if="message.body" class="whitespace-pre-wrap leading-relaxed">
-                                                                {{ message.body }}
+                                                                <template v-for="(seg, sIdx) in parseMessageSegments(message.body)" :key="sIdx">
+                                                                    <span
+                                                                        v-if="seg.type === 'mention'"
+                                                                        class="inline-block px-1.5 py-0.2 mx-0.5 rounded font-bold transition-colors"
+                                                                        :class="[
+                                                                            seg.isEveryone
+                                                                                ? 'bg-amber-500/25 text-amber-950 border border-amber-600/30 ring-1 ring-amber-500/20'
+                                                                                : 'bg-forest-900/15 text-forest-950 border border-forest-800/20'
+                                                                        ]"
+                                                                    >{{ seg.content }}</span>
+                                                                    <template v-else>{{ seg.content }}</template>
+                                                                </template>
                                                             </p>
                                                         </div>
 
@@ -2832,18 +2926,23 @@ onBeforeUnmount(() => {
                                                     role="option"
                                                     :aria-selected="selectedMentionIndex === idx"
                                                 >
+                                                    <div v-if="member.is_everyone" class="size-7 rounded-full bg-forest-700 text-amber-200 flex items-center justify-center font-black text-xs shrink-0 ring-1 ring-forest-800 shadow-2xs">
+                                                        @
+                                                    </div>
                                                     <img
+                                                        v-else
                                                         :src="member.profile_photo_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(member.name)"
                                                         :alt="member.name"
                                                         class="size-7 rounded-full object-cover shrink-0 ring-1 ring-cream-400"
                                                     />
                                                     <div class="min-w-0 flex-1 truncate">
                                                         <div class="text-xs font-semibold truncate text-gray-900 flex items-center gap-1.5">
-                                                            <span>{{ member.name }}</span>
-                                                            <span v-if="member.role === 'admin' || member.is_admin" class="text-[9px] px-1 py-0.2 bg-lime-200 text-forest-900 rounded font-bold">Admin</span>
+                                                            <span>{{ member.is_everyone ? '@everyone' : member.name }}</span>
+                                                            <span v-if="member.is_everyone" class="text-[9px] px-1.5 py-0.2 bg-amber-200 text-amber-950 rounded font-bold">Group</span>
+                                                            <span v-else-if="member.role === 'admin' || member.is_admin" class="text-[9px] px-1 py-0.2 bg-lime-200 text-forest-900 rounded font-bold">Admin</span>
                                                         </div>
                                                         <div class="text-[11px] text-gray-500 truncate">
-                                                            @{{ member.username || member.name }}
+                                                            {{ member.is_everyone ? 'Notify all group members' : '@' + (member.username || member.name) }}
                                                         </div>
                                                     </div>
                                                 </button>
