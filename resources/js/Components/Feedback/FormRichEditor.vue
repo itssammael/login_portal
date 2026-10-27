@@ -746,6 +746,13 @@ const onPaste = (e) => {
     const text = e.clipboardData.getData('text/plain');
     const html = e.clipboardData.getData('text/html');
 
+    if (props.singleLine) {
+        const cleanText = text.replace(/[\r\n]+/g, ' ');
+        document.execCommand('insertText', false, cleanText);
+        onEditorInput();
+        return;
+    }
+
     if (props.mode === 'rich' && html) {
         const sanitized = sanitizeHtml(html);
         if (sanitized && hasHtmlTags(sanitized)) {
@@ -819,7 +826,7 @@ onUnmounted(() => {
 
 <template>
     <div
-        class="form-rich-editor rounded-xl border transition-all duration-150 relative bg-white"
+        class="form-rich-editor rounded-xl border transition-all duration-150 relative bg-white w-full min-w-0 max-w-full"
         :class="[
             isFocused
                 ? 'border-forest-600 ring-2 ring-forest-100 shadow-xs'
@@ -1151,7 +1158,7 @@ onUnmounted(() => {
         </div>
 
         <!-- Contenteditable Canvas -->
-        <div class="relative">
+        <div class="relative w-full min-w-0 max-w-full">
             <!-- Placeholder -->
             <div
                 v-if="isEmpty && !isFocused"
@@ -1171,9 +1178,9 @@ onUnmounted(() => {
                 @blur="onEditorBlur"
                 @keyup="updateActiveTableState"
                 @mouseup="updateActiveTableState"
-                class="form-rich-canvas w-full px-3 py-2.5 text-xs text-gray-800 focus:outline-none transition leading-relaxed"
+                class="form-rich-canvas w-full min-w-0 max-w-full px-3 py-2.5 text-xs text-gray-800 focus:outline-none transition leading-relaxed break-words"
                 :class="[
-                    singleLine ? 'whitespace-nowrap overflow-x-auto min-h-[36px]' : 'min-h-[70px] overflow-y-auto',
+                    singleLine ? 'whitespace-normal min-h-[36px]' : 'min-h-[70px] overflow-y-auto',
                     inputClass
                 ]"
                 :style="{ minHeight: minHeight !== 'auto' ? minHeight : undefined }"
@@ -1183,6 +1190,11 @@ onUnmounted(() => {
 </template>
 
 <style>
+.form-rich-canvas {
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+}
+
 /* Scoped Table & Rich Text Styling inside the Editor Canvas */
 .form-rich-canvas table,
 .form-rich-canvas .form-rich-table {

@@ -1285,8 +1285,8 @@ onUnmounted(() => {
                                     </div>
 
                                     <!-- Section Title & Description -->
-                                    <div class="space-y-2.5">
-                                        <div>
+                                    <div class="space-y-2.5 min-w-0">
+                                        <div class="min-w-0">
                                             <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Section Title</label>
                                             <FormRichEditor
                                                 v-model="field.particular"
@@ -1439,7 +1439,7 @@ onUnmounted(() => {
 
                                     <!-- Top Row: Question Title & Question Type Selector -->
                                     <div class="flex items-start justify-between gap-3 flex-wrap sm:flex-nowrap">
-                                        <div class="flex-1">
+                                        <div class="flex-1 min-w-0">
                                             <FormRichEditor
                                                 v-model="field.particular"
                                                 @blur="onParticularBlur(field)"
@@ -1581,7 +1581,7 @@ onUnmounted(() => {
                                                 @keydown.enter.prevent="addOptionToField(field, optIdx)"
                                                 type="text"
                                                 :placeholder="`Option ${optIdx + 1}`"
-                                                class="flex-1 px-2.5 py-1 text-xs text-gray-900 border-b border-cream-300 hover:border-cream-400 focus:border-forest-900 focus:outline-none transition"
+                                                class="flex-1 min-w-0 px-2.5 py-1 text-xs text-gray-900 border-b border-cream-300 hover:border-cream-400 focus:border-forest-900 focus:outline-none transition"
                                             />
 
                                             <!-- Conditional Branching Dropdown (Go to section based on answer) -->
@@ -1791,12 +1791,12 @@ onUnmounted(() => {
                                         <span class="font-bold text-red-800">Validation Issue:</span>
                                         <span class="truncate">{{ getSchemaFieldError(idx) }}</span>
                                     </div>
-                                    <div class="flex items-center justify-between">
-                                        <div class="flex items-center space-x-2">
-                                            <span class="text-sm font-bold text-gray-900 inline-block" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>
-                                            <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5">*</span>
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="flex items-start space-x-2 min-w-0 flex-1">
+                                            <span class="text-sm font-bold text-gray-900 inline-block break-words flex-1 min-w-0" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>
+                                            <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5 shrink-0">*</span>
                                         </div>
-                                        <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600">
+                                        <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600 shrink-0">
                                             {{ field.type === 'text_only' ? 'text only' : field.type }}
                                         </span>
                                     </div>
