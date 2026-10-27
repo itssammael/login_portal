@@ -579,29 +579,58 @@ const switchTab = (tab) => {
 // Error highlighting and jumping
 const getSchemaFieldError = (idx) => {
     const errors = formConfig.errors;
+    const msgs = [];
     for (const key of Object.keys(errors)) {
-        if (key.startsWith(`schema.fields.${idx}.`) || key === `schema.fields.${idx}`) {
-            return errors[key];
+        if (
+            key.startsWith(`schema.fields.${idx}.`) || key === `schema.fields.${idx}` ||
+            key.startsWith(`fields.${idx}.`) || key === `fields.${idx}`
+        ) {
+            const err = errors[key];
+            if (err && !msgs.includes(err)) {
+                msgs.push(err);
+            }
         }
     }
-    return null;
+    return msgs.length > 0 ? msgs.join(' • ') : null;
 };
 
 const schemaErrorsList = computed(() => {
-    const list = [];
+    const map = new Map();
     const errors = formConfig.errors;
     Object.keys(errors).forEach((key) => {
-        const match = key.match(/^schema\.fields\.(\d+)/);
+        const match = key.match(/^(?:schema\.)?fields\.(\d+)(?:\.(.*))?$/);
         if (match) {
             const idx = parseInt(match[1], 10);
             const field = formConfig.schema.fields?.[idx];
-            if (!list.some((item) => item.idx === idx)) {
-                list.push({
+            const rawParticular = field?.particular ? stripHtml(field.particular) : '';
+            const particular = rawParticular.trim() || `Question #${idx + 1}`;
+            const msg = errors[key];
+
+            if (!map.has(idx)) {
+                map.set(idx, {
                     idx,
-                    particular: field?.particular || `Question #${idx + 1}`,
-                    message: errors[key],
+                    particular,
+                    messages: [msg],
                 });
+            } else {
+                if (!map.get(idx).messages.includes(msg)) {
+                    map.get(idx).messages.push(msg);
+                }
             }
+        }
+    });
+    return Array.from(map.values()).sort((a, b) => a.idx - b.idx);
+});
+
+const generalErrorsList = computed(() => {
+    const list = [];
+    const errors = formConfig.errors;
+    Object.keys(errors).forEach((key) => {
+        if (!key.match(/^(?:schema\.)?fields\.\d+/)) {
+            list.push({
+                key,
+                message: errors[key],
+            });
         }
     });
     return list;
@@ -1010,15 +1039,16 @@ onUnmounted(() => {
             <div class="max-w-4xl mx-auto space-y-4 relative pb-24">
                 <!-- Validation Error Alert Banner -->
                 <div
-                    v-if="schemaErrorsList.length > 0"
-                    class="p-4 bg-red-50/95 border-2 border-red-300 rounded-2xl shadow-xs space-y-2.5 transition-all"
+                    v-if="schemaErrorsList.length > 0 || generalErrorsList.length > 0"
+                    class="p-4 bg-red-50/95 border-2 border-red-300 rounded-2xl shadow-xs space-y-3 transition-all"
                 >
                     <div class="flex items-center justify-between flex-wrap gap-2">
                         <div class="flex items-center space-x-2 text-red-950 font-bold text-xs sm:text-sm">
                             <span class="size-6 rounded-lg bg-red-200 text-red-900 flex items-center justify-center text-xs font-black shrink-0">!</span>
-                            <span>Validation Error: {{ schemaErrorsList.length }} field(s) require your attention.</span>
+                            <span>Validation Error: {{ schemaErrorsList.length + generalErrorsList.length }} issue(s) require your attention.</span>
                         </div>
                         <button
+                            v-if="schemaErrorsList.length > 0"
                             type="button"
                             @click="goToSchemaErrorField(schemaErrorsList[0].idx)"
                             class="inline-flex items-center space-x-1 px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-2xs transition cursor-pointer"
@@ -1026,7 +1056,51 @@ onUnmounted(() => {
                             <span>Jump to First Error →</span>
                         </button>
                     </div>
-                    <div class="pt-2 border-t border-red-200 flex flex-wrap items-center gap-1.5">
+
+                    <!-- General non-field errors if any -->
+                    <div v-if="generalErrorsList.length > 0" class="space-y-1.5 pt-1">
+                        <div
+                            v-for="(genErr, gIdx) in generalErrorsList"
+                            :key="gIdx"
+                            class="p-2.5 bg-white/80 rounded-xl border border-red-200 text-xs font-semibold text-red-900 flex items-center space-x-2"
+                        >
+                            <span class="text-sm shrink-0">⚠️</span>
+                            <span>{{ genErr.message }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Question-by-question specific error breakdown -->
+                    <div v-if="schemaErrorsList.length > 0" class="space-y-1.5 pt-1">
+                        <div
+                            v-for="err in schemaErrorsList"
+                            :key="err.idx"
+                            class="flex items-start justify-between gap-3 p-2.5 bg-white/80 rounded-xl border border-red-200 text-xs"
+                        >
+                            <div class="flex items-start space-x-2 min-w-0">
+                                <span class="size-5 rounded-full bg-red-100 text-red-800 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                                    {{ err.idx + 1 }}
+                                </span>
+                                <div class="min-w-0">
+                                    <div class="font-bold text-gray-900 truncate">
+                                        {{ err.particular }}
+                                    </div>
+                                    <div class="text-red-700 font-semibold mt-0.5">
+                                        {{ err.messages.join(' • ') }}
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                @click="goToSchemaErrorField(err.idx)"
+                                class="px-2.5 py-1 bg-red-100/80 hover:bg-red-200 text-red-900 rounded-lg text-[11px] font-bold shrink-0 transition cursor-pointer"
+                            >
+                                Jump to Question →
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Quick Jump pill bar -->
+                    <div v-if="schemaErrorsList.length > 1" class="pt-2 border-t border-red-200 flex flex-wrap items-center gap-1.5">
                         <span class="text-[11px] font-bold text-red-800 me-1">Jump to question:</span>
                         <button
                             v-for="err in schemaErrorsList"
@@ -1146,12 +1220,24 @@ onUnmounted(() => {
                                 @click="activateCard(idx)"
                                 class="rounded-2xl border transition-all duration-200 bg-white"
                                 :class="[
-                                    activeFieldIdx === idx
-                                        ? 'border-y border-r border-cream-400 border-l-[6px] border-l-indigo-700 shadow-md ring-1 ring-black/5'
-                                        : 'border-cream-300/80 hover:border-cream-400 shadow-xs'
+                                    getSchemaFieldError(idx)
+                                        ? 'border-red-400 ring-2 ring-red-300 shadow-md'
+                                        : (activeFieldIdx === idx
+                                            ? 'border-y border-r border-cream-400 border-l-[6px] border-l-indigo-700 shadow-md ring-1 ring-black/5'
+                                            : 'border-cream-300/80 hover:border-cream-400 shadow-xs')
                                 ]"
                             >
                                 <div class="p-5 space-y-4">
+                                    <!-- In-card validation error banner -->
+                                    <div
+                                        v-if="getSchemaFieldError(idx)"
+                                        class="p-2.5 bg-red-50 border border-red-300 rounded-xl text-xs font-medium text-red-900 flex items-center space-x-2 animate-in fade-in"
+                                    >
+                                        <span class="text-xs shrink-0">⚠️</span>
+                                        <span class="font-bold text-red-800">Validation Issue:</span>
+                                        <span>{{ getSchemaFieldError(idx) }}</span>
+                                    </div>
+
                                     <!-- Section Card Top Header -->
                                     <div class="flex items-center justify-between gap-3">
                                         <div class="flex items-center space-x-2">
@@ -1323,13 +1409,27 @@ onUnmounted(() => {
                                 @click="activateCard(idx)"
                                 class="rounded-2xl transition-all duration-200"
                                 :class="[
-                                    activeFieldIdx === idx
-                                        ? 'bg-white border-y border-r border-cream-400 border-l-[6px] border-l-forest-900 shadow-md ring-1 ring-black/5'
-                                        : 'bg-white/95 hover:bg-white border border-cream-300/80 hover:border-cream-400 shadow-xs cursor-pointer'
+                                    getSchemaFieldError(idx)
+                                        ? 'border-red-400 ring-2 ring-red-300 shadow-md'
+                                        : (activeFieldIdx === idx
+                                            ? 'bg-white border-y border-r border-cream-400 border-l-[6px] border-l-forest-900 shadow-md ring-1 ring-black/5'
+                                            : 'bg-white/95 hover:bg-white border border-cream-300/80 hover:border-cream-400 shadow-xs cursor-pointer')
                                 ]"
                             >
                                 <!-- ACTIVE EDITING STATE -->
                                 <div v-if="activeFieldIdx === idx" class="p-5 space-y-4">
+                                    <!-- In-card validation error banner when active -->
+                                    <div
+                                        v-if="getSchemaFieldError(idx)"
+                                        class="p-3 bg-red-50/95 border border-red-300 rounded-xl text-xs font-medium text-red-900 flex items-start space-x-2 animate-in fade-in"
+                                    >
+                                        <span class="text-sm shrink-0">⚠️</span>
+                                        <div>
+                                            <span class="font-bold text-red-800">Validation Issue: </span>
+                                            <span>{{ getSchemaFieldError(idx) }}</span>
+                                        </div>
+                                    </div>
+
                                     <!-- Card Drag Handle Icon at Top Center -->
                                     <div class="flex justify-center -mt-2 -mb-2">
                                         <span class="text-gray-300 hover:text-gray-500 cursor-grab text-xs tracking-widest font-black" title="Drag to reorder">
@@ -1682,6 +1782,15 @@ onUnmounted(() => {
 
                                 <!-- INACTIVE RESTING PREVIEW STATE -->
                                 <div v-else class="p-5 space-y-2">
+                                    <!-- In-card validation error banner when inactive -->
+                                    <div
+                                        v-if="getSchemaFieldError(idx)"
+                                        class="p-2.5 bg-red-50 border border-red-300 rounded-xl text-xs font-medium text-red-900 flex items-center space-x-2 mb-2 animate-in fade-in"
+                                    >
+                                        <span class="text-xs shrink-0">⚠️</span>
+                                        <span class="font-bold text-red-800">Validation Issue:</span>
+                                        <span class="truncate">{{ getSchemaFieldError(idx) }}</span>
+                                    </div>
                                     <div class="flex items-center justify-between">
                                         <div class="flex items-center space-x-2">
                                             <span class="text-sm font-bold text-gray-900 inline-block" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>

@@ -32,7 +32,7 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.pagination.enabled' => ['nullable', 'boolean'],
             'schema.pagination.progress_bar' => ['nullable', 'boolean'],
             'schema.pagination.show_section_numbers' => ['nullable', 'boolean'],
-            'schema.fields' => ['required', 'array', 'min:1'],
+            'schema.fields' => ['required', 'array', 'list', 'min:1'],
             'schema.fields.*.id' => ['required', 'string', 'max:150'],
             'schema.fields.*.particular' => ['required', 'string', 'max:5000'],
             'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,date,radio,select,checkbox,section,text_only'],
@@ -55,6 +55,61 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.fields.*.options.*.label' => ['nullable', 'string'],
             'schema.fields.*.options.*.is_other' => ['nullable', 'boolean'],
             'schema.fields.*.options.*.goto_section' => ['nullable', 'string', 'max:150'],
+        ];
+    }
+
+    /**
+     * Get custom messages for validator errors.
+     *
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'event_id.required' => 'Please select a target feedback event.',
+            'event_id.exists' => 'The selected feedback event does not exist.',
+            'status.in' => 'Form status must be either published or draft.',
+            'schema.required' => 'Questionnaire structure is required.',
+            'schema.title.max' => 'Form title may not exceed 2000 characters.',
+            'schema.description.max' => 'Form description may not exceed 65535 characters.',
+            'schema.fields.required' => 'The questionnaire must contain at least one question or section.',
+            'schema.fields.min' => 'The questionnaire must contain at least one question or section.',
+            'schema.fields.list' => 'The questions list must be a sequential array.',
+            'schema.fields.*.id.required' => 'Question #:position identifier is required.',
+            'schema.fields.*.id.max' => 'Question #:position identifier may not exceed 150 characters.',
+            'schema.fields.*.particular.required' => 'Question #:position prompt/title is required.',
+            'schema.fields.*.particular.max' => 'Question #:position prompt/title may not exceed 5000 characters.',
+            'schema.fields.*.type.required' => 'Question #:position type is required.',
+            'schema.fields.*.type.in' => 'Question #:position has an invalid question type.',
+            'schema.fields.*.weight.required' => 'Question #:position order/weight is required.',
+            'schema.fields.*.weight.integer' => 'Question #:position order/weight must be a whole number.',
+            'schema.fields.*.weight.min' => 'Question #:position order/weight must be at least 0.',
+            'schema.fields.*.placeholder.max' => 'Question #:position placeholder may not exceed 2000 characters.',
+            'schema.fields.*.description.max' => 'Question #:position description may not exceed 65535 characters.',
+            'schema.fields.*.description_type.in' => 'Question #:position description type must be text or textarea.',
+            'schema.fields.*.option_source.in' => 'Question #:position has an invalid option source.',
+            'schema.fields.*.section_flow.max' => 'Question #:position section destination may not exceed 150 characters.',
+            'schema.fields.*.options.*.goto_section.max' => 'Question #:position option destination may not exceed 150 characters.',
+        ];
+    }
+
+    /**
+     * Get custom attributes for validator errors.
+     *
+     * @return array<string, string>
+     */
+    public function attributes(): array
+    {
+        return [
+            'event_id' => 'target feedback event',
+            'schema.title' => 'form title',
+            'schema.description' => 'form description',
+            'schema.fields' => 'form questions',
+            'schema.fields.*.particular' => 'question prompt',
+            'schema.fields.*.id' => 'question ID',
+            'schema.fields.*.type' => 'question type',
+            'schema.fields.*.weight' => 'question order',
+            'schema.fields.*.options' => 'question options',
         ];
     }
 }

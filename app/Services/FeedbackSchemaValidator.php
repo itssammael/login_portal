@@ -81,18 +81,27 @@ class FeedbackSchemaValidator
 
         $normalizedFields = [];
         $usedIds = [];
+        $position = 0;
 
         foreach ($schema['fields'] as $index => $field) {
+            $position++;
+            $questionNum = is_numeric($index) ? ((int) $index + 1) : $position;
+
             if (! is_array($field)) {
+                $err = 'Question #'.$questionNum.' must be an object.';
                 throw ValidationException::withMessages([
-                    "fields.{$index}" => "Field at index {$index} must be an object.",
+                    "schema.fields.{$index}" => $err,
+                    "fields.{$index}" => $err,
                 ]);
             }
 
             $particular = trim((string) ($field['particular'] ?? ''));
+            $cleanParticular = trim(strip_tags($particular)) ?: 'Question #'.$questionNum;
             if ($particular === '') {
+                $err = 'Question #'.$questionNum.' requires a prompt or question title.';
                 throw ValidationException::withMessages([
-                    "fields.{$index}.particular" => 'Field at position #'.($index + 1)." requires a 'particular' (question label).",
+                    "schema.fields.{$index}.particular" => $err,
+                    "fields.{$index}.particular" => $err,
                 ]);
             }
 
@@ -102,24 +111,28 @@ class FeedbackSchemaValidator
             $id = preg_replace('/[^a-z0-9_]/', '', strtolower($id));
 
             if ($id === '') {
-                $id = 'field_'.($index + 1);
+                $id = 'field_'.$questionNum;
             }
 
             if (in_array($id, $usedIds, true)) {
+                $err = 'Question #'.$questionNum." ('{$cleanParticular}'): Identifier '{$id}' is duplicated. Every question must have a unique identifier.";
                 throw ValidationException::withMessages([
-                    "fields.{$index}.id" => "Field identifier '{$id}' is duplicated. Every field must have a unique identifier.",
+                    "schema.fields.{$index}.id" => $err,
+                    "fields.{$index}.id" => $err,
                 ]);
             }
             $usedIds[] = $id;
 
             $type = strtolower(trim((string) ($field['type'] ?? 'text')));
             if (! in_array($type, self::SUPPORTED_TYPES, true)) {
+                $err = 'Question #'.$questionNum." ('{$cleanParticular}') has unsupported question type '{$type}'. Must be one of: ".implode(', ', self::SUPPORTED_TYPES);
                 throw ValidationException::withMessages([
-                    "fields.{$index}.type" => "Field '{$particular}' has unsupported type '{$type}'. Must be one of: ".implode(', ', self::SUPPORTED_TYPES),
+                    "schema.fields.{$index}.type" => $err,
+                    "fields.{$index}.type" => $err,
                 ]);
             }
 
-            $weight = isset($field['weight']) ? (int) $field['weight'] : ($index + 1);
+            $weight = isset($field['weight']) && is_numeric($field['weight']) ? (int) $field['weight'] : $questionNum;
             $required = in_array($type, ['section', 'text_only'], true) ? false : (bool) ($field['required'] ?? false);
             $allowOther = (bool) ($field['allow_other'] ?? false);
             $allowCustomValue = (bool) ($field['allow_custom_value'] ?? false);
@@ -184,12 +197,17 @@ class FeedbackSchemaValidator
                 if (in_array($type, self::TYPES_REQUIRING_OPTIONS, true) && ! $allowCustomValue) {
                     $rawOptions = $field['options'] ?? [];
                     if (! is_array($rawOptions) || empty($rawOptions)) {
+                        $err = 'Question #'.$questionNum." ('{$cleanParticular}'): Multiple choice and dropdown questions require at least one option.";
                         throw ValidationException::withMessages([
-                            "fields.{$index}.options" => "Field '{$particular}' ({$type}) requires at least one option.",
+                            "schema.fields.{$index}.options" => $err,
+                            "fields.{$index}.options" => $err,
                         ]);
                     }
 
+                    $optPosition = 0;
                     foreach ($rawOptions as $optIdx => $opt) {
+                        $optPosition++;
+                        $optNum = is_numeric($optIdx) ? ((int) $optIdx + 1) : $optPosition;
                         $gotoSection = null;
                         if (is_array($opt)) {
                             $optVal = trim((string) ($opt['value'] ?? ''));
@@ -199,11 +217,11 @@ class FeedbackSchemaValidator
                                 $gotoSection = trim($opt['goto_section']);
                             }
                             if ($optVal === '') {
-                                $optVal = Str::slug($optLabel, '_') ?: 'opt_'.($optIdx + 1);
+                                $optVal = Str::slug($optLabel, '_') ?: 'opt_'.$optNum;
                             }
                         } else {
                             $optLabel = trim((string) $opt);
-                            $optVal = Str::slug($optLabel, '_') ?: 'opt_'.($optIdx + 1);
+                            $optVal = Str::slug($optLabel, '_') ?: 'opt_'.$optNum;
                             $isOther = ($optVal === 'other' || strtolower($optLabel) === 'other' || strtolower($optLabel) === 'others');
                         }
 
@@ -220,8 +238,10 @@ class FeedbackSchemaValidator
                     }
 
                     if (empty($options)) {
+                        $err = 'Question #'.$questionNum." ('{$cleanParticular}'): At least one valid option with a display label is required.";
                         throw ValidationException::withMessages([
-                            "fields.{$index}.options" => "Field '{$particular}' ({$type}) requires at least one valid option with a display label.",
+                            "schema.fields.{$index}.options" => $err,
+                            "fields.{$index}.options" => $err,
                         ]);
                     }
                 }

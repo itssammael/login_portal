@@ -142,4 +142,31 @@ class FeedbackSchemaValidatorTest extends TestCase
             );
         }
     }
+
+    public function test_validate_schema_handles_string_keyed_fields_without_type_error(): void
+    {
+        $validator = new FeedbackSchemaValidator;
+
+        // String keys instead of sequential integers
+        try {
+            $validator->validateSchema([
+                'fields' => [
+                    'question_one' => [
+                        'id' => 'q1',
+                        'particular' => 'Question One',
+                        'type' => 'radio',
+                        'options' => [], // triggers line 196
+                    ],
+                ],
+            ]);
+            $this->fail('Expected ValidationException was not thrown');
+        } catch (ValidationException $e) {
+            $errors = $e->errors();
+            $this->assertArrayHasKey('schema.fields.question_one.options', $errors);
+            $this->assertSame(
+                "Question #1 ('Question One'): Multiple choice and dropdown questions require at least one option.",
+                $errors['schema.fields.question_one.options'][0]
+            );
+        }
+    }
 }

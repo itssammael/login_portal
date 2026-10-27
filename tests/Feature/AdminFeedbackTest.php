@@ -1403,4 +1403,56 @@ class AdminFeedbackTest extends TestCase
         $feedback->refresh();
         $this->assertEquals(Feedback::STATUS_DRAFT, $feedback->status);
     }
+
+    public function test_save_feedback_form_returns_specific_validation_error_messages(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create();
+
+        // 1. Test missing particular and missing type in SaveFeedbackFormRequest
+        $response = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'valid_1',
+                        'particular' => 'Valid question',
+                        'type' => 'text',
+                        'weight' => 1,
+                    ],
+                    [
+                        'id' => 'invalid_2',
+                        'particular' => '',
+                        'type' => '',
+                        'weight' => 2,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertSessionHasErrors([
+            'schema.fields.1.particular' => 'Question #2 prompt/title is required.',
+            'schema.fields.1.type' => 'Question #2 type is required.',
+        ]);
+
+        // 2. Test FeedbackSchemaValidator specific error message for missing options
+        $response2 = $this->actingAs($admin)->post(route('admin.feedback.forms.save'), [
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'radio_q',
+                        'particular' => 'Choose your option',
+                        'type' => 'radio',
+                        'weight' => 1,
+                        'options' => [],
+                    ],
+                ],
+            ],
+        ]);
+
+        $response2->assertSessionHasErrors([
+            'schema.fields.0.options' => "Question #1 ('Choose your option'): Multiple choice and dropdown questions require at least one option.",
+        ]);
+    }
 }
