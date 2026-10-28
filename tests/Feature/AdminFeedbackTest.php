@@ -1455,4 +1455,77 @@ class AdminFeedbackTest extends TestCase
             'schema.fields.0.options' => "Question #1 ('Choose your option'): Multiple choice and dropdown questions require at least one option.",
         ]);
     }
+
+    public function test_admin_feedback_submissions_display_participant_name_if_available(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $event = FbEvent::factory()->create(['name' => 'Drill Event']);
+        $feedback = Feedback::factory()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'q_participant_name',
+                        'particular' => 'Name of Participant (Optional)',
+                        'type' => 'text',
+                    ],
+                ],
+            ],
+        ]);
+
+        // Submission 1: Name on participant model
+        $part1 = FbParticipant::factory()->create(['name' => 'Juan Dela Cruz']);
+        $sub1 = FbSubmission::create([
+            'feedback_id' => $feedback->id,
+            'participant_id' => $part1->id,
+            'data' => [],
+        ]);
+
+        // Submission 2: Anonymous participant model, but name in questionnaire answer
+        $part2 = FbParticipant::factory()->create(['name' => null]);
+        $sub2 = FbSubmission::create([
+            'feedback_id' => $feedback->id,
+            'participant_id' => $part2->id,
+            'data' => [
+                'q_participant_name' => 'Maria Clara',
+            ],
+        ]);
+
+        // Submission 3: Anonymous participant model, but name in candidate key 'full_name'
+        $part3 = FbParticipant::factory()->create(['name' => null]);
+        $sub3 = FbSubmission::create([
+            'feedback_id' => $feedback->id,
+            'participant_id' => $part3->id,
+            'data' => [
+                'full_name' => 'Crisostomo Ibarra',
+            ],
+        ]);
+
+        // Submission 4: Completely anonymous
+        $part4 = FbParticipant::factory()->create(['name' => null]);
+        $sub4 = FbSubmission::create([
+            'feedback_id' => $feedback->id,
+            'participant_id' => $part4->id,
+            'data' => [
+                'rating' => 'good',
+            ],
+        ]);
+
+        $this->assertEquals('Juan Dela Cruz', $sub1->fresh()->participant_name);
+        $this->assertEquals('Maria Clara', $sub2->fresh(['feedback'])->participant_name);
+        $this->assertEquals('Crisostomo Ibarra', $sub3->fresh()->participant_name);
+        $this->assertNull($sub4->fresh(['feedback'])->participant_name);
+
+        $response = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'tab' => 'individual',
+            'search' => 'Crisostomo',
+        ]));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->has('submissions.data', 1)
+            ->where('submissions.data.0.id', $sub3->id)
+            ->where('submissions.data.0.participant_name', 'Crisostomo Ibarra')
+        );
+    }
 }

@@ -42,6 +42,78 @@ class FbSubmission extends Model
     ];
 
     /**
+     * The accessors to append to the model's array form.
+     *
+     * @var array<int, string>
+     */
+    protected $appends = [
+        'participant_name',
+    ];
+
+    /**
+     * Get the resolved participant name if available from participant model or submission data.
+     */
+    public function getParticipantNameAttribute(): ?string
+    {
+        if (! empty($this->participant?->name) && is_string($this->participant->name)) {
+            $name = trim($this->participant->name);
+            if ($name !== '' && strtolower($name) !== 'anonymous') {
+                return $name;
+            }
+        }
+
+        if (! is_array($this->data)) {
+            return null;
+        }
+
+        $fields = $this->feedback?->schema['fields'] ?? [];
+        if (is_array($fields) && count($fields) > 0) {
+            foreach ($fields as $field) {
+                $type = $field['type'] ?? 'text';
+                if (in_array($type, ['section', 'text_only'], true)) {
+                    continue;
+                }
+
+                $fieldId = (string) ($field['id'] ?? '');
+                $particular = strtolower(trim(strip_tags((string) ($field['particular'] ?? ''))));
+
+                $isNameField = preg_match('/^(name|full\s*name|complete\s*name|participant(?:\'s)?\s*name|name\s*of\s*(?:the\s*)?participant|your\s*name|respondent(?:\'s)?\s*name|pangalan)(\s*[\(:].*|\s+optional)?$/i', $particular)
+                    || preg_match('/^(name|full_name|fullname|participant_name|name_of_participant|respondent_name|your_name|complete_name)$/i', $fieldId);
+
+                if ($isNameField && $fieldId !== '' && ! empty($this->data[$fieldId]) && is_string($this->data[$fieldId])) {
+                    $val = trim($this->data[$fieldId]);
+                    if ($val !== '' && strtolower($val) !== 'anonymous') {
+                        return $val;
+                    }
+                }
+            }
+        }
+
+        $candidateKeys = [
+            'name',
+            'full_name',
+            'fullname',
+            'participant_name',
+            'name_of_participant',
+            'respondent_name',
+            'your_name',
+            'complete_name',
+            'pangalan',
+        ];
+
+        foreach ($candidateKeys as $key) {
+            if (! empty($this->data[$key]) && is_string($this->data[$key])) {
+                $val = trim($this->data[$key]);
+                if ($val !== '' && strtolower($val) !== 'anonymous') {
+                    return $val;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Get the feedback template associated with the submission.
      */
     public function feedback(): BelongsTo

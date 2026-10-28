@@ -159,6 +159,74 @@ const getFieldValue = (submission, key) => {
     return submission.data[key] ?? null;
 };
 
+const getParticipantName = (submission) => {
+    if (!submission) return null;
+
+    // 1. Direct participant relationship name
+    const directName = submission.participant?.name;
+    if (typeof directName === 'string' && directName.trim() && directName.trim().toLowerCase() !== 'anonymous') {
+        return directName.trim();
+    }
+
+    // 2. Appended attribute from model
+    const appName = submission.participant_name;
+    if (typeof appName === 'string' && appName.trim() && appName.trim().toLowerCase() !== 'anonymous') {
+        return appName.trim();
+    }
+
+    const data = submission.data;
+    if (!data || typeof data !== 'object') {
+        return null;
+    }
+
+    // 3. Check schema fields if available
+    const fields = submission.feedback?.schema?.fields;
+    if (Array.isArray(fields) && fields.length > 0) {
+        for (const field of fields) {
+            if (['section', 'text_only'].includes(field.type)) continue;
+
+            const fieldId = String(field.id || '');
+            const rawParticular = String(field.particular || '').replace(/<[^>]*>/g, '').trim().toLowerCase();
+
+            const isNameField = (
+                /^(name|full\s*name|complete\s*name|participant(?:\'s)?\s*name|name\s*of\s*(?:the\s*)?participant|your\s*name|respondent(?:\'s)?\s*name|pangalan)(\s*[\(:].*|\s+optional)?$/i.test(rawParticular) ||
+                /^(name|full_name|fullname|participant_name|name_of_participant|respondent_name|your_name|complete_name)$/i.test(fieldId)
+            );
+
+            if (isNameField && fieldId && data[fieldId] !== undefined && data[fieldId] !== null) {
+                const val = String(data[fieldId]).trim();
+                if (val && val.toLowerCase() !== 'anonymous') {
+                    return val;
+                }
+            }
+        }
+    }
+
+    // 4. Candidate keys in submission data dictionary
+    const candidateKeys = [
+        'name',
+        'full_name',
+        'fullname',
+        'participant_name',
+        'name_of_participant',
+        'respondent_name',
+        'your_name',
+        'complete_name',
+        'pangalan',
+    ];
+
+    for (const key of candidateKeys) {
+        if (data[key] !== undefined && data[key] !== null) {
+            const val = String(data[key]).trim();
+            if (val && val.toLowerCase() !== 'anonymous') {
+                return val;
+            }
+        }
+    }
+
+    return null;
+};
+
 const getOptionDisplayLabel = (field, val) => {
     if (!field.options || !Array.isArray(field.options)) return val;
     const match = field.options.find(opt => opt.value === val);
@@ -546,8 +614,8 @@ const getOptionDisplayLabel = (field, val) => {
                                 <tbody class="divide-y divide-cream-500/30">
                                     <tr v-for="s in submissions.data" :key="s.id" class="hover:bg-cream-100 transition">
                                         <td class="px-5 py-3.5">
-                                            <span v-if="s.participant?.name" class="font-bold text-gray-900 block">
-                                                {{ s.participant.name }}
+                                            <span v-if="getParticipantName(s)" class="font-bold text-gray-900 block">
+                                                {{ getParticipantName(s) }}
                                             </span>
                                             <span v-else class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-300">
                                                 👤 Anonymous
@@ -646,7 +714,7 @@ const getOptionDisplayLabel = (field, val) => {
                             <div>
                                 <span class="text-gray-500 block">Name:</span>
                                 <span class="font-bold text-gray-900">
-                                    {{ selectedSubmission.participant?.name || 'Anonymous' }}
+                                    {{ getParticipantName(selectedSubmission) || 'Anonymous' }}
                                 </span>
                             </div>
                             <div>

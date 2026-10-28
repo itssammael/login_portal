@@ -118,11 +118,13 @@ class FeedbackController extends Controller
 
             if ($request->filled('search')) {
                 $search = (string) $request->input('search');
-                $tableQuery->whereHas('participant', function ($q) use ($search): void {
-                    $q->where('name', 'like', "%{$search}%")
-                        ->orWhere('agency', 'like', "%{$search}%")
-                        ->orWhere('designation', 'like', "%{$search}%")
-                        ->orWhere('location', 'like', "%{$search}%");
+                $tableQuery->where(function ($query) use ($search): void {
+                    $query->whereHas('participant', function ($q) use ($search): void {
+                        $q->where('name', 'like', "%{$search}%")
+                            ->orWhere('agency', 'like', "%{$search}%")
+                            ->orWhere('designation', 'like', "%{$search}%")
+                            ->orWhere('location', 'like', "%{$search}%");
+                    })->orWhere('data', 'like', "%{$search}%");
                 });
             }
 

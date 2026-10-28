@@ -185,7 +185,16 @@ class FeedbackEmbedController extends Controller
                 abort(404, 'This feedback session has expired or has already been submitted.');
             }
 
-            $name = $pData['name'] ?? ($validatedData['name'] ?? null);
+            $name = $pData['name'] ?? null;
+            if (empty($name)) {
+                $candidateKeys = ['name', 'full_name', 'fullname', 'participant_name', 'name_of_participant', 'respondent_name', 'your_name', 'complete_name', 'pangalan'];
+                foreach ($candidateKeys as $ck) {
+                    if (! empty($validatedData[$ck]) && is_string($validatedData[$ck])) {
+                        $name = trim($validatedData[$ck]);
+                        break;
+                    }
+                }
+            }
             $agencyInput = $pData['agency'] ?? ($validatedData['agency'] ?? null);
             $designationInput = $pData['designation'] ?? ($validatedData['designation'] ?? null);
             $functionInput = $pData['function_id'] ?? ($validatedData['function'] ?? ($validatedData['function_id'] ?? null));
