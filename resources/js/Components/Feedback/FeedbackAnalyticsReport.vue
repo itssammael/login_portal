@@ -40,7 +40,7 @@ function edit(key, field, event) {
                 v-if="editable"
                 :value="report.title"
                 aria-label="Report title on canvas"
-                maxlength="200"
+                maxlength="500"
                 class="canvas-input text-3xl font-black tracking-tight"
                 @input="edit('page', 'title', $event)"
             >
