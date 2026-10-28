@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
+import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
     event: {
@@ -28,6 +29,18 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
+    isAvailable: {
+        type: Boolean,
+        default: true,
+    },
+    unavailableReason: {
+        type: String,
+        default: '',
+    },
+    unavailableMessage: {
+        type: String,
+        default: '',
+    },
 });
 
 // Sorted schema fields by weight ascending
@@ -36,6 +49,16 @@ const sortedFields = computed(() => {
         return [];
     }
     return [...props.form.schema.fields].sort((a, b) => (Number(a.weight) || 0) - (Number(b.weight) || 0));
+});
+
+const isFormAvailable = computed(() => {
+    if (props.isAvailable === false) {
+        return false;
+    }
+    if (!props.event || !props.form || !sortedFields.value.length) {
+        return false;
+    }
+    return true;
 });
 
 // Helper to determine target origin from document.referrer against allowed list
@@ -201,7 +224,7 @@ const validateCurrentPage = () => {
         if (field.required) {
             const val = answers.value[field.id];
             if (val === null || val === undefined || val === '' || (Array.isArray(val) && val.length === 0)) {
-                clientErrors.value[field.id] = `The '${field.particular}' field is required.`;
+                clientErrors.value[field.id] = `The '${stripHtml(field.particular)}' field is required.`;
                 hasError = true;
             }
         }
@@ -327,7 +350,7 @@ const errorFieldsList = computed(() => {
 
             list.push({
                 id: fieldId,
-                particular: field?.particular || `Question (${fieldId})`,
+                particular: stripHtml(field?.particular) || `Question (${fieldId})`,
                 weight: field?.weight || null,
                 message: errorMsg,
                 isOther,
@@ -528,17 +551,30 @@ const getOtherFieldError = (fieldId) => {
                 </div>
             </div>
 
-            <!-- Unavailable / Empty State -->
-            <div v-else-if="!event || !form || !sortedFields.length" class="bg-cream-200 rounded-3xl p-10 text-center border border-cream-500/50 shadow-sm">
-                <div class="size-14 rounded-full bg-cream-100 text-gray-400 flex items-center justify-center mx-auto mb-3">
-                    <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            <!-- Not Available / Draft / Unavailable State -->
+            <div v-else-if="!isFormAvailable" class="bg-[#fffef9] rounded-3xl p-8 sm:p-10 text-center border border-cream-400/80 shadow-sm space-y-4 max-w-md mx-auto animate-fade-in">
+                <div class="size-14 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto shadow-inner">
+                    <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
                     </svg>
                 </div>
-                <h3 class="text-base font-bold text-gray-900">Feedback Form Unavailable</h3>
-                <p class="text-xs text-gray-600 max-w-sm mx-auto mt-1">
-                    This feedback form is currently unavailable or has already been submitted.
-                </p>
+                <div class="space-y-1.5">
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-200/80 text-amber-900 border border-amber-300">
+                        <span class="size-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                        Not Available
+                    </span>
+                    <h3 class="text-lg font-black text-gray-900">
+                        {{ event?.name || 'Feedback Form Not Available' }}
+                    </h3>
+                    <p class="text-xs text-gray-600 max-w-sm mx-auto leading-relaxed">
+                        {{ unavailableMessage || (unavailableReason === 'draft'
+                            ? 'This feedback form is currently unpublished or still saved as draft and is not accepting responses at this time.'
+                            : 'This feedback form is currently unavailable or has already been submitted.') }}
+                    </p>
+                </div>
+                <div v-if="unavailableReason === 'draft'" class="text-[10px] text-amber-800/80 font-mono bg-amber-50/60 py-1 px-2.5 rounded-md border border-amber-200/60 inline-block">
+                    Status: Unpublished / Draft Mode
+                </div>
             </div>
 
             <!-- Active Questionnaire Form -->
@@ -562,13 +598,12 @@ const getOtherFieldError = (fieldId) => {
                     >
                         Feedback Form
                     </span>
-                    <h1 class="text-2xl sm:text-3xl font-black tracking-tight form-rich-content" style="color: #ffffff;" v-html="props.form?.schema?.title || event.name">
-                    </h1>
+                    <h1 class="text-2xl sm:text-3xl font-black tracking-tight" style="color: #ffffff;" v-html="sanitizeHtml(props.form?.schema?.title || event.name)"></h1>
                     <div
                         v-if="props.form?.schema?.description || event.details"
                         class="text-sm mt-2.5 leading-relaxed max-w-2xl font-medium form-rich-content"
                         style="color: #dcfce7;"
-                        v-html="props.form?.schema?.description || event.details"
+                        v-html="sanitizeHtml(props.form?.schema?.description || event.details)"
                     ></div>
                 </div>
 
@@ -577,13 +612,12 @@ const getOtherFieldError = (fieldId) => {
                     <!-- Multi-Page Progress Indicator -->
                     <div v-if="isPaginated" class="border-b border-cream-400/50 pb-4 space-y-2">
                         <div class="flex items-center justify-between text-xs font-bold text-forest-900">
-                            <span class="form-rich-content" v-html="currentPage?.section?.particular || `Section ${currentPageIdx + 1}`"></span>
+                            <span class="form-rich-content inline" v-html="sanitizeHtml(currentPage?.section?.particular || `Section ${currentPageIdx + 1}`)"></span>
                             <span v-if="props.form?.schema?.pagination?.show_section_numbers !== false">
                                 Section {{ currentPageIdx + 1 }} of {{ sectionPages.length }}
                             </span>
                         </div>
-                        <div v-if="currentPage?.section?.description" class="text-xs text-gray-600 form-rich-content" v-html="currentPage.section.description">
-                        </div>
+                        <div v-if="currentPage?.section?.description" class="text-xs text-gray-600 leading-relaxed font-medium form-rich-content" v-html="sanitizeHtml(currentPage.section.description)"></div>
                         <div v-if="props.form?.schema?.pagination?.progress_bar !== false" class="h-2 w-full bg-cream-200 rounded-full overflow-hidden">
                             <div
                                 class="h-full bg-forest-900 transition-all duration-300 rounded-full"
@@ -608,8 +642,8 @@ const getOtherFieldError = (fieldId) => {
                                 class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
                             >
                                 <div>
-                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="field.particular"></h3>
-                                    <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="field.description"></div>
+                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="sanitizeHtml(field.particular)"></h3>
+                                    <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                 </div>
                             </div>
 
@@ -619,8 +653,8 @@ const getOtherFieldError = (fieldId) => {
                                 :id="`field_container_${field.id}`"
                                 class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-2"
                             >
-                                <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="field.particular"></h4>
-                                <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="field.description"></div>
+                                <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="sanitizeHtml(field.particular)"></h4>
+                                <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="sanitizeHtml(field.description)"></div>
                             </div>
 
                             <!-- Regular Question / Input Card -->
@@ -638,12 +672,12 @@ const getOtherFieldError = (fieldId) => {
                             >
                             <div class="flex items-start justify-between gap-3">
                                 <div class="flex-1">
-                                    <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block form-rich-content">
-                                        <span v-html="field.particular"></span>
+                                    <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block">
+                                        <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                         <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
                                         <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>
                                     </label>
-                                    <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="field.description"></div>
+                                    <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                 </div>
                                 <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cream-200 text-gray-600 shrink-0">
                                     {{ field.type }}
@@ -657,7 +691,7 @@ const getOtherFieldError = (fieldId) => {
                                     v-model="answers[field.id]"
                                     type="text"
                                     :required="field.required"
-                                    :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                    :placeholder="field.placeholder || 'Type your answer here...'"
                                     class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                 />
                             </div>
@@ -669,7 +703,7 @@ const getOtherFieldError = (fieldId) => {
                                     v-model="answers[field.id]"
                                     rows="3"
                                     :required="field.required"
-                                    :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                    :placeholder="field.placeholder || 'Type your response here...'"
                                     class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                 ></textarea>
                             </div>
@@ -723,7 +757,7 @@ const getOtherFieldError = (fieldId) => {
                                 <!-- Conditional "Other" input -->
                                 <div v-if="isOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                     <label class="block text-xs font-bold text-amber-900">
-                                        Please specify {{ field.particular }} <span v-if="field.required" class="text-red-500">*</span>
+                                        Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span> <span v-if="field.required" class="text-red-500">*</span>
                                     </label>
                                     <input
                                         v-model="answers[`${field.id}_other`]"
@@ -747,7 +781,7 @@ const getOtherFieldError = (fieldId) => {
                                         type="text"
                                         :list="`datalist_${field.id}`"
                                         :required="field.required"
-                                        :placeholder="field.placeholder || `Select or type ${field.particular}...`"
+                                        :placeholder="field.placeholder || 'Select or type an option...'"
                                         class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                     />
                                     <datalist :id="`datalist_${field.id}`">
@@ -764,7 +798,7 @@ const getOtherFieldError = (fieldId) => {
                                         :required="field.required"
                                         class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                     >
-                                        <option value="" disabled>-- Select {{ field.particular }} --</option>
+                                        <option value="" disabled>-- Select an option --</option>
                                         <option v-for="opt in field.options || []" :key="opt.value" :value="opt.value">
                                             {{ opt.label }}
                                         </option>
@@ -774,7 +808,7 @@ const getOtherFieldError = (fieldId) => {
                                 <!-- Conditional "Other" input -->
                                 <div v-if="isOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                     <label class="block text-xs font-bold text-amber-900">
-                                        Please specify {{ field.particular }} <span v-if="field.required" class="text-red-500">*</span>
+                                        Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span> <span v-if="field.required" class="text-red-500">*</span>
                                     </label>
                                     <input
                                         v-model="answers[`${field.id}_other`]"
@@ -812,7 +846,7 @@ const getOtherFieldError = (fieldId) => {
                                 <!-- Conditional "Other" input -->
                                 <div v-if="isOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                     <label class="block text-xs font-bold text-amber-900">
-                                        Please specify {{ field.particular }} <span v-if="field.required" class="text-red-500">*</span>
+                                        Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span> <span v-if="field.required" class="text-red-500">*</span>
                                     </label>
                                     <input
                                         v-model="answers[`${field.id}_other`]"

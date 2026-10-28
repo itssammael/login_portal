@@ -9,12 +9,11 @@ use App\Models\Designation;
 use App\Models\FbEvent;
 use App\Models\FbParticipant;
 use App\Models\FbSubmission;
-use App\Rules\TurnstileRule;
+use App\Models\Feedback;
 use App\Services\FeedbackSchemaValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
 use Inertia\Inertia;
 use Inertia\Response;
 use Throwable;
@@ -48,6 +47,26 @@ class LiveFeedbackFormController extends Controller
             abort(404);
         }
 
+        // When unpublished or saved as draft, public respondents see a proper "Not Available" message
+        if ($feedback->isDraft() && ! $request->user()?->isAdmin()) {
+            return Inertia::render('Feedback/Live', [
+                'event' => [
+                    'name' => $event->name,
+                    'details' => $event->details,
+                ],
+                'form' => null,
+                'isAvailable' => false,
+                'unavailableReason' => 'draft',
+                'unavailableMessage' => 'This feedback form is currently unpublished or still saved as draft and is not accepting responses at this time.',
+                'functions' => [],
+                'lookups' => [
+                    'agencies' => [],
+                    'designations' => [],
+                ],
+                'apiKey' => $api_key,
+            ]);
+        }
+
         try {
             $resolvedSchema = $schemaValidator->resolveSchemaForEvent($feedback->schema, $event);
         } catch (Throwable) {
@@ -69,15 +88,19 @@ class LiveFeedbackFormController extends Controller
             ],
             'form' => [
                 'id' => $feedback->id,
+                'status' => $feedback->status ?? Feedback::STATUS_PUBLISHED,
+                'is_draft' => $feedback->isDraft(),
                 'schema' => $resolvedSchema,
             ],
+            'isAvailable' => true,
+            'unavailableReason' => null,
+            'unavailableMessage' => null,
             'functions' => $functions,
             'lookups' => [
                 'agencies' => Agency::getCachedList(),
                 'designations' => Designation::getCachedList(),
             ],
             'apiKey' => $api_key,
-            'turnstileSiteKey' => config('services.turnstile.key'),
         ]);
     }
 
@@ -108,6 +131,16 @@ class LiveFeedbackFormController extends Controller
             abort(404);
         }
 
+        if ($feedback->isDraft()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
+                'errors' => [
+                    'general' => ['This feedback form is currently in draft mode and is not accepting responses.'],
+                ],
+            ], 422);
+        }
+
         // Anti-tampering verification: ensure client is not attempting to target another event or form
         $submittedEventId = $request->input('event_id');
         if ($submittedEventId !== null && (! is_numeric($submittedEventId) || (string) $submittedEventId !== (string) $event->id)) {
@@ -128,25 +161,6 @@ class LiveFeedbackFormController extends Controller
                 ],
             ], 422);
         }
-
-        // Enforce server-side Cloudflare Turnstile verification before processing or saving feedback
-        $turnstileToken = $request->input('turnstile_token', $request->input('cf-turnstile-response'));
-        Validator::make(
-            ['turnstile_token' => $turnstileToken],
-            [
-                'turnstile_token' => [
-                    'required',
-                    'string',
-                    'max:2048',
-                    new TurnstileRule($request->ip()),
-                ],
-            ],
-            [
-                'turnstile_token.required' => 'Please complete the security verification before submitting.',
-                'turnstile_token.string' => 'The security verification token is invalid.',
-                'turnstile_token.max' => 'The security verification token is invalid.',
-            ]
-        )->validate();
 
         $pData = $request->getParticipantData();
         $answers = $request->getAnswers();

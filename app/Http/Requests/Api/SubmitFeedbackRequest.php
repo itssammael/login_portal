@@ -74,23 +74,7 @@ class SubmitFeedbackRequest extends FormRequest
             // Feedback answers payload
             'answers' => ['nullable', 'array'],
             'data' => ['nullable', 'array'],
-
-            // Cloudflare Turnstile response token (enforced by LiveFeedbackFormController)
-            'turnstile_token' => ['nullable', 'string', 'max:2048'],
-            'cf-turnstile-response' => ['nullable', 'string', 'max:2048'],
         ];
-    }
-
-    /**
-     * Prepare the data for validation.
-     */
-    protected function prepareForValidation(): void
-    {
-        if (! $this->filled('turnstile_token') && $this->has('cf-turnstile-response')) {
-            $this->merge([
-                'turnstile_token' => $this->input('cf-turnstile-response'),
-            ]);
-        }
     }
 
     /**

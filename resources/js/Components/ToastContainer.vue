@@ -40,11 +40,15 @@ watch(
     (errors) => {
         if (!errors || Object.keys(errors).length === 0) return;
 
-        const messages = Object.values(errors);
+        const rawMessages = Object.values(errors).flat().filter(Boolean);
+        const messages = Array.from(new Set(rawMessages));
         if (messages.length === 1) {
             error(messages[0], 'Validation Error');
         } else if (messages.length > 1) {
-            error(`Please fix ${messages.length} errors on the form.`, 'Validation Errors');
+            const preview = messages.slice(0, 3);
+            const remaining = messages.length - preview.length;
+            const detailedMsg = preview.map((m) => `• ${m}`).join('\n') + (remaining > 0 ? `\n(+${remaining} more)` : '');
+            error(detailedMsg, `Validation Errors (${messages.length})`);
         }
     },
     { deep: true }
@@ -123,7 +127,7 @@ watch(
                     <h4 class="text-sm font-bold text-gray-900 leading-tight">
                         {{ toast.title }}
                     </h4>
-                    <p v-if="toast.message" class="text-xs font-medium text-gray-600 mt-1 leading-relaxed break-words">
+                    <p v-if="toast.message" class="text-xs font-medium text-gray-600 mt-1 leading-relaxed break-words whitespace-pre-line">
                         {{ toast.message }}
                     </p>
                 </div>

@@ -231,7 +231,7 @@ function onEdit(key, field, event) {
                     v-if="editable"
                     :value="block.item.title"
                     aria-label="Blank section title on canvas"
-                    maxlength="200"
+                    maxlength="500"
                     placeholder="Optional section heading…"
                     class="canvas-input text-lg font-bold text-gray-900"
                     @click.stop="emit('select', block.key)"
@@ -292,7 +292,7 @@ function onEdit(key, field, event) {
                 <input
                     :value="block.item.title"
                     aria-label="Section title on canvas"
-                    maxlength="200"
+                    maxlength="500"
                     class="canvas-input font-bold"
                     :class="depth > 0 ? 'text-lg' : 'text-xl'"
                     @click.stop="emit('select', block.key)"

@@ -12,6 +12,10 @@ use App\Models\FbSubmission;
 use App\Models\Feedback;
 use App\Services\FeedbackAnalyticsService;
 use App\Services\FeedbackSchemaValidator;
+use BaconQrCode\Renderer\Image\SvgImageBackEnd;
+use BaconQrCode\Renderer\ImageRenderer;
+use BaconQrCode\Renderer\RendererStyle\RendererStyle;
+use BaconQrCode\Writer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -36,6 +40,7 @@ class FeedbackFormController extends Controller
             ])
             ->withCount('submissions')
             ->whereHas('event')
+            ->when(! $user?->isAdmin(), fn ($q) => $q->where('status', Feedback::STATUS_PUBLISHED))
             ->latest('id')
             ->get()
             ->map(function (Feedback $feedback) use ($schemaValidator, $analytics, $user): array {
@@ -44,6 +49,8 @@ class FeedbackFormController extends Controller
 
                 return [
                     'id' => $feedback->id,
+                    'status' => $feedback->status ?? Feedback::STATUS_PUBLISHED,
+                    'is_draft' => $feedback->isDraft(),
                     'schema' => $schema,
                     'submissions_count' => $feedback->submissions_count,
                     'analytics' => $analytics->publication($feedback),
@@ -93,6 +100,9 @@ class FeedbackFormController extends Controller
         }
 
         $feedback = $event->feedback()->first();
+        if ($feedback && $feedback->isDraft() && ! $user?->isAdmin()) {
+            $feedback = null;
+        }
         $resolvedSchema = $feedback ? $schemaValidator->resolveSchemaForEvent($feedback->schema, $event) : null;
 
         $functions = $event->functions()
@@ -106,10 +116,12 @@ class FeedbackFormController extends Controller
                 'details' => $event->details,
             ],
             'forms' => $forms,
-            'form' => [
+            'form' => $feedback ? [
                 'id' => $feedback->id,
+                'status' => $feedback->status ?? Feedback::STATUS_PUBLISHED,
+                'is_draft' => $feedback->isDraft(),
                 'schema' => $resolvedSchema,
-            ],
+            ] : null,
             'functions' => $functions,
             'lookups' => [
                 'agencies' => Agency::getCachedList(),
@@ -168,6 +180,16 @@ class FeedbackFormController extends Controller
             }
         }
 
+        if ($feedback->isDraft()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
+                'errors' => [
+                    'general' => ['This feedback form is currently in draft mode and is not accepting responses.'],
+                ],
+            ], 422);
+        }
+
         $pData = $request->getParticipantData();
         $answers = $request->getAnswers();
 
@@ -220,6 +242,27 @@ class FeedbackFormController extends Controller
         return (new FbSubmissionResource($submission->load(['feedback', 'participant.function'])))
             ->response()
             ->setStatusCode(201);
+    }
+
+    /**
+     * Generate an SVG QR code for the given feedback form URL.
+     */
+    public function qrCode(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'url' => ['required', 'string', 'url', 'max:2048'],
+        ]);
+
+        $renderer = new ImageRenderer(
+            new RendererStyle(300, 2),
+            new SvgImageBackEnd
+        );
+        $writer = new Writer($renderer);
+        $svg = $writer->writeString($validated['url']);
+
+        return response()->json([
+            'svg' => $svg,
+        ]);
     }
 
     /**

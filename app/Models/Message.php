@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\MessageEncryptionService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -128,5 +129,48 @@ class Message extends Model
     public function reactions(): HasMany
     {
         return $this->hasMany(MessageReaction::class);
+    }
+
+    /**
+     * The user mentions in this message.
+     *
+     * @return HasMany<MessageMention>
+     */
+    public function mentions(): HasMany
+    {
+        return $this->hasMany(MessageMention::class);
+    }
+
+    /**
+     * The per-user deletion records for this message.
+     *
+     * @return HasMany<MessageUserDeletion>
+     */
+    public function userDeletions(): HasMany
+    {
+        return $this->hasMany(MessageUserDeletion::class);
+    }
+
+    /**
+     * The read receipts for this message.
+     *
+     * @return HasMany<MessageRead>
+     */
+    public function reads(): HasMany
+    {
+        return $this->hasMany(MessageRead::class);
+    }
+
+    /**
+     * Scope a query to only include messages visible to a given user (not deleted for them).
+     *
+     * @param  Builder<Message>  $query
+     * @return Builder<Message>
+     */
+    public function scopeVisibleToUser($query, int $userId)
+    {
+        return $query->whereDoesntHave('userDeletions', function ($q) use ($userId): void {
+            $q->where('user_id', $userId);
+        });
     }
 }

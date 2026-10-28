@@ -107,22 +107,71 @@ const ensureFieldUids = (fields) => {
 
 const formConfig = useForm({
     event_id: '',
+    status: 'published',
     schema: JSON.parse(JSON.stringify(defaultSchemaTemplate)),
 });
 
-// Helper to convert strings to clean snake_case
-const toSnakeCase = (str) => {
-    return String(stripHtml(str) || '')
+// Helper to convert strings to clean snake_case limited to maxLength
+const toSnakeCase = (str, maxLength = 20) => {
+    let clean = String(stripHtml(str) || '')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '');
+
+    if (clean.length > maxLength) {
+        clean = clean.slice(0, maxLength);
+        const lastUnderscore = clean.lastIndexOf('_');
+        if (lastUnderscore > 5) {
+            clean = clean.slice(0, lastUnderscore);
+        }
+    }
+    return clean;
+};
+
+const generateUniqueFieldId = (baseId, currentFieldIdx, maxLength = 20) => {
+    let candidate = baseId || `field_${currentFieldIdx + 1}`;
+    if (candidate.length > maxLength) {
+        candidate = candidate.slice(0, maxLength).replace(/_+$/, '');
+    }
+    const otherFields = (formConfig.schema.fields || []).filter((_, idx) => idx !== currentFieldIdx);
+    const existingIds = new Set(otherFields.map((f) => f.id));
+
+    if (!existingIds.has(candidate)) {
+        return candidate;
+    }
+
+    let counter = 2;
+    while (true) {
+        const suffix = `_${counter}`;
+        const prefix = candidate.slice(0, maxLength - suffix.length).replace(/_+$/, '');
+        const suffixedId = `${prefix}${suffix}`;
+        if (!existingIds.has(suffixedId)) {
+            return suffixedId;
+        }
+        counter++;
+    }
+};
+
+const isFieldIdReferenced = (id) => {
+    if (!id) return false;
+    return (formConfig.schema?.fields || []).some((f) => {
+        if (f.section_flow === id) return true;
+        if (f.conditions?.some((c) => c.field_id === id)) return true;
+        if (f.options?.some((opt) => opt.goto_section === id)) return true;
+        return false;
+    });
 };
 
 const onParticularBlur = (field) => {
     if (!field.manualId && field.particular) {
-        const isDefaultPlaceholder = !field.id || /^(question|section|field)_\d+$/.test(field.id);
+        const isDefaultPlaceholder = !field.id || /^(question|section|field|q|sec)_\d+$/.test(field.id);
         if (isDefaultPlaceholder) {
-            field.id = toSnakeCase(field.particular) || (field.type === 'section' ? `section_${field.weight}` : `field_${field.weight}`);
+            if (field.id && isFieldIdReferenced(field.id)) {
+                return;
+            }
+            const currentIdx = formConfig.schema.fields?.indexOf(field) ?? -1;
+            const base = toSnakeCase(field.particular, 20) || (field.type === 'section' ? `sec_${field.weight}` : `q_${field.weight}`);
+            field.id = generateUniqueFieldId(base, currentIdx, 20);
         }
     }
 };
@@ -230,10 +279,12 @@ const initializeModal = () => {
 
     if (targetForm) {
         formConfig.event_id = targetForm.event_id;
+        formConfig.status = targetForm.status || 'published';
         formConfig.schema = JSON.parse(JSON.stringify(targetForm.schema));
     } else if (targetEventId) {
         formConfig.event_id = Number(targetEventId);
         const existing = props.feedbackForms.find((f) => f.event_id === Number(targetEventId));
+        formConfig.status = existing?.status || 'published';
         formConfig.schema = existing
             ? JSON.parse(JSON.stringify(existing.schema))
             : JSON.parse(JSON.stringify(defaultSchemaTemplate));
@@ -241,15 +292,18 @@ const initializeModal = () => {
         const firstUnconfigured = unconfiguredEvents.value[0];
         if (firstUnconfigured) {
             formConfig.event_id = firstUnconfigured.id;
+            formConfig.status = 'published';
             formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
         } else if (props.events.length > 0) {
             formConfig.event_id = props.events[0].id;
             const existing = props.feedbackForms.find((f) => f.event_id === Number(formConfig.event_id));
+            formConfig.status = existing?.status || 'published';
             formConfig.schema = existing
                 ? JSON.parse(JSON.stringify(existing.schema))
                 : JSON.parse(JSON.stringify(defaultSchemaTemplate));
         } else {
             formConfig.event_id = '';
+            formConfig.status = 'published';
             formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
         }
     }
@@ -296,8 +350,10 @@ const onEventSelectionChange = () => {
     const existing = props.feedbackForms.find((f) => f.event_id === Number(formConfig.event_id));
     if (existing && existing.schema?.fields) {
         formConfig.schema = JSON.parse(JSON.stringify(existing.schema));
+        formConfig.status = existing.status || 'published';
     } else {
         formConfig.schema = JSON.parse(JSON.stringify(defaultSchemaTemplate));
+        formConfig.status = 'published';
         if (currentSelectedEvent.value?.name) {
             formConfig.schema.title = `${currentSelectedEvent.value.name} Evaluation`;
         }
@@ -408,7 +464,12 @@ const duplicateField = (idx) => {
     const original = formConfig.schema.fields[idx];
     const copy = JSON.parse(JSON.stringify(original));
     copy._uid = getUniqueFieldKey();
-    copy.id = `${original.id}_copy_${Date.now().toString().slice(-4)}`;
+    
+    // Ensure duplicated ID stays within 20 chars
+    const suffix = `_${Date.now().toString().slice(-4)}`;
+    const baseId = (original.id || 'field').slice(0, 20 - suffix.length).replace(/_+$/, '');
+    const proposedId = `${baseId}${suffix}`;
+    copy.id = generateUniqueFieldId(proposedId, -1, 20);
     copy.particular = `${original.particular} (Copy)`;
     copy.manualId = true;
 
@@ -571,29 +632,58 @@ const switchTab = (tab) => {
 // Error highlighting and jumping
 const getSchemaFieldError = (idx) => {
     const errors = formConfig.errors;
+    const msgs = [];
     for (const key of Object.keys(errors)) {
-        if (key.startsWith(`schema.fields.${idx}.`) || key === `schema.fields.${idx}`) {
-            return errors[key];
+        if (
+            key.startsWith(`schema.fields.${idx}.`) || key === `schema.fields.${idx}` ||
+            key.startsWith(`fields.${idx}.`) || key === `fields.${idx}`
+        ) {
+            const err = errors[key];
+            if (err && !msgs.includes(err)) {
+                msgs.push(err);
+            }
         }
     }
-    return null;
+    return msgs.length > 0 ? msgs.join(' • ') : null;
 };
 
 const schemaErrorsList = computed(() => {
-    const list = [];
+    const map = new Map();
     const errors = formConfig.errors;
     Object.keys(errors).forEach((key) => {
-        const match = key.match(/^schema\.fields\.(\d+)/);
+        const match = key.match(/^(?:schema\.)?fields\.(\d+)(?:\.(.*))?$/);
         if (match) {
             const idx = parseInt(match[1], 10);
             const field = formConfig.schema.fields?.[idx];
-            if (!list.some((item) => item.idx === idx)) {
-                list.push({
+            const rawParticular = field?.particular ? stripHtml(field.particular) : '';
+            const particular = rawParticular.trim() || `Question #${idx + 1}`;
+            const msg = errors[key];
+
+            if (!map.has(idx)) {
+                map.set(idx, {
                     idx,
-                    particular: field?.particular || `Question #${idx + 1}`,
-                    message: errors[key],
+                    particular,
+                    messages: [msg],
                 });
+            } else {
+                if (!map.get(idx).messages.includes(msg)) {
+                    map.get(idx).messages.push(msg);
+                }
             }
+        }
+    });
+    return Array.from(map.values()).sort((a, b) => a.idx - b.idx);
+});
+
+const generalErrorsList = computed(() => {
+    const list = [];
+    const errors = formConfig.errors;
+    Object.keys(errors).forEach((key) => {
+        if (!key.match(/^(?:schema\.)?fields\.\d+/)) {
+            list.push({
+                key,
+                message: errors[key],
+            });
         }
     });
     return list;
@@ -733,6 +823,16 @@ const applyImportedFields = (strategy) => {
 };
 
 // Save handler
+const saveSuccessMessage = ref('');
+let saveSuccessTimer = null;
+
+const saveWithStatus = (targetStatus) => {
+    if (targetStatus) {
+        formConfig.status = targetStatus;
+    }
+    saveSchema();
+};
+
 const saveSchema = () => {
     if (activeTab.value === 'json') {
         if (!syncJsonToInteractive()) return;
@@ -741,8 +841,14 @@ const saveSchema = () => {
     formConfig.post(route('admin.feedback.forms.save'), {
         preserveScroll: true,
         onSuccess: () => {
-            emit('saved');
-            // emit('close');
+            saveSuccessMessage.value = formConfig.status === 'draft'
+                ? 'Draft saved successfully!'
+                : 'Form published successfully!';
+            if (saveSuccessTimer) clearTimeout(saveSuccessTimer);
+            saveSuccessTimer = setTimeout(() => {
+                saveSuccessMessage.value = '';
+            }, 4000);
+            emit('saved', formConfig.event_id);
         },
         onError: () => {
             if (schemaErrorsList.value.length > 0) {
@@ -857,8 +963,20 @@ onUnmounted(() => {
                 </button>
             </nav>
 
-            <!-- Right Actions: Preview | Reset | Save Button -->
+            <!-- Right Actions: Status Badge | Preview | Reset | Save as Draft / Publish Buttons -->
             <div class="flex items-center space-x-2 shrink-0">
+                <!-- Status Badge -->
+                <div
+                    class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition select-none"
+                    :class="formConfig.status === 'draft'
+                        ? 'bg-amber-50 text-amber-800 border-amber-300'
+                        : 'bg-emerald-50 text-emerald-800 border-emerald-300'"
+                    :title="formConfig.status === 'draft' ? 'Form is currently a Draft (hidden from public respondents)' : 'Form is Published (publicly accessible)'"
+                >
+                    <span class="size-2 rounded-full" :class="formConfig.status === 'draft' ? 'bg-amber-500' : 'bg-emerald-500'"></span>
+                    <span>{{ formConfig.status === 'draft' ? 'Draft' : 'Published' }}</span>
+                </div>
+
                 <button
                     type="button"
                     @click="openPreview"
@@ -881,17 +999,91 @@ onUnmounted(() => {
                     ↺
                 </button>
 
-                <button
-                    type="button"
-                    @click="saveSchema"
-                    :disabled="formConfig.processing"
-                    class="px-4.5 py-1.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                <!-- Save Success Message indicator -->
+                <transition
+                    enter-active-class="transition duration-200 ease-out"
+                    enter-from-class="opacity-0 translate-y-[-4px]"
+                    enter-to-class="opacity-100 translate-y-0"
+                    leave-active-class="transition duration-150 ease-in"
+                    leave-from-class="opacity-100 translate-y-0"
+                    leave-to-class="opacity-0 translate-y-[-4px]"
                 >
-                    <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                    </svg>
-                    <span>{{ formConfig.processing ? 'Saving...' : 'Save Schema' }}</span>
-                </button>
+                    <div
+                        v-if="saveSuccessMessage"
+                        class="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-xl text-xs font-bold shadow-2xs"
+                    >
+                        <svg class="size-3.5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                        <span>{{ saveSuccessMessage }}</span>
+                    </div>
+                </transition>
+
+                <!-- If Form is currently Draft -->
+                <template v-if="formConfig.status === 'draft'">
+                    <button
+                        type="button"
+                        @click="saveWithStatus('draft')"
+                        :disabled="formConfig.processing"
+                        class="px-3.5 py-1.5 bg-cream-100 hover:bg-cream-300 text-forest-900 border border-cream-400 text-xs font-bold rounded-xl shadow-2xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Save current edits as draft"
+                    >
+                        <svg class="size-3.5 text-forest-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.75V16.5L12 14.25 7.5 16.5V3.75m9 0H7.5m9 0a2.25 2.25 0 012.25 2.25v13.5A2.25 2.25 0 0116.5 21h-9a2.25 2.25 0 01-2.25-2.25V6a2.25 2.25 0 012.25-2.25" />
+                        </svg>
+                        <span>Save as Draft</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        @click="saveWithStatus('published')"
+                        :disabled="formConfig.processing"
+                        class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Publish form so respondents can access and submit"
+                    >
+                        <svg v-if="!formConfig.processing" class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.58-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.458 14.96 14.96 0 01.06-.312m7.38-5.84a6.002 6.002 0 015.84 7.38" />
+                        </svg>
+                        <svg v-else class="animate-spin size-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                        </svg>
+                        <span>{{ formConfig.processing ? 'Publishing...' : 'Publish Form' }}</span>
+                    </button>
+                </template>
+
+                <!-- If Form is currently Published -->
+                <template v-else>
+                    <button
+                        type="button"
+                        @click="saveWithStatus('draft')"
+                        :disabled="formConfig.processing"
+                        class="px-3 py-1.5 bg-cream-100 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold rounded-xl shadow-2xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Unpublish form back to draft mode"
+                    >
+                        <svg class="size-3.5 text-amber-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25v13.5m-7.5-13.5v13.5" />
+                        </svg>
+                        <span>Unpublish</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        @click="saveWithStatus('published')"
+                        :disabled="formConfig.processing"
+                        class="px-4 py-1.5 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center space-x-1.5"
+                        title="Save changes and keep published"
+                    >
+                        <svg v-if="!formConfig.processing" class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                        <svg v-else class="animate-spin size-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                        </svg>
+                        <span>{{ formConfig.processing ? 'Saving...' : 'Save & Publish' }}</span>
+                    </button>
+                </template>
             </div>
         </header>
 
@@ -900,15 +1092,16 @@ onUnmounted(() => {
             <div class="max-w-4xl mx-auto space-y-4 relative pb-24">
                 <!-- Validation Error Alert Banner -->
                 <div
-                    v-if="schemaErrorsList.length > 0"
-                    class="p-4 bg-red-50/95 border-2 border-red-300 rounded-2xl shadow-xs space-y-2.5 transition-all"
+                    v-if="schemaErrorsList.length > 0 || generalErrorsList.length > 0"
+                    class="p-4 bg-red-50/95 border-2 border-red-300 rounded-2xl shadow-xs space-y-3 transition-all"
                 >
                     <div class="flex items-center justify-between flex-wrap gap-2">
                         <div class="flex items-center space-x-2 text-red-950 font-bold text-xs sm:text-sm">
                             <span class="size-6 rounded-lg bg-red-200 text-red-900 flex items-center justify-center text-xs font-black shrink-0">!</span>
-                            <span>Validation Error: {{ schemaErrorsList.length }} field(s) require your attention.</span>
+                            <span>Validation Error: {{ schemaErrorsList.length + generalErrorsList.length }} issue(s) require your attention.</span>
                         </div>
                         <button
+                            v-if="schemaErrorsList.length > 0"
                             type="button"
                             @click="goToSchemaErrorField(schemaErrorsList[0].idx)"
                             class="inline-flex items-center space-x-1 px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-2xs transition cursor-pointer"
@@ -916,7 +1109,51 @@ onUnmounted(() => {
                             <span>Jump to First Error →</span>
                         </button>
                     </div>
-                    <div class="pt-2 border-t border-red-200 flex flex-wrap items-center gap-1.5">
+
+                    <!-- General non-field errors if any -->
+                    <div v-if="generalErrorsList.length > 0" class="space-y-1.5 pt-1">
+                        <div
+                            v-for="(genErr, gIdx) in generalErrorsList"
+                            :key="gIdx"
+                            class="p-2.5 bg-white/80 rounded-xl border border-red-200 text-xs font-semibold text-red-900 flex items-center space-x-2"
+                        >
+                            <span class="text-sm shrink-0">⚠️</span>
+                            <span>{{ genErr.message }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Question-by-question specific error breakdown -->
+                    <div v-if="schemaErrorsList.length > 0" class="space-y-1.5 pt-1">
+                        <div
+                            v-for="err in schemaErrorsList"
+                            :key="err.idx"
+                            class="flex items-start justify-between gap-3 p-2.5 bg-white/80 rounded-xl border border-red-200 text-xs"
+                        >
+                            <div class="flex items-start space-x-2 min-w-0">
+                                <span class="size-5 rounded-full bg-red-100 text-red-800 text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5">
+                                    {{ err.idx + 1 }}
+                                </span>
+                                <div class="min-w-0">
+                                    <div class="font-bold text-gray-900 truncate">
+                                        {{ err.particular }}
+                                    </div>
+                                    <div class="text-red-700 font-semibold mt-0.5">
+                                        {{ err.messages.join(' • ') }}
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                @click="goToSchemaErrorField(err.idx)"
+                                class="px-2.5 py-1 bg-red-100/80 hover:bg-red-200 text-red-900 rounded-lg text-[11px] font-bold shrink-0 transition cursor-pointer"
+                            >
+                                Jump to Question →
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Quick Jump pill bar -->
+                    <div v-if="schemaErrorsList.length > 1" class="pt-2 border-t border-red-200 flex flex-wrap items-center gap-1.5">
                         <span class="text-[11px] font-bold text-red-800 me-1">Jump to question:</span>
                         <button
                             v-for="err in schemaErrorsList"
@@ -982,10 +1219,6 @@ onUnmounted(() => {
                             <div>
                                 <FormRichEditor
                                     v-model="formConfig.schema.description"
-                                    mode="rich"
-                                    :allow-bullets="true"
-                                    :allow-tables="true"
-                                    :allow-font-styles="true"
                                     placeholder="Form description / instructions for respondents..."
                                     min-height="80px"
                                     input-class="text-xs sm:text-sm text-gray-700 bg-cream-50/40"
@@ -1040,12 +1273,24 @@ onUnmounted(() => {
                                 @click="activateCard(idx)"
                                 class="rounded-2xl border transition-all duration-200 bg-white"
                                 :class="[
-                                    activeFieldIdx === idx
-                                        ? 'border-y border-r border-cream-400 border-l-[6px] border-l-indigo-700 shadow-md ring-1 ring-black/5'
-                                        : 'border-cream-300/80 hover:border-cream-400 shadow-xs'
+                                    getSchemaFieldError(idx)
+                                        ? 'border-red-400 ring-2 ring-red-300 shadow-md'
+                                        : (activeFieldIdx === idx
+                                            ? 'border-y border-r border-cream-400 border-l-[6px] border-l-indigo-700 shadow-md ring-1 ring-black/5'
+                                            : 'border-cream-300/80 hover:border-cream-400 shadow-xs')
                                 ]"
                             >
                                 <div class="p-5 space-y-4">
+                                    <!-- In-card validation error banner -->
+                                    <div
+                                        v-if="getSchemaFieldError(idx)"
+                                        class="p-2.5 bg-red-50 border border-red-300 rounded-xl text-xs font-medium text-red-900 flex items-center space-x-2 animate-in fade-in"
+                                    >
+                                        <span class="text-xs shrink-0">⚠️</span>
+                                        <span class="font-bold text-red-800">Validation Issue:</span>
+                                        <span>{{ getSchemaFieldError(idx) }}</span>
+                                    </div>
+
                                     <!-- Section Card Top Header -->
                                     <div class="flex items-center justify-between gap-3">
                                         <div class="flex items-center space-x-2">
@@ -1093,13 +1338,14 @@ onUnmounted(() => {
                                     </div>
 
                                     <!-- Section Title & Description -->
-                                    <div class="space-y-2.5">
-                                        <div>
+                                    <div class="space-y-2.5 min-w-0">
+                                        <div class="min-w-0">
                                             <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Section Title</label>
                                             <FormRichEditor
                                                 v-model="field.particular"
                                                 @blur="onParticularBlur(field)"
-                                                mode="basic"
+                                                min-height="40px"
+                                                :allow-tables="false"
                                                 single-line
                                                 :allow-font-styles="true"
                                                 placeholder="Section Title"
@@ -1110,10 +1356,6 @@ onUnmounted(() => {
                                             <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Section Description</label>
                                             <FormRichEditor
                                                 v-model="field.description"
-                                                mode="rich"
-                                                :allow-bullets="true"
-                                                :allow-tables="true"
-                                                :allow-font-styles="true"
                                                 placeholder="Section description or guidance (optional)"
                                                 min-height="75px"
                                                 input-class="text-xs text-gray-700 bg-cream-50/40"
@@ -1221,13 +1463,27 @@ onUnmounted(() => {
                                 @click="activateCard(idx)"
                                 class="rounded-2xl transition-all duration-200"
                                 :class="[
-                                    activeFieldIdx === idx
-                                        ? 'bg-white border-y border-r border-cream-400 border-l-[6px] border-l-forest-900 shadow-md ring-1 ring-black/5'
-                                        : 'bg-white/95 hover:bg-white border border-cream-300/80 hover:border-cream-400 shadow-xs cursor-pointer'
+                                    getSchemaFieldError(idx)
+                                        ? 'border-red-400 ring-2 ring-red-300 shadow-md'
+                                        : (activeFieldIdx === idx
+                                            ? 'bg-white border-y border-r border-cream-400 border-l-[6px] border-l-forest-900 shadow-md ring-1 ring-black/5'
+                                            : 'bg-white/95 hover:bg-white border border-cream-300/80 hover:border-cream-400 shadow-xs cursor-pointer')
                                 ]"
                             >
                                 <!-- ACTIVE EDITING STATE -->
                                 <div v-if="activeFieldIdx === idx" class="p-5 space-y-4">
+                                    <!-- In-card validation error banner when active -->
+                                    <div
+                                        v-if="getSchemaFieldError(idx)"
+                                        class="p-3 bg-red-50/95 border border-red-300 rounded-xl text-xs font-medium text-red-900 flex items-start space-x-2 animate-in fade-in"
+                                    >
+                                        <span class="text-sm shrink-0">⚠️</span>
+                                        <div>
+                                            <span class="font-bold text-red-800">Validation Issue: </span>
+                                            <span>{{ getSchemaFieldError(idx) }}</span>
+                                        </div>
+                                    </div>
+
                                     <!-- Card Drag Handle Icon at Top Center -->
                                     <div class="flex justify-center -mt-2 -mb-2">
                                         <span class="text-gray-300 hover:text-gray-500 cursor-grab text-xs tracking-widest font-black" title="Drag to reorder">
@@ -1237,11 +1493,12 @@ onUnmounted(() => {
 
                                     <!-- Top Row: Question Title & Question Type Selector -->
                                     <div class="flex items-start justify-between gap-3 flex-wrap sm:flex-nowrap">
-                                        <div class="flex-1">
+                                        <div class="flex-1 min-w-0">
                                             <FormRichEditor
                                                 v-model="field.particular"
                                                 @blur="onParticularBlur(field)"
-                                                mode="basic"
+                                                min-height="40px"
+                                                :allow-tables="false"
                                                 single-line
                                                 :allow-font-styles="true"
                                                 :placeholder="field.type === 'text_only' ? 'Instructional Section Title / Heading' : 'Question'"
@@ -1275,10 +1532,6 @@ onUnmounted(() => {
                                         </div>
                                         <FormRichEditor
                                             v-model="field.description"
-                                            mode="rich"
-                                            :allow-bullets="true"
-                                            :allow-tables="true"
-                                            :allow-font-styles="true"
                                             min-height="160px"
                                             placeholder="Instructional text or guidance for respondents (optional). Use toolbar above for bullets, text styles, or draw tables..."
                                             input-class="text-xs text-gray-700 bg-cream-50/40"
@@ -1290,12 +1543,8 @@ onUnmounted(() => {
                                         <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Description / Subtitle</span>
                                         <FormRichEditor
                                             v-model="field.description"
-                                            mode="rich"
-                                            :allow-bullets="true"
-                                            :allow-tables="true"
-                                            :allow-font-styles="true"
-                                            placeholder="Description / subtitle or rubric table (optional)"
-                                            min-height="75px"
+                                            placeholder="Description / subtitle (optional)"
+                                            min-height="60px"
                                             input-class="text-xs text-gray-600"
                                         />
                                     </div>
@@ -1387,7 +1636,7 @@ onUnmounted(() => {
                                                 @keydown.enter.prevent="addOptionToField(field, optIdx)"
                                                 type="text"
                                                 :placeholder="`Option ${optIdx + 1}`"
-                                                class="flex-1 px-2.5 py-1 text-xs text-gray-900 border-b border-cream-300 hover:border-cream-400 focus:border-forest-900 focus:outline-none transition"
+                                                class="flex-1 min-w-0 px-2.5 py-1 text-xs text-gray-900 border-b border-cream-300 hover:border-cream-400 focus:border-forest-900 focus:outline-none transition"
                                             />
 
                                             <!-- Conditional Branching Dropdown (Go to section based on answer) -->
@@ -1588,12 +1837,21 @@ onUnmounted(() => {
 
                                 <!-- INACTIVE RESTING PREVIEW STATE -->
                                 <div v-else class="p-5 space-y-2">
-                                    <div class="flex items-center justify-between">
-                                        <div class="flex items-center space-x-2">
-                                            <span class="text-sm font-bold text-gray-900 inline-block form-rich-content" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>
-                                            <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5">*</span>
+                                    <!-- In-card validation error banner when inactive -->
+                                    <div
+                                        v-if="getSchemaFieldError(idx)"
+                                        class="p-2.5 bg-red-50 border border-red-300 rounded-xl text-xs font-medium text-red-900 flex items-center space-x-2 mb-2 animate-in fade-in"
+                                    >
+                                        <span class="text-xs shrink-0">⚠️</span>
+                                        <span class="font-bold text-red-800">Validation Issue:</span>
+                                        <span class="truncate">{{ getSchemaFieldError(idx) }}</span>
+                                    </div>
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="flex items-start space-x-2 min-w-0 flex-1">
+                                            <span class="text-sm font-bold text-gray-900 inline-block break-words flex-1 min-w-0" v-html="field.particular || (field.type === 'text_only' ? 'Untitled Instructional Section' : 'Untitled Question')"></span>
+                                            <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5 shrink-0">*</span>
                                         </div>
-                                        <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600">
+                                        <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600 shrink-0">
                                             {{ field.type === 'text_only' ? 'text only' : field.type }}
                                         </span>
                                     </div>

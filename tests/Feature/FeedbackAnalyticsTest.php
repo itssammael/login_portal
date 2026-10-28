@@ -483,4 +483,92 @@ class FeedbackAnalyticsTest extends TestCase
             ->assertJsonPath('charts.custom-ratings-graph.rows.2.label', 'Target Benchmark')
             ->assertJsonPath('charts.custom-ratings-graph.rows.2.value', 3.5);
     }
+
+    public function test_accepts_titles_and_labels_up_to_500_characters(): void
+    {
+        $report = FeedbackAnalyticsReport::factory()->create();
+        $longText = str_repeat('a', 500);
+        $configuration = $report->configuration;
+        $configuration['title'] = $longText;
+        $configuration['charts'][0]['title'] = $longText;
+        $configuration['charts'][] = [
+            'id' => 'custom-chart',
+            'kind' => 'custom',
+            'title' => $longText,
+            'type' => 'column',
+            'aggregation' => 'mean',
+            'color' => '#24543c',
+            'legend' => true,
+            'labels' => true,
+            'width' => 6,
+            'rows' => [[
+                'id' => 'row-1',
+                'label' => $longText,
+                'source' => 'manual',
+                'value' => 1,
+            ]],
+        ];
+        $configuration['sections'] = [[
+            'id' => 'sec-1',
+            'title' => $longText,
+            'body' => 'Body',
+            'width' => 12,
+        ]];
+
+        $this->actingAs(User::factory()->admin()->create())
+            ->putJson(route('feedback.analytics.update', [$report->feedback_id, $report->id]), ['configuration' => $configuration])
+            ->assertOk()
+            ->assertJsonPath('report.configuration.title', $longText)
+            ->assertJsonPath('report.configuration.charts.0.title', $longText)
+            ->assertJsonPath('report.configuration.charts.1.rows.0.label', $longText)
+            ->assertJsonPath('report.configuration.sections.0.title', $longText);
+
+        $report->refresh();
+        $this->assertSame($longText, $report->configuration['charts'][0]['title']);
+    }
+
+    public function test_rejects_titles_and_labels_exceeding_500_characters_with_422(): void
+    {
+        $report = FeedbackAnalyticsReport::factory()->create();
+        $tooLong = str_repeat('a', 501);
+        $configuration = $report->configuration;
+        $configuration['title'] = $tooLong;
+        $configuration['charts'][0]['title'] = $tooLong;
+        $configuration['charts'][] = [
+            'id' => 'custom-chart',
+            'kind' => 'custom',
+            'title' => 'Valid',
+            'type' => 'column',
+            'aggregation' => 'mean',
+            'color' => '#24543c',
+            'legend' => true,
+            'labels' => true,
+            'width' => 6,
+            'rows' => [[
+                'id' => 'row-1',
+                'label' => $tooLong,
+                'source' => 'manual',
+                'value' => 1,
+            ]],
+        ];
+        $configuration['sections'] = [[
+            'id' => 'sec-1',
+            'title' => $tooLong,
+            'body' => 'Body',
+            'width' => 12,
+        ]];
+
+        $this->actingAs(User::factory()->admin()->create())
+            ->putJson(route('feedback.analytics.update', [$report->feedback_id, $report->id]), ['configuration' => $configuration])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'configuration.title' => 'The configuration.title field must not be greater than 500 characters.',
+                'configuration.charts.0.title' => 'The configuration.charts.0.title field must not be greater than 500 characters.',
+                'configuration.charts.1.rows.0.label' => 'The configuration.charts.1.rows.0.label field must not be greater than 500 characters.',
+                'configuration.sections.0.title' => 'The configuration.sections.0.title field must not be greater than 500 characters.',
+            ]);
+
+        $report->refresh();
+        $this->assertSame('Overall rating', $report->configuration['charts'][0]['title']);
+    }
 }

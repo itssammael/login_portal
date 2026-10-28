@@ -718,10 +718,16 @@ class FeedbackController extends Controller
         $admin = $request->user();
         $validatedSchema = $schemaValidator->validateSchema($request->input('schema'));
         $eventId = (int) $request->input('event_id');
+        $existing = Feedback::where('event_id', $eventId)->first();
+        $defaultStatus = $existing?->status ?? Feedback::STATUS_PUBLISHED;
+        $status = $request->input('status', $defaultStatus) ?: $defaultStatus;
 
         $feedback = Feedback::updateOrCreate(
             ['event_id' => $eventId],
-            ['schema' => $validatedSchema]
+            [
+                'schema' => $validatedSchema,
+                'status' => $status,
+            ]
         );
 
         if ($feedback->wasRecentlyCreated) {
@@ -731,16 +737,51 @@ class FeedbackController extends Controller
 
         AuditLog::create([
             'admin_id' => $admin->id,
-            'action' => 'configured_feedback_form',
+            'action' => $status === Feedback::STATUS_DRAFT ? 'drafted_feedback_form' : 'configured_feedback_form',
             'target_type' => Feedback::class,
             'target_id' => $feedback->id,
             'details' => [
                 'event_id' => $eventId,
+                'status' => $status,
                 'field_count' => count($validatedSchema['fields'] ?? []),
             ],
         ]);
 
-        return back()->with('success', 'Feedback form schema configured successfully.');
+        $statusMsg = $status === Feedback::STATUS_DRAFT
+            ? 'Feedback form saved as draft successfully.'
+            : 'Feedback form published successfully.';
+
+        return back()->with('success', $statusMsg);
+    }
+
+    /**
+     * Publish or unpublish a feedback form.
+     */
+    public function toggleFormStatus(Request $request, Feedback $feedback): RedirectResponse
+    {
+        $admin = $request->user();
+        $targetStatus = $request->input('status');
+        if (! in_array($targetStatus, [Feedback::STATUS_PUBLISHED, Feedback::STATUS_DRAFT], true)) {
+            $targetStatus = $feedback->isPublished() ? Feedback::STATUS_DRAFT : Feedback::STATUS_PUBLISHED;
+        }
+
+        $feedback->status = $targetStatus;
+        $feedback->save();
+
+        AuditLog::create([
+            'admin_id' => $admin->id,
+            'action' => $targetStatus === Feedback::STATUS_PUBLISHED ? 'published_feedback_form' : 'unpublished_feedback_form',
+            'target_type' => Feedback::class,
+            'target_id' => $feedback->id,
+            'details' => [
+                'event_id' => $feedback->event_id,
+                'status' => $targetStatus,
+            ],
+        ]);
+
+        $label = $targetStatus === Feedback::STATUS_PUBLISHED ? 'published' : 'unpublished (saved as draft)';
+
+        return back()->with('success', "Feedback form {$label} successfully.");
     }
 
     /**

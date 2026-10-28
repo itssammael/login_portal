@@ -3,16 +3,10 @@
  */
 
 const ALLOWED_TAGS = new Set([
-    'P', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SPAN', 'DIV',
-    'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD',
+    'P', 'B', 'STRONG', 'I', 'EM', 'U', 'INS', 'S', 'STRIKE', 'DEL', 'SPAN', 'DIV',
+    'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD',
     'BR', 'HR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
-    'FONT', 'MARK', 'SUB', 'SUP', 'CODE', 'PRE', 'CAPTION', 'COL', 'COLGROUP'
-]);
-
-const ALLOWED_STYLES = new Set([
-    'text-align', 'font-weight', 'font-style', 'text-decoration',
-    'color', 'background-color', 'font-size', 'font-family',
-    'line-height', 'width', 'min-width', 'max-width', 'border', 'border-color'
+    'SUB', 'SUP', 'BLOCKQUOTE', 'PRE', 'CODE', 'MARK', 'SMALL', 'CAPTION', 'COL', 'COLGROUP'
 ]);
 
 const ALLOWED_ALIGNMENTS = new Set([
@@ -50,12 +44,13 @@ function isValidColor(val) {
 }
 
 /**
- * Sanitize an inline style string to only allow safe text formatting properties.
+ * Sanitize an inline style string to only allow safe text and table formatting properties.
  *
  * @param {string} styleStr
+ * @param {string} [tagName='']
  * @returns {string}
  */
-function sanitizeStyle(styleStr) {
+function sanitizeStyle(styleStr, tagName = '') {
     if (!styleStr || typeof styleStr !== 'string') return '';
     const cleanStyles = [];
     const declarations = styleStr.split(';');
@@ -64,27 +59,92 @@ function sanitizeStyle(styleStr) {
         const parts = decl.split(':');
         if (parts.length >= 2) {
             const prop = parts[0].trim().toLowerCase();
-            const val = parts.slice(1).join(':').trim();
-            const valLower = val.toLowerCase();
+            const val = parts.slice(1).join(':').trim().toLowerCase();
 
-            if (prop === 'text-align' && ALLOWED_ALIGNMENTS.has(valLower)) {
-                cleanStyles.push(`text-align: ${valLower}`);
-            } else if (prop === 'font-weight' && /^(bold|normal|lighter|bolder|[1-9]00)$/i.test(val)) {
-                cleanStyles.push(`font-weight: ${valLower}`);
-            } else if (prop === 'font-style' && /^(italic|normal|oblique)$/i.test(val)) {
-                cleanStyles.push(`font-style: ${valLower}`);
-            } else if (prop === 'text-decoration' && /^(underline|line-through|none)(\s+(solid|dotted|dashed))?$/i.test(val)) {
-                cleanStyles.push(`text-decoration: ${valLower}`);
-            } else if ((prop === 'color' || prop === 'background-color') && isValidColor(val)) {
-                cleanStyles.push(`${prop}: ${val}`);
-            } else if (prop === 'font-size' && /^(\d+(\.\d+)?(px|pt|rem|em|%)|small|medium|large|x-large|xx-large|smaller|larger)$/i.test(val)) {
-                cleanStyles.push(`font-size: ${valLower}`);
-            } else if (prop === 'font-family' && /^[a-zA-Z0-9\s,\-_'"]+$/.test(val) && val.length < 100) {
-                cleanStyles.push(`font-family: ${val}`);
-            } else if (prop === 'line-height' && /^\d+(\.\d+)?(px|rem|em|%)?$/.test(val)) {
-                cleanStyles.push(`line-height: ${val}`);
-            } else if ((prop === 'width' || prop === 'min-width' || prop === 'max-width') && /^(\d+(\.\d+)?(px|rem|em|%)|auto)$/i.test(val)) {
-                cleanStyles.push(`${prop}: ${valLower}`);
+            // Guard against script injection in styles
+            if (/url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:/i.test(val)) {
+                continue;
+            }
+
+            if (prop === 'text-align') {
+                const normalized = val.replace(/^-webkit-/, '');
+                if (ALLOWED_ALIGNMENTS.has(normalized)) {
+                    cleanStyles.push(`text-align: ${normalized}`);
+                }
+            } else if (prop === 'text-decoration' || prop === 'text-decoration-line') {
+                const tokens = val.split(/\s+/).filter(Boolean);
+                const allowedDecs = new Set(['underline', 'line-through', 'none', 'initial', 'inherit']);
+                if (tokens.length > 0 && tokens.every(t => allowedDecs.has(t))) {
+                    cleanStyles.push(`text-decoration: ${tokens.join(' ')}`);
+                }
+            } else if (prop === 'font-weight') {
+                if (/^(bold|normal|bolder|lighter|[1-9]00)$/.test(val)) {
+                    cleanStyles.push(`font-weight: ${val}`);
+                }
+            } else if (prop === 'font-style') {
+                if (/^(italic|normal|oblique)$/.test(val)) {
+                    cleanStyles.push(`font-style: ${val}`);
+                }
+            } else if (prop === 'font-size') {
+                if (/^(\d+(\.\d+)?(px|rem|em|pt|%)|xx-small|x-small|small|medium|large|x-large|xx-large)$/.test(val)) {
+                    cleanStyles.push(`font-size: ${val}`);
+                }
+            } else if (prop === 'color' || prop === 'background-color') {
+                if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(val) ||
+                    /^(rgb|hsl)a?\(\s*[\d.%\s,]+\)$/i.test(val) ||
+                    /^(transparent|currentColor|[a-z]+)$/i.test(val)) {
+                    cleanStyles.push(`${prop}: ${val}`);
+                }
+            } else if (prop === 'border-collapse') {
+                if (['collapse', 'separate'].includes(val)) {
+                    cleanStyles.push(`border-collapse: ${val}`);
+                }
+            } else if (/^(border|border-(top|bottom|left|right))$/.test(prop)) {
+                if (/^[\d.pxrem\s]+(solid|dashed|dotted|none)\s*(#[0-9a-f]{3,8}|rgba?\([^)]+\)|[a-z]+)?$/i.test(val) || val === 'none') {
+                    cleanStyles.push(`${prop}: ${val}`);
+                }
+            } else if (/^(padding|margin)(-(top|bottom|left|right))?$/.test(prop)) {
+                if (/^[\d.pxrem%auto\s]+$/.test(val)) {
+                    cleanStyles.push(`${prop}: ${val}`);
+                }
+            } else if (/^(width|height|min-width|max-width)$/.test(prop)) {
+                if (tagName === 'TABLE') {
+                    if (prop === 'width') {
+                        cleanStyles.push('width: 100%');
+                    } else if (prop === 'max-width') {
+                        cleanStyles.push('max-width: 100%');
+                    }
+                    // Strip fixed min-width and height on TABLE so it always fits containers
+                    continue;
+                }
+                if (['TH', 'TD', 'COL', 'COLGROUP'].includes(tagName)) {
+                    if (prop === 'width') {
+                        if (/^\d+(\.\d+)?%$/.test(val)) {
+                            cleanStyles.push(`width: ${val}`);
+                        }
+                        // Disallow fixed pixel/pt cell/col widths so columns adapt to container
+                        continue;
+                    }
+                    if (prop === 'max-width') {
+                        cleanStyles.push('max-width: 100%');
+                        continue;
+                    }
+                    if (prop === 'min-width' || prop === 'height') {
+                        // Disallow large min-widths or fixed heights on cells and cols
+                        continue;
+                    }
+                }
+                if (/^[\d.pxrem%auto]+$/.test(val)) {
+                    cleanStyles.push(`${prop}: ${val}`);
+                }
+            } else if (prop === 'vertical-align') {
+                if (['top', 'middle', 'bottom', 'baseline', 'sub', 'super'].includes(val)) {
+                    cleanStyles.push(`vertical-align: ${val}`);
+                }
+            } else if (prop === 'list-style-type') {
+                if (['disc', 'circle', 'square', 'decimal', 'lower-roman', 'upper-roman', 'lower-alpha', 'upper-alpha', 'none'].includes(val)) {
+                    cleanStyles.push(`list-style-type: ${val}`);
+                }
             }
         }
     }
@@ -110,54 +170,18 @@ function cleanNode(node) {
     const tagName = node.tagName.toUpperCase();
 
     // Disallow dangerous elements outright
-    if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'TEXTAREA', 'BUTTON', 'LINK', 'META'].includes(tagName)) {
+    if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'TEXTAREA', 'BUTTON', 'LINK', 'META', 'APPLET', 'SVG', 'MATH', 'BASE'].includes(tagName)) {
         node.parentNode?.removeChild(node);
         return;
     }
 
-    // Convert legacy <font> tags into <span style="..."> for universal cross-browser preservation
-    if (tagName === 'FONT') {
-        const span = node.ownerDocument.createElement('span');
-        const fontStyles = [];
-
-        if (node.hasAttribute('color') && isValidColor(node.getAttribute('color'))) {
-            fontStyles.push(`color: ${node.getAttribute('color')}`);
-        }
-        if (node.hasAttribute('size')) {
-            const sizeVal = node.getAttribute('size');
-            if (FONT_SIZE_MAP[sizeVal]) {
-                fontStyles.push(`font-size: ${FONT_SIZE_MAP[sizeVal]}`);
-            } else if (/^\d+(px|pt|rem|em|%)$/i.test(sizeVal)) {
-                fontStyles.push(`font-size: ${sizeVal}`);
-            }
-        }
-        if (node.hasAttribute('face')) {
-            const faceVal = node.getAttribute('face');
-            if (/^[a-zA-Z0-9\s,\-_'"]+$/.test(faceVal)) {
-                fontStyles.push(`font-family: ${faceVal}`);
-            }
-        }
-        if (node.hasAttribute('style')) {
-            const existingStyle = sanitizeStyle(node.getAttribute('style'));
-            if (existingStyle) {
-                fontStyles.push(existingStyle);
-            }
-        }
-
-        if (fontStyles.length > 0) {
-            span.setAttribute('style', fontStyles.join('; '));
-        }
-
-        // Move children to new span
-        while (node.firstChild) {
-            span.appendChild(node.firstChild);
-        }
-        node.parentNode?.replaceChild(span, node);
-        cleanNode(span);
-        return;
+    // Recursively clean children first
+    const children = Array.from(node.childNodes);
+    for (const child of children) {
+        cleanNode(child);
     }
 
-    // If tag is not in allowed list, unwrap its children or remove
+    // If tag is not in allowed list, unwrap its children
     if (!ALLOWED_TAGS.has(tagName)) {
         const parent = node.parentNode;
         if (parent) {
@@ -182,6 +206,8 @@ function cleanNode(node) {
 
     // Clean attributes
     const attrs = Array.from(node.attributes);
+    let alignVal = null;
+
     for (const attr of attrs) {
         const name = attr.name.toLowerCase();
 
@@ -191,27 +217,34 @@ function cleanNode(node) {
             continue;
         }
 
-        // Only allow safe attributes
-        if (name === 'style') {
-            const safeStyle = sanitizeStyle(attr.value);
+        if (name === 'align') {
+            const normalized = attr.value.trim().toLowerCase().replace(/^-webkit-/, '');
+            if (ALLOWED_ALIGNMENTS.has(normalized)) {
+                alignVal = normalized;
+                node.setAttribute('align', normalized);
+            } else {
+                node.removeAttribute('align');
+            }
+        } else if (name === 'style') {
+            const safeStyle = sanitizeStyle(attr.value, tagName);
             if (safeStyle) {
                 node.setAttribute('style', safeStyle);
             } else {
                 node.removeAttribute('style');
             }
         } else if (name === 'class') {
-            // Keep safe Tailwind classes for alignment, typography, colors, borders, and tables
+            // Keep safe Tailwind & Rich Editor classes
             const classes = attr.value.split(/\s+/).filter(c => {
-                return /^(form-rich-table|form-rich-content|text-(left|center|right|justify|xs|sm|base|lg|xl|2xl|3xl)|text-[a-z0-9\-_/]+|font-(bold|semibold|normal|medium|extrabold|black|serif|mono|sans)|italic|underline|line-through|border.*|bg-.*|p-.*|px-.*|py-.*|pt-.*|pb-.*|pl-.*|pr-.*|m-.*|my-.*|mx-.*|mt-.*|mb-.*|divide-.*|rounded.*|w-.*|min-w-.*|max-w-.*|h-.*|overflow-.*|hover:.*|shadow-.*)$/.test(c);
+                return /^(form-rich-(table|content|canvas)|text-(left|center|right|justify|xs|sm|base|lg|xl|[a-z]+-\d+)|font-(bold|semibold|normal|medium|extrabold|serif|mono)|italic|underline|line-through|(border|bg|p|px|py|m|mx|my|w|max-w|min-w|h|rounded|divide|overflow)-[\w\d\-./]+|border|border-collapse|hover:[\w\d\-./]+)$/.test(c);
             });
             if (classes.length > 0) {
                 node.setAttribute('class', classes.join(' '));
             } else {
                 node.removeAttribute('class');
             }
-        } else if (['colspan', 'rowspan', 'scope'].includes(name) && ['TH', 'TD'].includes(tagName)) {
+        } else if (['colspan', 'rowspan'].includes(name) && ['TH', 'TD'].includes(tagName)) {
             const num = parseInt(attr.value, 10);
-            if (num > 0 && num <= 50) {
+            if (num > 0 && num <= 100) {
                 node.setAttribute(name, String(num));
             } else if (name === 'scope' && ['col', 'row', 'colgroup', 'rowgroup'].includes(attr.value.toLowerCase())) {
                 node.setAttribute('scope', attr.value.toLowerCase());
@@ -225,16 +258,72 @@ function cleanNode(node) {
             } else {
                 node.removeAttribute(name);
             }
+        } else if (name === 'scope' && ['TH', 'TD'].includes(tagName)) {
+            const val = attr.value.toLowerCase().trim();
+            if (['row', 'col', 'rowgroup', 'colgroup'].includes(val)) {
+                node.setAttribute(name, val);
+            } else {
+                node.removeAttribute(name);
+            }
+        } else if (name === 'valign' && ['TR', 'TH', 'TD'].includes(tagName)) {
+            const val = attr.value.toLowerCase().trim();
+            if (['top', 'middle', 'bottom', 'baseline'].includes(val)) {
+                node.setAttribute(name, val);
+            } else {
+                node.removeAttribute(name);
+            }
+        } else if (['border', 'cellpadding', 'cellspacing'].includes(name) && tagName === 'TABLE') {
+            const num = parseInt(attr.value, 10);
+            if (!isNaN(num) && num >= 0 && num <= 50) {
+                node.setAttribute(name, String(num));
+            } else {
+                node.removeAttribute(name);
+            }
+        } else if (['width', 'height'].includes(name) && ['TABLE', 'TH', 'TD', 'COL', 'COLGROUP'].includes(tagName)) {
+            const val = attr.value.trim();
+            if (tagName === 'TABLE') {
+                if (name === 'width') {
+                    node.setAttribute('width', '100%');
+                } else {
+                    node.removeAttribute('height');
+                }
+            } else if (['TH', 'TD', 'COL', 'COLGROUP'].includes(tagName)) {
+                if (name === 'width' && /^\d+(\.\d+)?%$/.test(val)) {
+                    node.setAttribute('width', val);
+                } else {
+                    node.removeAttribute(name);
+                }
+            } else if (/^\d+(%|px)?$/.test(val)) {
+                node.setAttribute(name, val);
+            } else {
+                node.removeAttribute(name);
+            }
         } else {
             // Remove any other attribute
             node.removeAttribute(name);
         }
     }
 
-    // Recursively clean children
-    const children = Array.from(node.childNodes);
-    for (const child of children) {
-        cleanNode(child);
+    // Ensure all tables have the form-rich-table class and clean sizing attributes
+    if (tagName === 'TABLE') {
+        const currentClass = node.getAttribute('class') || '';
+        if (!currentClass.includes('form-rich-table')) {
+            node.setAttribute('class', currentClass ? `form-rich-table ${currentClass}`.trim() : 'form-rich-table');
+        }
+        if (node.hasAttribute('width')) {
+            node.setAttribute('width', '100%');
+        }
+        if (node.hasAttribute('height')) {
+            node.removeAttribute('height');
+        }
+    }
+
+    // If align attribute was valid and text-align not already in style, sync to style
+    if (alignVal) {
+        const currentStyle = node.getAttribute('style') || '';
+        if (!/text-align\s*:/i.test(currentStyle)) {
+            node.setAttribute('style', currentStyle ? `${currentStyle}; text-align: ${alignVal}` : `text-align: ${alignVal}`);
+        }
     }
 }
 
@@ -264,7 +353,11 @@ export function sanitizeHtml(rawHtml) {
         const doc = parser.parseFromString(`<body>${rawHtml}</body>`, 'text/html');
         const body = doc.body;
 
-        cleanNode(body);
+        // Clean all children within body without stripping body itself
+        const children = Array.from(body.childNodes);
+        for (const child of children) {
+            cleanNode(child);
+        }
 
         return body.innerHTML;
     } catch {
@@ -287,13 +380,13 @@ export function stripHtml(rawHtml) {
         try {
             const parser = new DOMParser();
             const doc = parser.parseFromString(`<body>${rawHtml}</body>`, 'text/html');
-            return doc.body.textContent || '';
+            return (doc.body.textContent || '').replace(/[\u00a0\s]+/g, ' ').trim();
         } catch {
             // regex fallback below
         }
     }
 
-    return rawHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+    return rawHtml.replace(/<[^>]+>/g, '').replace(/(&nbsp;|\u00a0)/gi, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /**

@@ -6,6 +6,8 @@ use App\Events\MessageSent;
 use App\Models\Conversation;
 use App\Models\ConversationParticipant;
 use App\Models\Message;
+use App\Models\MessageMention;
+use App\Models\MessageReaction;
 use App\Models\User;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Filesystem\Filesystem;
@@ -1267,5 +1269,1056 @@ class ChatTest extends TestCase
         $this->actingAs($user1)->delete(route('chat.remove-member', [$directConv, $user2]))->assertStatus(403);
         $this->actingAs($user1)->post(route('chat.promote-member', [$directConv, $user2]))->assertStatus(403);
         $this->actingAs($user1)->delete(route('chat.delete-group', $directConv))->assertStatus(403);
+    }
+
+    public function test_search_conversations_excludes_current_user_name_match_but_matches_other_participants(): void
+    {
+        $currentUser = User::factory()->create(['name' => 'Alice Wonderland']);
+        $bob = User::factory()->create(['name' => 'Bob Smith']);
+        $charlie = User::factory()->create(['name' => 'Charlie Brown']);
+
+        $convBob = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $convBob->id, 'user_id' => $currentUser->id]);
+        ConversationParticipant::create(['conversation_id' => $convBob->id, 'user_id' => $bob->id]);
+
+        $convCharlie = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $convCharlie->id, 'user_id' => $currentUser->id]);
+        ConversationParticipant::create(['conversation_id' => $convCharlie->id, 'user_id' => $charlie->id]);
+
+        // Searching for current user's own name should NOT match conversations via participant name
+        $response = $this->actingAs($currentUser)->getJson(route('chat.search-conversations', ['q' => 'Alice']));
+        $response->assertOk();
+        $response->assertJsonCount(0, 'conversations');
+
+        // Searching for another participant's name should match
+        $responseBob = $this->actingAs($currentUser)->getJson(route('chat.search-conversations', ['q' => 'Bob']));
+        $responseBob->assertOk();
+        $responseBob->assertJsonCount(1, 'conversations');
+        $this->assertEquals($convBob->id, $responseBob->json('conversations.0.id'));
+
+        // Group title matching should still match even if title includes query
+        $groupConv = Conversation::create(['type' => 'group', 'title' => 'Alice Group Project', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $groupConv->id, 'user_id' => $currentUser->id]);
+
+        $responseGroup = $this->actingAs($currentUser)->getJson(route('chat.search-conversations', ['q' => 'Alice']));
+        $responseGroup->assertOk();
+        $responseGroup->assertJsonCount(1, 'conversations');
+        $this->assertEquals($groupConv->id, $responseGroup->json('conversations.0.id'));
+    }
+
+    public function test_start_direct_queries_by_direct_key_first(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+        $directKey = Conversation::generateDirectKey($user1->id, $user2->id);
+
+        $existing = Conversation::create([
+            'type' => 'direct',
+            'direct_key' => $directKey,
+            'last_message_at' => now(),
+        ]);
+        ConversationParticipant::create(['conversation_id' => $existing->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $existing->id, 'user_id' => $user2->id]);
+
+        $response = $this->actingAs($user1)->post(route('chat.start-direct'), [
+            'recipient_id' => $user2->id,
+        ]);
+
+        $response->assertRedirect(route('chat.index', ['conversation' => $existing->id]));
+        $this->assertSame(1, Conversation::where('type', 'direct')->count());
+    }
+
+    public function test_start_direct_falls_back_deterministically_to_unkeyed_conversation(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+        $directKey = Conversation::generateDirectKey($user1->id, $user2->id);
+
+        $olderUnkeyed = Conversation::create([
+            'type' => 'direct',
+            'direct_key' => null,
+            'last_message_at' => now(),
+        ]);
+        ConversationParticipant::create(['conversation_id' => $olderUnkeyed->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $olderUnkeyed->id, 'user_id' => $user2->id]);
+
+        $newerUnkeyed = Conversation::create([
+            'type' => 'direct',
+            'direct_key' => null,
+            'last_message_at' => now(),
+        ]);
+        ConversationParticipant::create(['conversation_id' => $newerUnkeyed->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $newerUnkeyed->id, 'user_id' => $user2->id]);
+
+        $response = $this->actingAs($user1)->post(route('chat.start-direct'), [
+            'recipient_id' => $user2->id,
+        ]);
+
+        // Deterministically selects the older one (ordered by id)
+        $response->assertRedirect(route('chat.index', ['conversation' => $olderUnkeyed->id]));
+        $this->assertEquals($directKey, $olderUnkeyed->fresh()->direct_key);
+        $this->assertNull($newerUnkeyed->fresh()->direct_key);
+    }
+
+    public function test_mention_creation_in_group_chat_records_mention_for_target_user_only(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob Smith']);
+        $charlie = User::factory()->create(['name' => 'Charlie Brown']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Project Group', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $response = $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hello @Bob Smith, please review this draft!',
+        ]);
+
+        $response->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $bob->id,
+        ]);
+
+        $this->assertDatabaseMissing('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $charlie->id,
+        ]);
+
+        $this->assertDatabaseMissing('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $sender->id,
+        ]);
+    }
+
+    public function test_repeated_mentions_in_one_message_do_not_duplicate_records(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob', 'username' => 'bobby']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Dev Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hey @bobby, take a look! Also pinging @bobby again.',
+        ]);
+
+        $this->assertSame(1, MessageMention::where('conversation_id', $group->id)->where('user_id', $bob->id)->count());
+    }
+
+    public function test_sender_mentioning_self_does_not_create_mention_record(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice', 'username' => 'alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Dev Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Note to self: @alice update deployment docs',
+        ]);
+
+        $this->assertSame(0, MessageMention::where('user_id', $sender->id)->count());
+    }
+
+    public function test_chat_list_shows_unread_mention_indicator_only_to_mentioned_user(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $mentionedUser = User::factory()->create(['name' => 'Seanna', 'username' => 'seanna']);
+        $otherUser = User::factory()->create(['name' => 'David']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Design Sync', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id, 'last_read_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $mentionedUser->id, 'last_read_at' => now()->subHour()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $otherUser->id, 'last_read_at' => now()->subHour()]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Welcome to the team @seanna!',
+        ]);
+
+        // Mentioned user views chat index (list of conversations)
+        $responseMentioned = $this->actingAs($mentionedUser)->get(route('chat.index'));
+        $responseMentioned->assertOk();
+        $responseMentioned->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertTrue($target['has_unread_mentions']);
+            $this->assertEquals(1, $target['unread_mentions_count']);
+
+            return true;
+        });
+
+        // Other user views chat index: has unread message but NO unread mention
+        $responseOther = $this->actingAs($otherUser)->get(route('chat.index'));
+        $responseOther->assertOk();
+        $responseOther->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+            $this->assertEquals(1, $target['unread_count']);
+
+            return true;
+        });
+    }
+
+    public function test_viewing_conversation_clears_unread_mention_indicator(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $mentionedUser = User::factory()->create(['name' => 'Seanna', 'username' => 'seanna']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Design Sync', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id, 'last_read_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $mentionedUser->id, 'last_read_at' => now()->subHour()]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Welcome @seanna!',
+        ]);
+
+        // Viewing the conversation explicitly via query param
+        $response = $this->actingAs($mentionedUser)->get(route('chat.index', ['conversation' => $group->id]));
+        $response->assertOk();
+        $response->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+            $this->assertEquals(0, $target['unread_count']);
+
+            return true;
+        });
+    }
+
+    public function test_overlapping_names_resolve_to_longest_full_name_participant_only(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+        $bobSmith = User::factory()->create(['name' => 'Bob Smith']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bobSmith->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hello @Bob Smith please check this',
+        ]);
+
+        $this->assertDatabaseHas('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $bobSmith->id,
+        ]);
+
+        $this->assertDatabaseMissing('message_mentions', [
+            'conversation_id' => $group->id,
+            'user_id' => $bob->id,
+        ]);
+    }
+
+    public function test_mention_must_be_preceded_by_start_of_message_or_whitespace(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'myemail@Bob is not a mention',
+        ]);
+
+        $this->assertSame(0, MessageMention::where('conversation_id', $group->id)->count());
+    }
+
+    public function test_editing_message_reconciles_mentions_and_broadcasts_ids(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob', 'username' => 'bobby']);
+        $charlie = User::factory()->create(['name' => 'Charlie', 'username' => 'charlie']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hey @bobby check this',
+        ]);
+
+        $message = Message::where('conversation_id', $group->id)->first();
+        $this->assertNotNull($message);
+        $this->assertDatabaseHas('message_mentions', [
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+        ]);
+
+        // Edit message to mention Charlie instead of Bob
+        $response = $this->actingAs($sender)->patch(route('chat.edit-message', $message), [
+            'body' => 'Hey @charlie check this instead',
+        ]);
+
+        $response->assertSessionHasNoErrors();
+
+        // Mention for Bob is removed, mention for Charlie is created
+        $this->assertDatabaseMissing('message_mentions', [
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+        ]);
+        $this->assertDatabaseHas('message_mentions', [
+            'message_id' => $message->id,
+            'user_id' => $charlie->id,
+        ]);
+
+        // Verify broadcast payload
+        Event::assertDispatched(MessageSent::class, function (MessageSent $event) use ($bob, $charlie) {
+            if ($event->action !== 'edited') {
+                return false;
+            }
+            $data = $event->messageData;
+
+            return in_array($charlie->id, $data['mentioned_user_ids'], true)
+                && in_array($bob->id, $data['previous_mentioned_user_ids'], true);
+        });
+    }
+
+    public function test_everyone_mention_in_group_chat_records_mentions_and_indicator_for_eligible_members(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+        $charlie = User::factory()->create(['name' => 'Charlie']);
+        $bannedUser = User::factory()->create(['name' => 'Dave', 'is_banned' => true]);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Core Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id, 'last_read_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id, 'last_read_at' => now()->subHour()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id, 'last_read_at' => now()->subHour()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bannedUser->id, 'last_read_at' => now()->subHour()]);
+
+        $response = $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Important announcement: @everyone meeting in 10 minutes!',
+        ]);
+
+        $response->assertSessionHasNoErrors();
+
+        // Mention records created for eligible group members
+        $this->assertDatabaseHas('message_mentions', ['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        $this->assertDatabaseHas('message_mentions', ['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        // Sender and banned user must NOT have mention records
+        $this->assertDatabaseMissing('message_mentions', ['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        $this->assertDatabaseMissing('message_mentions', ['conversation_id' => $group->id, 'user_id' => $bannedUser->id]);
+
+        // Bob sees unread mention indicator in conversation list
+        $responseBob = $this->actingAs($bob)->get(route('chat.index'));
+        $responseBob->assertOk();
+        $responseBob->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertTrue($target['has_unread_mentions']);
+            $this->assertEquals(1, $target['unread_mentions_count']);
+
+            return true;
+        });
+
+        // Sender does not see unread mention indicator
+        $responseSender = $this->actingAs($sender)->get(route('chat.index'));
+        $responseSender->assertOk();
+        $responseSender->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+
+            return true;
+        });
+    }
+
+    public function test_everyone_mention_is_ignored_in_direct_chats(): void
+    {
+        $userA = User::factory()->create(['name' => 'Alice']);
+        $userB = User::factory()->create(['name' => 'Bob']);
+
+        $directConv = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $directConv->id, 'user_id' => $userA->id, 'last_read_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $directConv->id, 'user_id' => $userB->id, 'last_read_at' => now()->subHour()]);
+
+        $this->actingAs($userA)->post(route('chat.send-message', $directConv), [
+            'body' => 'Hey @everyone this is a 1-on-1 chat!',
+        ]);
+
+        // No mention records created
+        $this->assertSame(0, MessageMention::where('conversation_id', $directConv->id)->count());
+
+        // Recipient does not see unread mention indicator
+        $response = $this->actingAs($userB)->get(route('chat.index'));
+        $response->assertOk();
+        $response->assertInertia(function ($page) use ($directConv) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $directConv->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+
+            return true;
+        });
+    }
+
+    public function test_multiple_everyone_tokens_in_one_message_do_not_duplicate_records(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+        $charlie = User::factory()->create(['name' => 'Charlie']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => '@everyone please remember @everyone to test your code @everyone!',
+        ]);
+
+        $this->assertSame(1, MessageMention::where('conversation_id', $group->id)->where('user_id', $bob->id)->count());
+        $this->assertSame(1, MessageMention::where('conversation_id', $group->id)->where('user_id', $charlie->id)->count());
+        $this->assertSame(2, MessageMention::where('conversation_id', $group->id)->count());
+    }
+
+    public function test_everyone_near_miss_token_with_hyphen_does_not_create_group_mentions(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Notice for @everyone-else in the organization, and @everyone_else as well',
+        ]);
+
+        $this->assertSame(0, MessageMention::where('conversation_id', $group->id)->count());
+    }
+
+    public function test_coexistence_with_individual_mentions_does_not_duplicate_records(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob', 'username' => 'bobby']);
+        $charlie = User::factory()->create(['name' => 'Charlie', 'username' => 'charlie']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Devs', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Hey @everyone, especially @bobby please take lead on this!',
+        ]);
+
+        // Bob is mentioned individually AND via @everyone, but gets exactly 1 mention record
+        $this->assertSame(1, MessageMention::where('conversation_id', $group->id)->where('user_id', $bob->id)->count());
+        $this->assertSame(1, MessageMention::where('conversation_id', $group->id)->where('user_id', $charlie->id)->count());
+        $this->assertSame(2, MessageMention::where('conversation_id', $group->id)->count());
+    }
+
+    public function test_authorization_and_membership_changes_with_everyone_mention(): void
+    {
+        $admin = User::factory()->create(['name' => 'Admin User']);
+        $memberA = User::factory()->create(['name' => 'Member A']);
+        $memberB = User::factory()->create(['name' => 'Member B']);
+        $nonMember = User::factory()->create(['name' => 'Outsider']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Private Group', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $admin->id, 'role' => 'admin']);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $memberA->id, 'role' => 'member']);
+        $partB = ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $memberB->id, 'role' => 'member']);
+
+        // Non-member cannot send @everyone in this group (403)
+        $unauthSend = $this->actingAs($nonMember)->post(route('chat.send-message', $group), [
+            'body' => '@everyone hello outsiders!',
+        ]);
+        $unauthSend->assertForbidden();
+
+        // Non-member cannot access conversation messages (403)
+        $unauthMessages = $this->actingAs($nonMember)->getJson(route('chat.messages', $group));
+        $unauthMessages->assertForbidden();
+
+        // Non-member does not see group or its mention state in conversations list
+        $unauthIndex = $this->actingAs($nonMember)->get(route('chat.index', ['conversation' => $group->id]));
+        $unauthIndex->assertOk();
+        $unauthIndex->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $this->assertNull($convs->firstWhere('id', $group->id));
+            $this->assertNull($page->toArray()['props']['activeConversation']);
+
+            return true;
+        });
+
+        // Remove member B from the group
+        $removeResp = $this->actingAs($admin)->delete(route('chat.remove-member', [$group, $memberB]));
+        $removeResp->assertSessionHasNoErrors();
+        $this->assertDatabaseMissing('conversation_participants', ['id' => $partB->id]);
+
+        // Admin sends @everyone after member B was removed
+        $this->actingAs($admin)->post(route('chat.send-message', $group), [
+            'body' => '@everyone update after member removal',
+        ]);
+
+        // Member A receives mention
+        $this->assertDatabaseHas('message_mentions', ['conversation_id' => $group->id, 'user_id' => $memberA->id]);
+
+        // Removed member B does NOT receive mention
+        $this->assertDatabaseMissing('message_mentions', ['conversation_id' => $group->id, 'user_id' => $memberB->id]);
+    }
+
+    public function test_viewing_conversation_clears_everyone_mention_indicator_per_recipient(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+        $charlie = User::factory()->create(['name' => 'Charlie']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Sprint Planning', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id, 'last_read_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id, 'last_read_at' => now()->subHour()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id, 'last_read_at' => now()->subHour()]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Sprint kick-off @everyone!',
+        ]);
+
+        // 1. Bob views the conversation -> Bob's indicator clears
+        $respBobView = $this->actingAs($bob)->get(route('chat.index', ['conversation' => $group->id]));
+        $respBobView->assertOk();
+        $respBobView->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+
+            return true;
+        });
+
+        // 2. Charlie has NOT viewed the conversation -> Charlie still sees indicator
+        $respCharlieList = $this->actingAs($charlie)->get(route('chat.index'));
+        $respCharlieList->assertOk();
+        $respCharlieList->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertTrue($target['has_unread_mentions']);
+            $this->assertEquals(1, $target['unread_mentions_count']);
+
+            return true;
+        });
+
+        // 3. Charlie views the conversation -> Charlie's indicator clears
+        $respCharlieView = $this->actingAs($charlie)->get(route('chat.index', ['conversation' => $group->id]));
+        $respCharlieView->assertOk();
+        $respCharlieView->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertFalse($target['has_unread_mentions']);
+            $this->assertEquals(0, $target['unread_mentions_count']);
+
+            return true;
+        });
+    }
+
+    public function test_muted_conversation_preserves_muted_preference_while_recording_everyone_mention(): void
+    {
+        $sender = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Noisy Group', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $sender->id, 'last_read_at' => now()]);
+        $bobParticipant = ConversationParticipant::create([
+            'conversation_id' => $group->id,
+            'user_id' => $bob->id,
+            'last_read_at' => now()->subHour(),
+            'is_muted' => true,
+            'notification_preference' => 'none',
+        ]);
+
+        $this->actingAs($sender)->post(route('chat.send-message', $group), [
+            'body' => 'Pinging @everyone in noisy group',
+        ]);
+
+        // Mention record is created
+        $this->assertDatabaseHas('message_mentions', ['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        // Bob's muted preference is strictly preserved and not unmuted
+        $this->assertTrue($bobParticipant->fresh()->is_muted);
+        $this->assertSame('none', $bobParticipant->fresh()->notification_preference);
+
+        // Bob sees the conversation item marked as muted AND with unread mention badge
+        $response = $this->actingAs($bob)->get(route('chat.index'));
+        $response->assertOk();
+        $response->assertInertia(function ($page) use ($group) {
+            $convs = collect($page->toArray()['props']['conversations']);
+            $target = $convs->firstWhere('id', $group->id);
+            $this->assertNotNull($target);
+            $this->assertTrue($target['is_muted']);
+            $this->assertSame('none', $target['notification_preference']);
+            $this->assertTrue($target['has_unread_mentions']);
+            $this->assertEquals(1, $target['unread_mentions_count']);
+
+            return true;
+        });
+    }
+
+    public function test_user_can_delete_message_for_themselves_only(): void
+    {
+        $userA = User::factory()->create();
+        $userB = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userA->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userB->id]);
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $userB->id,
+            'body' => 'Secret message for user A',
+            'type' => 'text',
+            'is_deleted' => false,
+        ]);
+
+        $response = $this->actingAs($userA)->post(route('chat.delete-message-for-me', $message));
+        $response->assertSessionHasNoErrors();
+
+        // Recorded in message_user_deletions for user A
+        $this->assertDatabaseHas('message_user_deletions', [
+            'message_id' => $message->id,
+            'user_id' => $userA->id,
+        ]);
+
+        // Original message is NOT deleted globally
+        $this->assertFalse($message->fresh()->is_deleted);
+
+        // User A sees "User has deleted a message" in messages cursor endpoint, and original content is not returned
+        $responseA = $this->actingAs($userA)->getJson(route('chat.messages', $conversation));
+        $responseA->assertOk();
+        $this->assertCount(1, $responseA->json('messages'));
+        $this->assertEquals('User has deleted a message', $responseA->json('messages.0.body'));
+        $this->assertTrue($responseA->json('messages.0.is_deleted_for_me'));
+        $this->assertStringNotContainsString('Secret message for user A', $responseA->getContent());
+
+        // User B CAN still see the original message normally
+        $responseB = $this->actingAs($userB)->getJson(route('chat.messages', $conversation));
+        $responseB->assertOk();
+        $this->assertCount(1, $responseB->json('messages'));
+        $this->assertEquals($message->id, $responseB->json('messages.0.id'));
+        $this->assertEquals('Secret message for user A', $responseB->json('messages.0.body'));
+        $this->assertFalse($responseB->json('messages.0.is_deleted_for_me'));
+
+        // Subsequent page loads persist the replacement for deleting user
+        $pageLoadA = $this->actingAs($userA)->get(route('chat.index', ['conversation' => $conversation->id]));
+        $pageLoadA->assertOk();
+        $pageLoadA->assertInertia(fn ($page) => $page
+            ->where('activeConversation.messages.0.body', 'User has deleted a message')
+            ->where('activeConversation.messages.0.is_deleted_for_me', true)
+            ->where('conversations', function ($convs) use ($conversation) {
+                $target = collect($convs)->firstWhere('id', $conversation->id);
+
+                return $target
+                    && $target['latest_message']['body'] === 'User has deleted a message'
+                    && $target['latest_message']['is_deleted_for_me'] === true;
+            })
+        );
+        $this->assertStringNotContainsString('Secret message for user A', $pageLoadA->getContent());
+
+        // Subsequent page loads for other members still show the original message
+        $pageLoadB = $this->actingAs($userB)->get(route('chat.index', ['conversation' => $conversation->id]));
+        $pageLoadB->assertOk();
+        $pageLoadB->assertInertia(fn ($page) => $page
+            ->where('activeConversation.messages.0.body', 'Secret message for user A')
+            ->where('activeConversation.messages.0.is_deleted_for_me', false)
+            ->where('conversations', function ($convs) use ($conversation) {
+                $target = collect($convs)->firstWhere('id', $conversation->id);
+
+                return $target
+                    && $target['latest_message']['body'] === 'Secret message for user A'
+                    && $target['latest_message']['is_deleted_for_me'] === false;
+            })
+        );
+    }
+
+    public function test_deleted_for_me_message_does_not_leak_attachments_replies_or_mentions_and_blocks_actions(): void
+    {
+        Storage::fake('local');
+
+        $userA = User::factory()->create();
+        $userB = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userA->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userB->id]);
+
+        $filePath = 'chat_attachments/confidential_file.pdf';
+        Storage::disk('local')->put($filePath, 'Confidential binary data');
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $userB->id,
+            'body' => 'Sensitive message with file',
+            'type' => 'file',
+            'attachment_path' => $filePath,
+            'attachment_name' => 'confidential_file.pdf',
+            'attachment_type' => 'application/pdf',
+            'is_deleted' => false,
+        ]);
+
+        $replyMessage = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $userB->id,
+            'reply_to_id' => $message->id,
+            'body' => 'Replying to sensitive message',
+            'type' => 'text',
+            'is_deleted' => false,
+        ]);
+
+        // Add reaction from user B
+        MessageReaction::create([
+            'message_id' => $message->id,
+            'user_id' => $userB->id,
+            'reaction' => 'fire',
+        ]);
+
+        // User A deletes message for themselves
+        $this->actingAs($userA)->post(route('chat.delete-message-for-me', $message))->assertSessionHasNoErrors();
+
+        // 1. User A view: attachments, reactions, mentions are stripped/hidden
+        $responseA = $this->actingAs($userA)->getJson(route('chat.messages', $conversation));
+        $responseA->assertOk();
+        $messagesA = collect($responseA->json('messages'))->keyBy('id');
+
+        $deletedForMeMsg = $messagesA->get($message->id);
+        $this->assertEquals('User has deleted a message', $deletedForMeMsg['body']);
+        $this->assertTrue($deletedForMeMsg['is_deleted_for_me']);
+        $this->assertNull($deletedForMeMsg['attachment_url']);
+        $this->assertNull($deletedForMeMsg['attachment_name']);
+        $this->assertEmpty($deletedForMeMsg['reactions']);
+
+        // The reply quoting this message also masks the quote body for user A
+        $replyMsgA = $messagesA->get($replyMessage->id);
+        $this->assertEquals('User has deleted a message', $replyMsgA['reply_to']['body']);
+        $this->assertTrue($replyMsgA['reply_to']['is_deleted_for_me']);
+
+        // 2. User A cannot download the attachment (returns 404)
+        $this->actingAs($userA)->get(route('chat.download-attachment', $message))->assertNotFound();
+
+        // 3. User A cannot react to or edit the deleted message (returns 403)
+        $this->actingAs($userA)->post(route('chat.reaction', $message), ['reaction' => 'like'])->assertForbidden();
+
+        // 4. Other member (User B) still sees original attachment, quote, and can download
+        $responseB = $this->actingAs($userB)->getJson(route('chat.messages', $conversation));
+        $responseB->assertOk();
+        $messagesB = collect($responseB->json('messages'))->keyBy('id');
+
+        $userBMsg = $messagesB->get($message->id);
+        $this->assertEquals('Sensitive message with file', $userBMsg['body']);
+        $this->assertFalse($userBMsg['is_deleted_for_me']);
+        $this->assertNotNull($userBMsg['attachment_url']);
+        $this->assertEquals('confidential_file.pdf', $userBMsg['attachment_name']);
+        $this->assertCount(1, $userBMsg['reactions']);
+
+        $replyMsgB = $messagesB->get($replyMessage->id);
+        $this->assertEquals('Sensitive message with file', $replyMsgB['reply_to']['body']);
+        $this->assertFalse($replyMsgB['reply_to']['is_deleted_for_me']);
+
+        $this->actingAs($userB)->get(route('chat.download-attachment', $message))->assertOk();
+    }
+
+    public function test_non_participant_cannot_delete_message_for_themselves(): void
+    {
+        $userA = User::factory()->create();
+        $userB = User::factory()->create();
+        $outsider = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userA->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userB->id]);
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $userA->id,
+            'body' => 'Private message',
+            'type' => 'text',
+        ]);
+
+        $response = $this->actingAs($outsider)->post(route('chat.delete-message-for-me', $message));
+        $response->assertForbidden();
+
+        $this->assertDatabaseMissing('message_user_deletions', [
+            'message_id' => $message->id,
+            'user_id' => $outsider->id,
+        ]);
+    }
+
+    public function test_group_members_can_view_reaction_details_with_timestamps(): void
+    {
+        $alice = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+        $charlie = User::factory()->create(['name' => 'Charlie']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Project Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $alice->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $message = Message::create([
+            'conversation_id' => $group->id,
+            'sender_id' => $alice->id,
+            'body' => 'Great work team!',
+            'type' => 'text',
+        ]);
+
+        MessageReaction::create([
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+            'reaction' => 'love',
+            'created_at' => now()->subMinutes(5),
+        ]);
+
+        MessageReaction::create([
+            'message_id' => $message->id,
+            'user_id' => $charlie->id,
+            'reaction' => 'fire',
+            'created_at' => now()->subMinute(),
+        ]);
+
+        // Alice views reaction details
+        $response = $this->actingAs($alice)->getJson(route('chat.message-reactions', $message));
+        $response->assertOk();
+        $response->assertJsonStructure([
+            'message_id',
+            'reactions' => [
+                '*' => [
+                    'id',
+                    'reaction',
+                    'user' => ['id', 'name', 'username', 'profile_photo_url'],
+                    'created_at',
+                    'created_at_relative',
+                ],
+            ],
+        ]);
+
+        $reactions = $response->json('reactions');
+        $this->assertCount(2, $reactions);
+        $this->assertEquals('Bob', $reactions[0]['user']['name']);
+        $this->assertEquals('love', $reactions[0]['reaction']);
+        $this->assertNotNull($reactions[0]['created_at']);
+        $this->assertEquals('Charlie', $reactions[1]['user']['name']);
+        $this->assertEquals('fire', $reactions[1]['reaction']);
+    }
+
+    public function test_repeated_reaction_selection_does_not_create_duplicate_records(): void
+    {
+        $userA = User::factory()->create();
+        $userB = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userA->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userB->id]);
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $userA->id,
+            'body' => 'Test message',
+            'type' => 'text',
+        ]);
+
+        // First react: creates reaction
+        $this->actingAs($userB)->post(route('chat.reaction', $message), ['reaction' => 'like']);
+        $this->assertEquals(1, MessageReaction::where('message_id', $message->id)->where('user_id', $userB->id)->count());
+
+        // Repeated react with same emoji: toggles off (removes reaction)
+        $this->actingAs($userB)->post(route('chat.reaction', $message), ['reaction' => 'like']);
+        $this->assertEquals(0, MessageReaction::where('message_id', $message->id)->where('user_id', $userB->id)->count());
+
+        // React again: creates 1 reaction (never duplicates)
+        $this->actingAs($userB)->post(route('chat.reaction', $message), ['reaction' => 'like']);
+        $this->assertEquals(1, MessageReaction::where('message_id', $message->id)->where('user_id', $userB->id)->count());
+    }
+
+    public function test_non_participant_cannot_view_reaction_details(): void
+    {
+        $userA = User::factory()->create();
+        $outsider = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $userA->id]);
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $userA->id,
+            'body' => 'Private message',
+            'type' => 'text',
+        ]);
+
+        $response = $this->actingAs($outsider)->getJson(route('chat.message-reactions', $message));
+        $response->assertForbidden();
+    }
+
+    public function test_group_members_can_view_seen_by_details_excluding_sender(): void
+    {
+        $alice = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+        $charlie = User::factory()->create(['name' => 'Charlie']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Project Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $alice->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $charlie->id]);
+
+        $message = Message::create([
+            'conversation_id' => $group->id,
+            'sender_id' => $alice->id,
+            'body' => 'Status update please',
+            'type' => 'text',
+            'created_at' => now()->subMinutes(10),
+        ]);
+
+        // Bob marks conversation as read -> triggers recordMessageReads
+        $this->actingAs($bob)->post(route('chat.mark-read', $group));
+
+        $this->assertDatabaseHas('message_reads', [
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+        ]);
+
+        // Alice opens seen-by details
+        $response = $this->actingAs($alice)->getJson(route('chat.message-seen-by', $message));
+        $response->assertOk();
+        $response->assertJsonStructure([
+            'message_id',
+            'seen_by' => [
+                '*' => [
+                    'user' => ['id', 'name', 'username', 'profile_photo_url'],
+                    'seen_at',
+                    'seen_at_relative',
+                    'raw_seen_at',
+                ],
+            ],
+            'count',
+        ]);
+
+        $seenBy = $response->json('seen_by');
+        $this->assertCount(1, $seenBy);
+        $this->assertEquals('Bob', $seenBy[0]['user']['name']);
+        $this->assertNotNull($seenBy[0]['seen_at']);
+
+        // Sender (Alice) is NOT in seen_by list
+        $seenUserIds = collect($seenBy)->pluck('user.id')->all();
+        $this->assertNotContains($alice->id, $seenUserIds);
+        // Charlie (who has not read) is NOT in seen_by list
+        $this->assertNotContains($charlie->id, $seenUserIds);
+    }
+
+    public function test_member_who_deleted_message_for_themselves_cannot_view_seen_by_details_but_read_receipt_persists(): void
+    {
+        $alice = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create(['name' => 'Bob']);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Project Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $alice->id]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $bob->id]);
+
+        $message = Message::create([
+            'conversation_id' => $group->id,
+            'sender_id' => $alice->id,
+            'body' => 'Important note',
+            'type' => 'text',
+        ]);
+
+        // Bob reads it first
+        $this->actingAs($bob)->post(route('chat.mark-read', $group));
+        $this->assertDatabaseHas('message_reads', [
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+        ]);
+
+        // Bob deletes the message for himself
+        $this->actingAs($bob)->post(route('chat.delete-message-for-me', $message));
+        $this->assertDatabaseHas('message_user_deletions', [
+            'message_id' => $message->id,
+            'user_id' => $bob->id,
+        ]);
+
+        // Bob can no longer view seen-by details for the message he deleted
+        $responseBob = $this->actingAs($bob)->getJson(route('chat.message-seen-by', $message));
+        $responseBob->assertNotFound();
+
+        // But Alice can still view seen-by, and Bob's historical read receipt is preserved
+        $responseAlice = $this->actingAs($alice)->getJson(route('chat.message-seen-by', $message));
+        $responseAlice->assertOk();
+        $this->assertCount(1, $responseAlice->json('seen_by'));
+        $this->assertEquals('Bob', $responseAlice->json('seen_by.0.user.name'));
+    }
+
+    public function test_non_participant_cannot_view_seen_by_details(): void
+    {
+        $userA = User::factory()->create();
+        $outsider = User::factory()->create();
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $userA->id]);
+
+        $message = Message::create([
+            'conversation_id' => $group->id,
+            'sender_id' => $userA->id,
+            'body' => 'Secret update',
+            'type' => 'text',
+        ]);
+
+        $response = $this->actingAs($outsider)->getJson(route('chat.message-seen-by', $message));
+        $response->assertForbidden();
+    }
+
+    public function test_historical_participant_seen_by_details_provides_profile_photo_url(): void
+    {
+        $alice = User::factory()->create(['name' => 'Alice']);
+        $bob = User::factory()->create([
+            'name' => 'Bob',
+            'profile_photo_path' => 'profile-photos/bob.jpg',
+        ]);
+
+        $group = Conversation::create(['type' => 'group', 'title' => 'Team', 'last_message_at' => now()]);
+        ConversationParticipant::create(['conversation_id' => $group->id, 'user_id' => $alice->id]);
+        ConversationParticipant::create([
+            'conversation_id' => $group->id,
+            'user_id' => $bob->id,
+            'last_read_at' => now(),
+        ]);
+
+        $message = Message::create([
+            'conversation_id' => $group->id,
+            'sender_id' => $alice->id,
+            'body' => 'Older message without MessageRead record',
+            'type' => 'text',
+            'created_at' => now()->subHour(),
+        ]);
+
+        $response = $this->actingAs($alice)->getJson(route('chat.message-seen-by', $message));
+        $response->assertOk();
+
+        $seenBy = $response->json('seen_by');
+        $this->assertCount(1, $seenBy);
+        $this->assertEquals('Bob', $seenBy[0]['user']['name']);
+        $this->assertNotNull($seenBy[0]['user']['profile_photo_url']);
+        $this->assertEquals($bob->profile_photo_url, $seenBy[0]['user']['profile_photo_url']);
     }
 }

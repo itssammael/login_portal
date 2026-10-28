@@ -20,6 +20,7 @@ class Conversation extends Model
     protected $fillable = [
         'type',
         'title',
+        'direct_key',
         'last_message_at',
     ];
 
@@ -53,7 +54,7 @@ class Conversation extends Model
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'conversation_participants')
-            ->withPivot(['last_read_at', 'is_muted', 'is_pinned', 'role'])
+            ->withPivot(['last_read_at', 'is_muted', 'is_pinned', 'role', 'notification_preference'])
             ->withTimestamps();
     }
 
@@ -177,5 +178,23 @@ class Conversation extends Model
         }
 
         return $conversation;
+    }
+
+    /**
+     * The mentions in this conversation.
+     *
+     * @return HasMany<MessageMention>
+     */
+    public function mentions(): HasMany
+    {
+        return $this->hasMany(MessageMention::class);
+    }
+
+    /**
+     * Generate normalized unique direct key for two users.
+     */
+    public static function generateDirectKey(int $userId1, int $userId2): string
+    {
+        return min($userId1, $userId2).':'.max($userId1, $userId2);
     }
 }

@@ -3,7 +3,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
 import InputError from '@/Components/InputError.vue';
-import Turnstile from '@/Components/Turnstile.vue';
+import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
     event: {
@@ -29,7 +29,15 @@ const props = defineProps({
         type: String,
         required: true,
     },
-    turnstileSiteKey: {
+    isAvailable: {
+        type: Boolean,
+        default: true,
+    },
+    unavailableReason: {
+        type: String,
+        default: '',
+    },
+    unavailableMessage: {
         type: String,
         default: '',
     },
@@ -43,12 +51,18 @@ const sortedFields = computed(() => {
     return [...props.form.schema.fields].sort((a, b) => (Number(a.weight) || 0) - (Number(b.weight) || 0));
 });
 
+const isFormAvailable = computed(() => {
+    if (props.isAvailable === false) {
+        return false;
+    }
+    if (!props.event || !props.form || !sortedFields.value.length) {
+        return false;
+    }
+    return true;
+});
+
 // Dynamic form answers dictionary keyed by field.id
 const answers = ref({});
-
-// Cloudflare Turnstile verification state
-const turnstileToken = ref('');
-const turnstileRef = ref(null);
 
 // Participant metadata fields (optional for respondent identification)
 const participantData = ref({
@@ -188,7 +202,7 @@ const validateCurrentPage = () => {
         if (field.required) {
             const val = answers.value[field.id];
             if (val === null || val === undefined || val === '' || (Array.isArray(val) && val.length === 0)) {
-                clientErrors.value[field.id] = `The '${field.particular}' field is required.`;
+                clientErrors.value[field.id] = `The '${stripHtml(field.particular)}' field is required.`;
                 hasError = true;
             }
         }
@@ -283,21 +297,6 @@ const showQuickErrorToast = ref(false);
 let quickErrorToastTimer = null;
 let currentErrorIndex = 0;
 
-const turnstileError = computed(() => {
-    return clientErrors.value.turnstile_token
-        || serverErrors.value.turnstile_token?.[0]
-        || serverErrors.value['cf-turnstile-response']?.[0]
-        || null;
-});
-
-watch(turnstileToken, (token) => {
-    if (token) {
-        delete clientErrors.value.turnstile_token;
-        delete serverErrors.value.turnstile_token;
-        delete serverErrors.value['cf-turnstile-response'];
-    }
-});
-
 // Extract list of fields with validation errors
 const errorFieldsList = computed(() => {
     const list = [];
@@ -306,9 +305,7 @@ const errorFieldsList = computed(() => {
 
     errorKeys.forEach((key) => {
         let fieldId = key;
-        if (fieldId === 'cf-turnstile-response') {
-            fieldId = 'turnstile_token';
-        } else if (fieldId.startsWith('answers.')) {
+        if (fieldId.startsWith('answers.')) {
             fieldId = fieldId.substring(8);
         } else if (fieldId.startsWith('data.')) {
             fieldId = fieldId.substring(5);
@@ -320,16 +317,6 @@ const errorFieldsList = computed(() => {
 
         if (!seenFieldIds.has(fieldId)) {
             seenFieldIds.add(fieldId);
-            if (fieldId === 'turnstile_token') {
-                list.push({
-                    id: 'turnstile_token',
-                    particular: 'Security Verification',
-                    weight: null,
-                    message: turnstileError.value || 'Please complete the security verification.',
-                    isOther: false,
-                });
-                return;
-            }
 
             const field = sortedFields.value.find((f) => String(f.id) === String(fieldId));
             if (['section', 'text_only'].includes(field?.type)) {
@@ -368,7 +355,7 @@ const highlightField = (fieldId) => {
 const goToErrorField = (fieldId) => {
     if (!fieldId) return;
 
-    if (isPaginated.value && fieldId !== 'turnstile_token') {
+    if (isPaginated.value) {
         const targetPageIdx = sectionPages.value.findIndex((p) => p.fields.some((f) => String(f.id) === String(fieldId)));
         if (targetPageIdx !== -1 && targetPageIdx !== currentPageIdx.value) {
             currentPageIdx.value = targetPageIdx;
@@ -450,7 +437,6 @@ const submitForm = async () => {
     const payload = {
         answers: { ...answers.value },
         ...participantData.value,
-        turnstile_token: turnstileToken.value,
     };
 
     try {
@@ -458,16 +444,11 @@ const submitForm = async () => {
         if (response.status === 201 || response.status === 200) {
             submissionSuccess.value = true;
             submittedRecord.value = response.data?.data || response.data || null;
-            turnstileToken.value = '';
             serverErrors.value = {};
             showQuickErrorToast.value = false;
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
     } catch (error) {
-        // Clear spent/invalid single-use token and reset widget for a fresh challenge
-        turnstileToken.value = '';
-        turnstileRef.value?.reset();
-
         if (error.response && error.response.status === 422) {
             serverErrors.value = error.response.data.errors || {};
             showQuickErrorToast.value = true;
@@ -501,8 +482,6 @@ const resetForAnotherSubmission = () => {
     highlightedFieldId.value = null;
     currentPageIdx.value = 0;
     pageHistory.value = [0];
-    turnstileToken.value = '';
-    turnstileRef.value?.reset();
     initAnswers();
     participantData.value = {
         name: '',
@@ -608,21 +587,43 @@ onBeforeUnmount(() => {
                 </div>
             </div>
 
-            <!-- Unavailable / Empty State -->
-            <div v-else-if="!event || !form || !sortedFields.length" class="bg-cream-200 rounded-3xl p-10 sm:p-12 text-center border border-cream-500/50 shadow-sm space-y-3">
-                <div class="size-14 rounded-full bg-cream-100 text-gray-400 flex items-center justify-center mx-auto mb-2">
-                    <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            <!-- Not Available / Draft / Unavailable State -->
+            <div v-else-if="!isFormAvailable" class="bg-[#fffef9] rounded-3xl p-8 sm:p-12 text-center border border-cream-400/80 shadow-sm space-y-4 animate-fade-in max-w-lg mx-auto">
+                <div class="size-16 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto shadow-inner">
+                    <svg class="size-8" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
                     </svg>
                 </div>
-                <h2 class="text-lg font-bold text-gray-900">Feedback Form Unavailable</h2>
-                <p class="text-xs text-gray-600 max-w-sm mx-auto leading-relaxed">
-                    This evaluation feedback form is currently inactive, has reached its conclusion, or has not yet been configured by the system administrator.
-                </p>
+                <div class="space-y-2">
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-wider bg-amber-200/80 text-amber-900 border border-amber-300">
+                        <span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
+                        Not Available
+                    </span>
+                    <h2 class="text-xl sm:text-2xl font-black text-forest-950 tracking-tight">
+                        {{ event?.name || 'Feedback Form Not Available' }}
+                    </h2>
+                    <p class="text-xs sm:text-sm text-gray-600 max-w-md mx-auto leading-relaxed">
+                        {{ unavailableMessage || (unavailableReason === 'draft'
+                            ? 'This feedback form is currently unpublished or still saved as draft and is not accepting responses at this time.'
+                            : 'This evaluation feedback form is currently inactive, has reached its conclusion, or has not yet been configured by the system administrator.') }}
+                    </p>
+                </div>
+                <div v-if="unavailableReason === 'draft'" class="pt-2 text-[11px] text-amber-800/80 font-mono bg-amber-50/60 py-1.5 px-3 rounded-lg border border-amber-200/60 inline-block">
+                    Status: Unpublished / Draft Mode
+                </div>
             </div>
 
             <!-- Active Questionnaire Form -->
             <form v-else @submit.prevent="isPaginated && !isLastPage ? goToNextPage() : submitForm()" class="space-y-6">
+                <!-- Admin Draft Notice Banner -->
+                <div v-if="form?.is_draft" class="p-4 bg-amber-50 border-2 border-amber-300 text-amber-950 rounded-2xl text-xs font-bold flex items-center justify-between shadow-xs">
+                    <div class="flex items-center space-x-2">
+                        <span class="size-6 rounded-lg bg-amber-200 text-amber-900 flex items-center justify-center text-xs font-black shrink-0">⚠️</span>
+                        <span>Draft Preview Mode: This questionnaire is currently in Draft (Unpublished) mode. Public respondents cannot access or submit responses until it is published.</span>
+                    </div>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-amber-200 text-amber-900 font-extrabold shrink-0">Draft</span>
+                </div>
+
                 <!-- General Error Alert -->
                 <div v-if="serverErrors.general" class="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl text-xs font-medium flex items-center shadow-xs">
                     <svg class="size-5 me-2 shrink-0 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -638,27 +639,27 @@ onBeforeUnmount(() => {
                         <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-cream-200 text-forest-900 border border-cream-400/60">
                             Evaluation Questionnaire
                         </span>
-                        <h2 class="text-xl sm:text-2xl font-black text-forest-950 tracking-tight" v-html="form.schema?.title || event.name"></h2>
-                        <div
-                            v-if="form.schema?.description || event.details"
-                            class="text-xs sm:text-sm text-gray-700 leading-relaxed font-medium form-rich-content"
-                            v-html="form.schema?.description || event.details"
-                        ></div>
+                        <h2 class="text-xl sm:text-2xl font-black text-forest-950 tracking-tight form-rich-content" v-html="sanitizeHtml(form.schema?.title || event.name)"></h2>
+                        <div v-if="form.schema?.description || event.details" class="text-xs sm:text-sm text-gray-600 leading-relaxed font-medium form-rich-content" v-html="sanitizeHtml(form.schema?.description || event.details)"></div>
                     </div>
 
                     <!-- Pagination Step Indicator / Progress Bar -->
                     <div v-if="isPaginated" class="space-y-2.5 pt-1">
                         <div class="flex items-center justify-between text-xs font-bold text-gray-700">
                             <span class="flex items-center space-x-2">
-                                <span class="size-5 rounded-full bg-forest-900 text-emerald-200 text-[10px] flex items-center justify-center font-bold">
+                                <span class="size-5 rounded-full bg-forest-900 text-emerald-200 text-[10px] flex items-center justify-center font-bold shrink-0">
                                     {{ currentPageIdx + 1 }}
                                 </span>
-                                <span>Section {{ currentPageIdx + 1 }} of {{ sectionPages.length }}: <span v-html="currentPage?.section?.particular || 'Evaluation Questions'"></span></span>
+                                <span class="flex items-center space-x-1.5 flex-wrap">
+                                    <span>Section {{ currentPageIdx + 1 }} of {{ sectionPages.length }}:</span>
+                                    <span class="form-rich-content inline" v-html="sanitizeHtml(currentPage?.section?.particular || 'Evaluation Questions')"></span>
+                                </span>
                             </span>
                             <span class="font-mono text-gray-500 text-[11px]">
                                 {{ Math.round(((currentPageIdx + 1) / sectionPages.length) * 100) }}%
                             </span>
                         </div>
+                        <div v-if="currentPage?.section?.description" class="text-xs text-gray-600 leading-relaxed font-medium form-rich-content pl-7" v-html="sanitizeHtml(currentPage.section.description)"></div>
                         <div class="w-full bg-cream-200 rounded-full h-2 overflow-hidden border border-cream-400">
                             <div
                                 class="bg-forest-900 h-2 rounded-full transition-all duration-300"
@@ -678,8 +679,8 @@ onBeforeUnmount(() => {
                                 class="pt-6 pb-2 border-b-2 border-forest-900/15 first:pt-0"
                             >
                                 <div>
-                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="field.particular"></h3>
-                                    <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="field.description"></div>
+                                    <h3 class="text-base sm:text-lg font-black text-forest-950 tracking-tight form-rich-content" v-html="sanitizeHtml(field.particular)"></h3>
+                                    <div v-if="field.description" class="text-xs text-gray-600 mt-1 leading-relaxed font-medium form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                 </div>
                             </div>
 
@@ -689,8 +690,8 @@ onBeforeUnmount(() => {
                                 :id="`field_container_${field.id}`"
                                 class="p-4 sm:p-5 rounded-2xl bg-cream-100/80 border border-cream-400/70 space-y-2"
                             >
-                                <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="field.particular"></h4>
-                                <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="field.description"></div>
+                                <h4 class="text-sm sm:text-base font-bold text-forest-950 form-rich-content" v-html="sanitizeHtml(field.particular)"></h4>
+                                <div v-if="field.description" class="text-xs text-gray-700 leading-relaxed form-rich-content overflow-x-auto" v-html="sanitizeHtml(field.description)"></div>
                             </div>
 
                             <!-- Regular Question Input Tile -->
@@ -708,12 +709,12 @@ onBeforeUnmount(() => {
                             >
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="flex-1">
-                                        <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block form-rich-content">
-                                            <span v-html="field.particular"></span>
+                                        <label :for="`input_${field.id}`" class="text-sm font-bold text-gray-900 block">
+                                            <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                             <span v-if="field.required" class="text-red-500 font-bold ml-0.5">*</span>
                                             <span v-else class="text-gray-400 font-normal text-xs ml-1">(Optional)</span>
                                         </label>
-                                        <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="field.description"></div>
+                                        <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                     </div>
                                     <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cream-200 text-gray-600 shrink-0">
                                         {{ field.type }}
@@ -727,7 +728,7 @@ onBeforeUnmount(() => {
                                         v-model="answers[field.id]"
                                         type="text"
                                         :required="field.required"
-                                        :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                        :placeholder="field.placeholder || 'Type your answer here...'"
                                         class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                     />
                                 </div>
@@ -739,7 +740,7 @@ onBeforeUnmount(() => {
                                         v-model="answers[field.id]"
                                         rows="3"
                                         :required="field.required"
-                                        :placeholder="field.placeholder || `Enter ${field.particular}...`"
+                                        :placeholder="field.placeholder || 'Type your response here...'"
                                         class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                     ></textarea>
                                 </div>
@@ -793,7 +794,7 @@ onBeforeUnmount(() => {
                                     <!-- If allow_other is true and an "Other" option is selected -->
                                     <div v-if="isOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                         <label class="block text-xs font-bold text-amber-900">
-                                            Please specify {{ field.particular }} <span v-if="field.required" class="text-red-500">*</span>
+                                            Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span> <span v-if="field.required" class="text-red-500">*</span>
                                         </label>
                                         <input
                                             v-model="answers[`${field.id}_other`]"
@@ -817,7 +818,7 @@ onBeforeUnmount(() => {
                                             type="text"
                                             :list="`datalist_${field.id}`"
                                             :required="field.required"
-                                            :placeholder="field.placeholder || `Select or type ${field.particular}...`"
+                                            :placeholder="field.placeholder || 'Select or type an option...'"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         />
                                         <datalist :id="`datalist_${field.id}`">
@@ -834,7 +835,7 @@ onBeforeUnmount(() => {
                                             :required="field.required"
                                             class="w-full px-3.5 py-2.5 bg-[#fffef9] border border-cream-500 focus:border-forest-600 focus:ring-2 focus:ring-forest-200 rounded-xl text-gray-900 text-xs transition font-medium"
                                         >
-                                            <option value="" disabled>-- Select {{ field.particular }} --</option>
+                                            <option value="" disabled>-- Select an option --</option>
                                             <option v-for="opt in field.options || []" :key="opt.value" :value="opt.value">
                                                 {{ opt.label }}
                                             </option>
@@ -844,7 +845,7 @@ onBeforeUnmount(() => {
                                     <!-- If allow_other is true and an "Other" option is selected -->
                                     <div v-if="isOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                         <label class="block text-xs font-bold text-amber-900">
-                                            Please specify {{ field.particular }} <span v-if="field.required" class="text-red-500">*</span>
+                                            Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span> <span v-if="field.required" class="text-red-500">*</span>
                                         </label>
                                         <input
                                             v-model="answers[`${field.id}_other`]"
@@ -882,7 +883,7 @@ onBeforeUnmount(() => {
                                     <!-- If allow_other is true and an "Other" option is selected -->
                                     <div v-if="isOtherSelected(field)" class="p-3 bg-amber-50/70 border border-amber-300 rounded-xl space-y-1.5">
                                         <label class="block text-xs font-bold text-amber-900">
-                                            Please specify {{ field.particular }} <span v-if="field.required" class="text-red-500">*</span>
+                                            Please specify <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span> <span v-if="field.required" class="text-red-500">*</span>
                                         </label>
                                         <input
                                             v-model="answers[`${field.id}_other`]"
@@ -906,37 +907,6 @@ onBeforeUnmount(() => {
                                 </div>
                             </div>
                         </template>
-                    </div>
-
-                    <!-- Cloudflare Turnstile Security Verification -->
-                    <div
-                        id="field_container_turnstile_token"
-                        class="p-4 sm:p-5 rounded-2xl border space-y-2.5 transition-all duration-300"
-                        :class="[
-                            highlightedFieldId === 'turnstile_token'
-                                ? 'ring-4 ring-red-500/80 ring-offset-2 border-red-500 bg-red-50/90 shadow-xl'
-                                : (turnstileError
-                                    ? 'border-red-400 bg-red-50/30'
-                                    : 'bg-cream-100/50 border-cream-400/60')
-                        ]"
-                    >
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="text-xs font-bold text-gray-800">
-                                Security Verification <span class="text-red-500 font-bold">*</span>
-                            </span>
-                            <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cream-200 text-gray-600">
-                                Turnstile
-                            </span>
-                        </div>
-
-                        <Turnstile
-                            ref="turnstileRef"
-                            v-model="turnstileToken"
-                            :site-key="turnstileSiteKey"
-                            action="feedback_submit"
-                        />
-
-                        <InputError :message="turnstileError" class="text-xs font-medium" />
                     </div>
 
                     <!-- Navigation & Action Buttons -->

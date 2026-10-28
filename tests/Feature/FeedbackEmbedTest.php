@@ -500,4 +500,86 @@ class FeedbackEmbedTest extends TestCase
         // Second call on already used session returns false
         $this->assertFalse($session->markAsUsed());
     }
+
+    public function test_cannot_create_session_for_draft_feedback_form(): void
+    {
+        $event = FbEvent::factory()->create();
+        Feedback::factory()->draft()->create(['event_id' => $event->id]);
+
+        /** @var FeedbackEmbed $embed */
+        $embed = $event->embed;
+        $plainSecret = 'secret-for-draft-form';
+        $embed->update([
+            'client_id' => 'emb_client_draft',
+            'client_secret' => Hash::make($plainSecret),
+            'is_active' => true,
+        ]);
+
+        $response = $this->postJson(route('api.feedback.embed.sessions'), [
+            'client_id' => 'emb_client_draft',
+            'client_secret' => $plainSecret,
+            'respondent_id' => 'user_draft_1',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJson([
+                'status' => 'error',
+                'message' => 'The feedback form for this event is currently unpublished or saved as draft and is not available.',
+            ]);
+    }
+
+    public function test_guest_accessing_draft_embed_form_sees_not_available_message_without_form_fields(): void
+    {
+        $event = FbEvent::factory()->create(['name' => 'Draft City Exercise']);
+        Feedback::factory()->draft()->create([
+            'event_id' => $event->id,
+            'schema' => [
+                'fields' => [
+                    [
+                        'id' => 'q1',
+                        'particular' => 'Draft Question',
+                        'type' => 'text',
+                        'weight' => 1,
+                    ],
+                ],
+            ],
+        ]);
+
+        /** @var FeedbackEmbed $embed */
+        $embed = $event->embed;
+        $embed->update([
+            'allowed_origins' => ['https://portal.lgu.gov.ph'],
+            'is_active' => true,
+        ]);
+
+        $response = $this->get(route('feedback.embed.show', $embed->public_id));
+
+        $response->assertOk();
+        $response->assertInertia(fn ($page) => $page
+            ->component('Feedback/Embed')
+            ->where('event.name', 'Draft City Exercise')
+            ->where('isAvailable', false)
+            ->where('unavailableReason', 'draft')
+            ->where('form', null)
+        );
+    }
+
+    public function test_guest_cannot_submit_to_draft_embed_form(): void
+    {
+        $event = FbEvent::factory()->create();
+        Feedback::factory()->draft()->create(['event_id' => $event->id]);
+
+        /** @var FeedbackEmbed $embed */
+        $embed = $event->embed;
+        $embed->update(['is_active' => true]);
+
+        $response = $this->postJson(route('feedback.embed.submit', $embed->public_id), [
+            'answers' => ['q1' => 'test'],
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJson([
+                'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
+            ]);
+    }
 }

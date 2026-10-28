@@ -22,6 +22,7 @@ class FeedbackFactory extends Factory
     {
         return [
             'event_id' => FbEvent::factory(),
+            'status' => Feedback::STATUS_PUBLISHED,
             'schema' => [
                 'fields' => [
                     [
@@ -57,5 +58,25 @@ class FeedbackFactory extends Factory
                 ],
             ],
         ];
+    }
+
+    /**
+     * Indicate that the feedback form is in draft mode.
+     */
+    public function draft(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => Feedback::STATUS_DRAFT,
+        ]);
+    }
+
+    /**
+     * Indicate that the feedback form is published.
+     */
+    public function published(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => Feedback::STATUS_PUBLISHED,
+        ]);
     }
 }

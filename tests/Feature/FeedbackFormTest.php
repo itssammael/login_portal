@@ -685,4 +685,59 @@ class FeedbackFormTest extends TestCase
         $failResponse->assertUnprocessable()
             ->assertJsonValidationErrors(['answers.role_selection_other']);
     }
+
+    public function test_guest_cannot_access_qr_code_endpoint(): void
+    {
+        $response = $this->get(route('feedback.qr-code', ['url' => 'https://example.com']));
+        $response->assertRedirect(route('login'));
+    }
+
+    public function test_authenticated_user_can_generate_qr_code_svg(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)->getJson(route('feedback.qr-code', [
+            'url' => 'https://example.com/forms/live/test-api-key',
+        ]));
+
+        $response->assertOk()
+            ->assertJsonStructure(['svg']);
+
+        $svg = $response->json('svg');
+        $this->assertStringContainsString('<svg', $svg);
+        $this->assertStringContainsString('</svg>', $svg);
+    }
+
+    public function test_qr_code_endpoint_validates_url(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)->getJson(route('feedback.qr-code', [
+            'url' => 'invalid-not-a-url',
+        ]));
+
+        $response->assertUnprocessable()
+            ->assertJsonValidationErrors(['url']);
+
+        $missingResponse = $this->actingAs($user)->getJson(route('feedback.qr-code'));
+        $missingResponse->assertUnprocessable()
+            ->assertJsonValidationErrors(['url']);
+    }
+
+    public function test_qr_code_endpoint_is_rate_limited(): void
+    {
+        $user = User::factory()->create();
+
+        for ($i = 0; $i < 60; $i++) {
+            $response = $this->actingAs($user)->getJson(route('feedback.qr-code', [
+                'url' => 'https://example.com/forms/live/test-api-key',
+            ]));
+            $response->assertOk();
+        }
+
+        $throttledResponse = $this->actingAs($user)->getJson(route('feedback.qr-code', [
+            'url' => 'https://example.com/forms/live/test-api-key',
+        ]));
+        $throttledResponse->assertStatus(429);
+    }
 }

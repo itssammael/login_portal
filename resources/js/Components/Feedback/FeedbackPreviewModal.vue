@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
+import { sanitizeHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
     form: { type: Object, default: null },
@@ -95,30 +96,26 @@ watch([fields, state], resetAnswers, { immediate: true });
                         <div class="overflow-hidden rounded-2xl border border-cream-500 bg-white shadow-lg">
                             <div v-if="mode === 'embedded'" class="flex items-center gap-2 border-b border-cream-500 bg-gray-900 px-4 py-2 text-[11px] font-medium text-gray-200"><span class="size-2 rounded-full bg-red-400"></span><span class="size-2 rounded-full bg-amber-300"></span><span class="size-2 rounded-full bg-emerald-400"></span><span class="ml-2 truncate">Embedded feedback iframe</span></div>
                             <div class="space-y-6 p-5 sm:p-8">
-                                <div class="rounded-2xl bg-forest-900 p-5 text-white">
-                                    <p class="text-xs font-bold uppercase tracking-[0.14em] text-emerald-200">{{ mode === 'embedded' ? 'Embedded questionnaire' : 'Deployed web portal' }}</p>
-                                    <h3 class="mt-1 text-xl font-black form-rich-content" v-html="form?.schema?.title || form?.event?.name"></h3>
-                                    <div v-if="form?.schema?.description || form?.event?.details" class="mt-2 text-sm text-emerald-50 form-rich-content" v-html="form?.schema?.description || form?.event?.details"></div>
-                                </div>
+                                <div class="rounded-2xl bg-forest-900 p-5 text-white"><p class="text-xs font-bold uppercase tracking-[0.14em] text-emerald-200">{{ mode === 'embedded' ? 'Embedded questionnaire' : 'Deployed web portal' }}</p><h3 class="mt-1 text-xl font-black" v-html="sanitizeHtml(form?.schema?.title || form?.event?.name)"></h3><div v-if="form?.schema?.description || form?.event?.details" class="mt-2 text-sm text-emerald-50 form-rich-content" v-html="sanitizeHtml(form?.schema?.description || form?.event?.details)"></div></div>
                                 <section v-for="(page, index) in displayedPages" :key="page?.section?.id || index" class="space-y-5">
                                     <div v-if="page.section">
-                                        <h4 class="text-base font-black text-gray-950 form-rich-content" v-html="page.section.particular"></h4>
-                                        <div v-if="page.section.description || page.section.details" class="text-sm text-gray-600 form-rich-content" v-html="page.section.description || page.section.details"></div>
+                                        <h4 class="text-base font-black text-gray-950 form-rich-content" v-html="sanitizeHtml(page.section.particular)"></h4>
+                                        <div v-if="page.section.description || page.section.details" class="text-sm text-gray-600 form-rich-content" v-html="sanitizeHtml(page.section.description || page.section.details)"></div>
                                     </div>
                                     <div v-for="field in page.fields" :key="field.id" class="space-y-2">
                                         <template v-if="field.type === 'text_only'">
                                             <div class="rounded-xl border border-cream-400 bg-cream-100/80 p-4 space-y-2">
-                                                <h5 class="text-sm font-bold text-gray-900 form-rich-content" v-html="field.particular"></h5>
-                                                <div v-if="field.description" class="text-xs text-gray-700 form-rich-content overflow-x-auto" v-html="field.description"></div>
+                                                <h5 class="text-sm font-bold text-gray-900 form-rich-content" v-html="sanitizeHtml(field.particular)"></h5>
+                                                <div v-if="field.description" class="text-xs text-gray-700 form-rich-content overflow-x-auto" v-html="sanitizeHtml(field.description)"></div>
                                             </div>
                                         </template>
                                         <template v-else>
                                             <div>
-                                                <label class="block text-sm font-bold text-gray-800 form-rich-content">
-                                                    <span v-html="field.particular"></span>
+                                                <label class="block text-sm font-bold text-gray-800">
+                                                    <span class="form-rich-content inline" v-html="sanitizeHtml(field.particular)"></span>
                                                     <span v-if="field.required" class="text-red-600 ml-0.5">*</span>
                                                 </label>
-                                                <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="field.description"></div>
+                                                <div v-if="field.description" class="text-xs text-gray-600 mt-1 form-rich-content" v-html="sanitizeHtml(field.description)"></div>
                                             </div>
                                             <textarea v-if="field.type === 'textarea'" v-model="answers[field.id]" rows="3" class="w-full rounded-xl border-gray-300 text-sm focus:border-forest-600 focus:ring-forest-600" />
                                             <input v-else-if="['text', 'number', 'date'].includes(field.type)" v-model="answers[field.id]" :type="field.type" class="w-full rounded-xl border-gray-300 text-sm focus:border-forest-600 focus:ring-forest-600">

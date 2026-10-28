@@ -38,6 +38,13 @@ class FeedbackEmbedSessionApiController extends Controller
             ], 422);
         }
 
+        if ($event->feedback->isDraft()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'The feedback form for this event is currently unpublished or saved as draft and is not available.',
+            ], 422);
+        }
+
         $respondentId = $request->input('respondent_id');
         $metadata = (array) $request->input('metadata', []);
 

@@ -121,6 +121,7 @@ Route::middleware([
     Route::get('/chat', [ChatController::class, 'index'])->name('chat.index');
     Route::get('/chat/contacts', [ChatController::class, 'searchContacts'])->name('chat.contacts');
     Route::get('/chat/unread-count', [ChatController::class, 'unreadCount'])->name('chat.unread-count');
+    Route::get('/chat/conversations/search', [ChatController::class, 'searchConversations'])->name('chat.search-conversations');
     Route::get('/chat/{conversation}/messages', [ChatController::class, 'messages'])->name('chat.messages');
     Route::get('/chat/{conversation}/search', [ChatController::class, 'searchMessages'])->name('chat.search-messages');
     Route::get('/chat/messages/{message}/attachment', [ChatController::class, 'downloadAttachment'])->name('chat.download-attachment');
@@ -130,6 +131,7 @@ Route::middleware([
     Route::post('/chat/{conversation}/members', [ChatController::class, 'addMembers'])->name('chat.add-members');
     Route::delete('/chat/{conversation}/members/{user}', [ChatController::class, 'removeMember'])->name('chat.remove-member');
     Route::post('/chat/{conversation}/members/{user}/promote', [ChatController::class, 'promoteMember'])->name('chat.promote-member');
+    Route::post('/chat/{conversation}/leave', [ChatController::class, 'leaveGroup'])->name('chat.leave-group');
     Route::delete('/chat/{conversation}', [ChatController::class, 'deleteGroup'])->name('chat.delete-group');
     Route::post('/chat/{conversation}/messages', [ChatController::class, 'sendMessage'])->middleware('throttle:60,1')->name('chat.send-message');
     Route::patch('/chat/messages/{message}', [ChatController::class, 'editMessage'])->name('chat.edit-message');
@@ -137,12 +139,19 @@ Route::middleware([
     Route::post('/chat/mark-all-read', [ChatController::class, 'markAllAsRead'])->name('chat.mark-all-read');
     Route::post('/chat/{conversation}/pin', [ChatController::class, 'togglePin'])->name('chat.toggle-pin');
     Route::post('/chat/{conversation}/mute', [ChatController::class, 'toggleMute'])->name('chat.toggle-mute');
+    Route::patch('/chat/{conversation}/notifications', [ChatController::class, 'updateNotificationPreference'])->name('chat.notification-preference');
     Route::post('/chat/{conversation}/typing', [ChatController::class, 'typing'])->name('chat.typing');
     Route::post('/chat/messages/{message}/reaction', [ChatController::class, 'toggleReaction'])->name('chat.reaction');
+    Route::get('/chat/messages/{message}/reactions', [ChatController::class, 'messageReactions'])->name('chat.message-reactions');
+    Route::get('/chat/messages/{message}/seen-by', [ChatController::class, 'messageSeenBy'])->name('chat.message-seen-by');
+    Route::post('/chat/messages/{message}/delete-for-me', [ChatController::class, 'deleteMessageForMe'])->name('chat.delete-message-for-me');
     Route::delete('/chat/messages/{message}', [ChatController::class, 'deleteMessage'])->name('chat.delete-message');
 
     // User Feedback Form Routes
     Route::get('/feedback', [FeedbackFormController::class, 'show'])->name('feedback.form');
+    Route::get('/feedback/qr-code', [FeedbackFormController::class, 'qrCode'])
+        ->middleware('throttle:60,1')
+        ->name('feedback.qr-code');
     Route::post('/feedback', [FeedbackFormController::class, 'submit'])->name('feedback.submit');
 
     Route::prefix('feedback/{feedback}/analytics')->name('feedback.analytics.')->middleware('throttle:60,1')->group(function () {
@@ -234,8 +243,9 @@ Route::middleware([
             Route::post('/designations', [FeedbackController::class, 'storeDesignation'])->name('designations.store');
             Route::delete('/designations/{designation}', [FeedbackController::class, 'destroyDesignation'])->name('designations.destroy');
 
-            // Feedback Form Configuration & Import
+            // Feedback Form Configuration, Status & Import
             Route::post('/forms', [FeedbackController::class, 'saveForm'])->name('forms.save');
+            Route::post('/forms/{feedback}/status', [FeedbackController::class, 'toggleFormStatus'])->name('forms.status');
             Route::post('/forms/import', [FeedbackController::class, 'importForm'])->name('forms.import');
         });
 

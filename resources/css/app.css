@@ -7,14 +7,46 @@
 }
 
 /* Form Builder Rich Content & Tables */
+.form-rich-content:not(.inline),
+.form-rich-canvas {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: auto;
+}
+
+.form-rich-content.inline {
+    width: auto !important;
+    max-width: 100%;
+    display: inline !important;
+}
+
 .form-rich-content table,
 .form-rich-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 0.5rem 0;
+    display: table;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+    border-collapse: collapse !important;
+    margin: 0.5rem 0 !important;
     border: 1px solid #ddd0ab;
     background-color: #ffffff;
     font-size: 0.8125rem;
+    box-sizing: border-box !important;
+}
+
+.form-rich-content table *,
+.form-rich-table * {
+    box-sizing: border-box !important;
+}
+
+.form-rich-content col,
+.form-rich-content colgroup,
+.form-rich-table col,
+.form-rich-table colgroup {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
 }
 
 .form-rich-content th,
@@ -24,6 +56,11 @@
     border: 1px solid #ddd0ab;
     padding: 0.5rem 0.625rem;
     vertical-align: top;
+    box-sizing: border-box !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+    white-space: normal !important;
+    max-width: 100% !important;
 }
 
 .form-rich-content th,
@@ -34,18 +71,25 @@
     text-align: left;
 }
 
-.form-rich-content tr:nth-child(even) td {
+.form-rich-content tr:nth-child(even) td,
+.form-rich-table tr:nth-child(even) td {
     background-color: #fdfbf7;
 }
 
+.form-rich-content table img,
+.form-rich-table img {
+    max-width: 100% !important;
+    height: auto !important;
+}
+
 .form-rich-content ul {
-    list-style-type: disc !important;
+    list-style-type: disc;
     padding-left: 1.25rem !important;
     margin: 0.375rem 0 !important;
 }
 
 .form-rich-content ol {
-    list-style-type: decimal !important;
+    list-style-type: decimal;
     padding-left: 1.25rem !important;
     margin: 0.375rem 0 !important;
 }
@@ -54,32 +98,50 @@
     margin: 0.25rem 0;
 }
 
-.form-rich-content h1 {
-    font-size: 1.5rem;
-    font-weight: 800;
-    line-height: 1.25;
-    margin: 0.5rem 0 0.25rem 0;
+/* Explicit alignment support for rich content */
+.form-rich-content [align="left"],
+.form-rich-content .text-left {
+    text-align: left !important;
 }
 
-.form-rich-content h2 {
-    font-size: 1.25rem;
-    font-weight: 700;
-    line-height: 1.3;
-    margin: 0.5rem 0 0.25rem 0;
+.form-rich-content [align="center"],
+.form-rich-content .text-center {
+    text-align: center !important;
 }
 
-.form-rich-content h3 {
-    font-size: 1.125rem;
-    font-weight: 600;
-    line-height: 1.35;
-    margin: 0.375rem 0 0.25rem 0;
+.form-rich-content [align="right"],
+.form-rich-content .text-right {
+    text-align: right !important;
 }
 
-.form-rich-content mark {
-    background-color: #fef08a;
-    color: inherit;
-    padding: 0.1rem 0.25rem;
-    border-radius: 0.25rem;
+.form-rich-content [align="justify"],
+.form-rich-content .text-justify {
+    text-align: justify !important;
+}
+
+.form-rich-content s,
+.form-rich-content strike,
+.form-rich-content del,
+.form-rich-content .line-through {
+    text-decoration: line-through !important;
+}
+
+.form-rich-content u,
+.form-rich-content ins,
+.form-rich-content .underline {
+    text-decoration: underline !important;
+}
+
+.form-rich-content b,
+.form-rich-content strong,
+.form-rich-content .font-bold {
+    font-weight: 700 !important;
+}
+
+.form-rich-content i,
+.form-rich-content em,
+.form-rich-content .italic {
+    font-style: italic !important;
 }
 
 .form-rich-content blockquote {
@@ -88,13 +150,5 @@
     margin: 0.5rem 0;
     color: #4b5563;
     font-style: italic;
-}
-
-.form-rich-content code {
-    background-color: #f3f4f6;
-    padding: 0.125rem 0.25rem;
-    border-radius: 0.25rem;
-    font-size: 0.85em;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 

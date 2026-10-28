@@ -828,7 +828,7 @@ onBeforeUnmount(() => {
                             <div v-if="!selectedBlock" class="space-y-3">
                                 <label class="field">
                                     <span>Report title</span>
-                                    <input v-model="config.title" maxlength="200" class="text-xs" />
+                                    <input v-model="config.title" maxlength="500" class="text-xs" />
                                 </label>
                                 <label class="field">
                                     <span>Description</span>
@@ -872,7 +872,7 @@ onBeforeUnmount(() => {
                             <div v-else-if="selectedBlock.kind === 'chart'" class="space-y-3">
                                 <label class="field">
                                     <span>Chart title</span>
-                                    <input v-model="selectedBlock.item.title" maxlength="200" class="text-xs" />
+                                    <input v-model="selectedBlock.item.title" maxlength="500" class="text-xs" />
                                 </label>
                                 <label v-if="blankSections.length" class="field">
                                     <span>Parent container</span>
@@ -915,7 +915,7 @@ onBeforeUnmount(() => {
 
                                             <label class="field">
                                                 <span>Row Label</span>
-                                                <input v-model="row.label" maxlength="200" placeholder="Row label…" class="text-xs" />
+                                                <input v-model="row.label" maxlength="500" placeholder="Row label…" class="text-xs" />
                                             </label>
 
                                             <div class="grid grid-cols-2 gap-1.5">
@@ -1051,7 +1051,7 @@ onBeforeUnmount(() => {
                                         </label>
                                     </div>
                                     <label v-if="selectedBlock.item.show_heading !== false" class="field">
-                                        <input v-model="selectedBlock.item.title" maxlength="200" placeholder="Optional heading…" class="text-xs" />
+                                        <input v-model="selectedBlock.item.title" maxlength="500" placeholder="Optional heading…" class="text-xs" />
                                     </label>
                                 </div>
                                 <label v-if="blankSections.filter((s) => !isDescendantOf(config, s.id, selectedBlock.item.id)).length" class="field">
@@ -1204,7 +1204,7 @@ onBeforeUnmount(() => {
                             <div v-else class="space-y-3">
                                 <label class="field">
                                     <span>Section title</span>
-                                    <input v-model="selectedBlock.item.title" maxlength="200" class="text-xs" />
+                                    <input v-model="selectedBlock.item.title" maxlength="500" class="text-xs" />
                                 </label>
                                 <label v-if="blankSections.length" class="field">
                                     <span>Parent container</span>
