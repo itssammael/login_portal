@@ -10,12 +10,10 @@ use App\Models\FbEvent;
 use App\Models\FbParticipant;
 use App\Models\FbSubmission;
 use App\Models\Feedback;
-use App\Rules\TurnstileRule;
 use App\Services\FeedbackSchemaValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
 use Inertia\Inertia;
 use Inertia\Response;
 use Throwable;
@@ -66,7 +64,6 @@ class LiveFeedbackFormController extends Controller
                     'designations' => [],
                 ],
                 'apiKey' => $api_key,
-                'turnstileSiteKey' => config('services.turnstile.key'),
             ]);
         }
 
@@ -104,7 +101,6 @@ class LiveFeedbackFormController extends Controller
                 'designations' => Designation::getCachedList(),
             ],
             'apiKey' => $api_key,
-            'turnstileSiteKey' => config('services.turnstile.key'),
         ]);
     }
 
@@ -165,25 +161,6 @@ class LiveFeedbackFormController extends Controller
                 ],
             ], 422);
         }
-
-        // Enforce server-side Cloudflare Turnstile verification before processing or saving feedback
-        $turnstileToken = $request->input('turnstile_token', $request->input('cf-turnstile-response'));
-        Validator::make(
-            ['turnstile_token' => $turnstileToken],
-            [
-                'turnstile_token' => [
-                    'required',
-                    'string',
-                    'max:2048',
-                    new TurnstileRule($request->ip()),
-                ],
-            ],
-            [
-                'turnstile_token.required' => 'Please complete the security verification before submitting.',
-                'turnstile_token.string' => 'The security verification token is invalid.',
-                'turnstile_token.max' => 'The security verification token is invalid.',
-            ]
-        )->validate();
 
         $pData = $request->getParticipantData();
         $answers = $request->getAnswers();

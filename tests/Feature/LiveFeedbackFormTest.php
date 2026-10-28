@@ -12,8 +12,6 @@ use App\Models\Feedback;
 use App\Models\User;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\ConnectionException;
-use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class LiveFeedbackFormTest extends TestCase
@@ -27,23 +25,6 @@ class LiveFeedbackFormTest extends TestCase
 
         config([
             'app.url' => 'http://loginportal',
-            'services.turnstile.key' => '0x4AAAAAAFgvUmyPPMRyS5WR',
-            'services.turnstile.secret' => '1x0000000000000000000000000000000AA',
-            'services.turnstile.hostnames' => 'loginportal,localhost,127.0.0.1',
-            'services.turnstile.action' => 'feedback_submit',
-        ]);
-    }
-
-    protected function fakeValidTurnstile(string $hostname = 'loginportal', string $action = 'feedback_submit'): void
-    {
-        Http::fake([
-            'https://challenges.cloudflare.com/turnstile/v0/siteverify' => Http::response([
-                'success' => true,
-                'hostname' => $hostname,
-                'action' => $action,
-                'challenge_ts' => now()->toIso8601String(),
-                'error-codes' => [],
-            ], 200),
         ]);
     }
 
@@ -212,10 +193,8 @@ class LiveFeedbackFormTest extends TestCase
         $this->assertArrayNotHasKey('embed', $inertiaProps['event']);
         $this->assertArrayNotHasKey('created_by', $inertiaProps['event']);
         $this->assertArrayNotHasKey('creator', $inertiaProps['event']);
-        $this->assertSame('0x4AAAAAAFgvUmyPPMRyS5WR', $inertiaProps['turnstile']['site_key'] ?? null);
-        $this->assertSame('0x4AAAAAAFgvUmyPPMRyS5WR', $inertiaProps['turnstileSiteKey'] ?? null);
-        $this->assertArrayNotHasKey('secret', $inertiaProps['turnstile'] ?? []);
-        $this->assertStringNotContainsString('1x0000000000000000000000000000000AA', $response->getContent());
+        $this->assertArrayNotHasKey('turnstile', $inertiaProps);
+        $this->assertArrayNotHasKey('turnstileSiteKey', $inertiaProps);
     }
 
     public function test_dynamic_options_are_resolved_for_event_functions_and_lookups(): void
@@ -265,8 +244,6 @@ class LiveFeedbackFormTest extends TestCase
 
     public function test_guest_can_submit_live_deployed_feedback_form_successfully(): void
     {
-        $this->fakeValidTurnstile();
-
         $event = FbEvent::factory()->create(['name' => 'Community Drill']);
         $func = FbFunction::factory()->create(['function' => 'Logistics Officer']);
         $event->functions()->attach($func->id);
@@ -305,7 +282,6 @@ class LiveFeedbackFormTest extends TestCase
             'years_in_designation' => 4,
             'location' => 'Zone 4, Central',
             'no_of_exercises' => 2,
-            'turnstile_token' => 'valid-turnstile-token-001',
             'answers' => [
                 'satisfaction' => 'high',
                 'comments' => 'Organized and on time.',
@@ -349,8 +325,6 @@ class LiveFeedbackFormTest extends TestCase
 
     public function test_live_submission_supports_anonymous_respondents(): void
     {
-        $this->fakeValidTurnstile();
-
         $event = FbEvent::factory()->create(['name' => 'Anonymous Drill']);
         $feedback = Feedback::factory()->create([
             'event_id' => $event->id,
@@ -368,7 +342,6 @@ class LiveFeedbackFormTest extends TestCase
         ]);
 
         $payload = [
-            'turnstile_token' => 'valid-turnstile-token-anon',
             'answers' => [
                 'feedback_notes' => 'Anonymous feedback response',
             ],
@@ -387,8 +360,6 @@ class LiveFeedbackFormTest extends TestCase
 
     public function test_live_submission_validates_required_fields_against_schema(): void
     {
-        $this->fakeValidTurnstile();
-
         $event = FbEvent::factory()->create(['name' => 'Validation Event']);
         Feedback::factory()->create([
             'event_id' => $event->id,
@@ -406,7 +377,6 @@ class LiveFeedbackFormTest extends TestCase
         ]);
 
         $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'valid-turnstile-token-schema-check',
             'answers' => [
                 'mandatory_q' => '',
             ],
@@ -419,8 +389,6 @@ class LiveFeedbackFormTest extends TestCase
 
     public function test_submission_cannot_be_redirected_to_another_event_or_form(): void
     {
-        $this->fakeValidTurnstile();
-
         $eventA = FbEvent::factory()->create(['name' => 'Event Alpha']);
         $eventB = FbEvent::factory()->create(['name' => 'Event Beta']);
 
@@ -455,7 +423,6 @@ class LiveFeedbackFormTest extends TestCase
         // Attempt to post to Event A's live route but injecting Event B's event_id
         $responseTamperedEvent = $this->postJson(route('forms.live.submit', $eventA->api_key), [
             'event_id' => $eventB->id,
-            'turnstile_token' => 'valid-token-tamper-1',
             'answers' => [
                 'q_alpha' => 'Test answer',
             ],
@@ -466,7 +433,6 @@ class LiveFeedbackFormTest extends TestCase
         // Attempt to post to Event A's live route but injecting Event B's feedback_id
         $responseTamperedForm = $this->postJson(route('forms.live.submit', $eventA->api_key), [
             'feedback_id' => $feedbackB->id,
-            'turnstile_token' => 'valid-token-tamper-2',
             'answers' => [
                 'q_alpha' => 'Test answer',
             ],
@@ -487,156 +453,16 @@ class LiveFeedbackFormTest extends TestCase
         $response->assertNotFound();
     }
 
-    public function test_live_submission_accepts_standard_cf_turnstile_response_field(): void
+    public function test_guest_can_submit_live_deployed_feedback_form_without_turnstile_token(): void
     {
-        $this->fakeValidTurnstile();
-
-        $event = FbEvent::factory()->create(['name' => 'CF Standard Field Event']);
+        $event = FbEvent::factory()->create(['name' => 'No Turnstile Form Submission Event']);
         Feedback::factory()->create([
             'event_id' => $event->id,
             'schema' => [
                 'fields' => [
                     [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'cf-turnstile-response' => 'valid-cf-standard-token',
-            'answers' => [
-                'note' => 'Submitted via cf-turnstile-response',
-            ],
-        ]);
-
-        $response->assertCreated();
-        $this->assertSame(1, FbSubmission::count());
-    }
-
-    public function test_live_submission_rejects_missing_turnstile_token_and_does_not_persist_feedback(): void
-    {
-        Http::fake();
-
-        $event = FbEvent::factory()->create(['name' => 'Missing Token Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'answers' => [
-                'note' => 'Bypass attempt without token',
-            ],
-        ]);
-
-        $response->assertStatus(422);
-        $response->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-        $this->assertSame(0, FbParticipant::count());
-    }
-
-    public function test_live_submission_rejects_invalid_turnstile_token_when_siteverify_returns_false(): void
-    {
-        Http::fake([
-            'https://challenges.cloudflare.com/turnstile/v0/siteverify' => Http::response([
-                'success' => false,
-                'error-codes' => ['invalid-input-response'],
-            ], 200),
-        ]);
-
-        $event = FbEvent::factory()->create(['name' => 'Invalid Token Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'XXXX.DUMMY.TOKEN.XXXX',
-            'answers' => [
-                'note' => 'Should not be saved',
-            ],
-        ]);
-
-        $response->assertStatus(422);
-        $response->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-        $this->assertSame(0, FbParticipant::count());
-    }
-
-    public function test_live_submission_rejects_expired_or_previously_redeemed_token_from_siteverify(): void
-    {
-        Http::fake([
-            'https://challenges.cloudflare.com/turnstile/v0/siteverify' => Http::response([
-                'success' => false,
-                'error-codes' => ['timeout-or-duplicate'],
-            ], 200),
-        ]);
-
-        $event = FbEvent::factory()->create(['name' => 'Expired Token Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'expired-or-used-token',
-            'answers' => [
-                'note' => 'Should not be saved',
-            ],
-        ]);
-
-        $response->assertStatus(422);
-        $response->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-    }
-
-    public function test_live_submission_rejects_token_replay_on_second_attempt(): void
-    {
-        $this->fakeValidTurnstile();
-
-        $event = FbEvent::factory()->create(['name' => 'Replay Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
+                        'id' => 'feedback_notes',
+                        'particular' => 'Feedback Notes',
                         'type' => 'text',
                         'weight' => 1,
                         'required' => true,
@@ -646,206 +472,20 @@ class LiveFeedbackFormTest extends TestCase
         ]);
 
         $payload = [
-            'turnstile_token' => 'single-use-token-xyz',
             'answers' => [
-                'note' => 'First submission',
+                'feedback_notes' => 'Submitted without turnstile',
             ],
         ];
 
-        $firstResponse = $this->postJson(route('forms.live.submit', $event->api_key), $payload);
-        $firstResponse->assertCreated();
-        $this->assertSame(1, FbSubmission::count());
+        $response = $this->postJson(route('forms.live.submit', $event->api_key), $payload);
 
-        // Replay the exact same token a second time
-        $replayResponse = $this->postJson(route('forms.live.submit', $event->api_key), $payload);
-        $replayResponse->assertStatus(422);
-        $replayResponse->assertJsonValidationErrors(['turnstile_token']);
+        $response->assertCreated();
         $this->assertSame(1, FbSubmission::count());
     }
 
-    public function test_live_submission_fails_closed_on_cloudflare_http_error(): void
+    public function test_live_deployment_page_does_not_load_turnstile_script_or_provide_turnstile_props(): void
     {
-        Http::fake([
-            'https://challenges.cloudflare.com/turnstile/v0/siteverify' => Http::response('Bad Gateway', 502),
-        ]);
-
-        $event = FbEvent::factory()->create(['name' => 'HTTP Error Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'token-during-outage',
-            'answers' => [
-                'note' => 'Should fail closed',
-            ],
-        ]);
-
-        $response->assertStatus(422);
-        $response->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-    }
-
-    public function test_live_submission_fails_closed_on_network_timeout_or_exception(): void
-    {
-        Http::fake([
-            'https://challenges.cloudflare.com/turnstile/v0/siteverify' => fn () => throw new ConnectionException('Connection timed out'),
-        ]);
-
-        $event = FbEvent::factory()->create(['name' => 'Timeout Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'token-during-timeout',
-            'answers' => [
-                'note' => 'Should fail closed',
-            ],
-        ]);
-
-        $response->assertStatus(422);
-        $response->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-    }
-
-    public function test_live_submission_fails_closed_when_turnstile_secret_is_missing(): void
-    {
-        config(['services.turnstile.secret' => '']);
-        Http::fake();
-
-        $event = FbEvent::factory()->create(['name' => 'Missing Secret Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'any-token',
-            'answers' => [
-                'note' => 'Should fail closed without secret',
-            ],
-        ]);
-
-        $response->assertStatus(422);
-        $response->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-        Http::assertNothingSent();
-    }
-
-    public function test_live_submission_rejects_unexpected_hostname_and_action(): void
-    {
-        $event = FbEvent::factory()->create(['name' => 'Hostname & Action Check Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        // 1. Unexpected hostname
-        $this->fakeValidTurnstile(hostname: 'malicious.example.com', action: 'feedback_submit');
-
-        $badHostResponse = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'token-wrong-host',
-            'answers' => ['note' => 'Wrong host test'],
-        ]);
-
-        $badHostResponse->assertStatus(422);
-        $badHostResponse->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-
-        // 2. Unexpected action
-        $this->fakeValidTurnstile(hostname: 'loginportal', action: 'login');
-
-        $badActionResponse = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'token-wrong-action',
-            'answers' => ['note' => 'Wrong action test'],
-        ]);
-
-        $badActionResponse->assertStatus(422);
-        $badActionResponse->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-    }
-
-    public function test_production_environment_rejects_localhost_turnstile_hostname(): void
-    {
-        config([
-            'app.env' => 'production',
-            'services.turnstile.hostnames' => 'portal.lgu.gov.ph,localhost,127.0.0.1',
-        ]);
-
-        $this->fakeValidTurnstile(hostname: 'localhost', action: 'feedback_submit');
-
-        $event = FbEvent::factory()->create(['name' => 'Prod Hostname Event']);
-        Feedback::factory()->create([
-            'event_id' => $event->id,
-            'schema' => [
-                'fields' => [
-                    [
-                        'id' => 'note',
-                        'particular' => 'Note',
-                        'type' => 'text',
-                        'weight' => 1,
-                        'required' => true,
-                    ],
-                ],
-            ],
-        ]);
-
-        $response = $this->postJson(route('forms.live.submit', $event->api_key), [
-            'turnstile_token' => 'token-localhost-in-prod',
-            'answers' => ['note' => 'Localhost in prod should fail'],
-        ]);
-
-        $response->assertStatus(422);
-        $response->assertJsonValidationErrors(['turnstile_token']);
-        $this->assertSame(0, FbSubmission::count());
-    }
-
-    public function test_live_deployment_page_loads_explicit_turnstile_script_once_and_provides_site_key(): void
-    {
-        $event = FbEvent::factory()->create(['name' => 'Turnstile Script Check Event']);
+        $event = FbEvent::factory()->create(['name' => 'No Turnstile Script Check Event']);
         Feedback::factory()->create([
             'event_id' => $event->id,
             'schema' => [
@@ -865,14 +505,11 @@ class LiveFeedbackFormTest extends TestCase
         $response->assertOk();
         $html = $response->getContent();
 
-        $this->assertSame(
-            1,
-            substr_count($html, 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit')
-        );
+        $this->assertStringNotContainsString('challenges.cloudflare.com/turnstile', $html);
         $response->assertInertia(fn ($page) => $page
             ->component('Feedback/Live')
-            ->where('turnstileSiteKey', '0x4AAAAAAFgvUmyPPMRyS5WR')
-            ->where('turnstile.site_key', '0x4AAAAAAFgvUmyPPMRyS5WR')
+            ->missing('turnstileSiteKey')
+            ->missing('turnstile')
         );
     }
 
@@ -935,7 +572,6 @@ class LiveFeedbackFormTest extends TestCase
 
     public function test_guest_cannot_submit_to_draft_feedback_form(): void
     {
-        $this->fakeValidTurnstile();
         $event = FbEvent::factory()->create(['name' => 'Draft Form Submit Protection']);
         Feedback::factory()->draft()->create([
             'event_id' => $event->id,
@@ -953,7 +589,6 @@ class LiveFeedbackFormTest extends TestCase
 
         $response = $this->post(route('forms.live.submit', $event->api_key), [
             'q1' => 'Trying to submit to draft form',
-            'cf-turnstile-response' => 'valid-turnstile-token',
         ]);
 
         $response->assertStatus(422);

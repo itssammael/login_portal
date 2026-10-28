@@ -574,7 +574,6 @@ class FeedbackEmbedTest extends TestCase
         $embed->update(['is_active' => true]);
 
         $response = $this->postJson(route('feedback.embed.submit', $embed->public_id), [
-            'turnstile_token' => 'dummy_token',
             'answers' => ['q1' => 'test'],
         ]);
 

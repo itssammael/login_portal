@@ -39,11 +39,4 @@ return [
         'api_key' => env('LGU_PORTAL_FEEDBACK_API_KEY'),
     ],
 
-    'turnstile' => [
-        'key' => env('TURNSTILE_SITE_KEY'),
-        'secret' => env('TURNSTILE_SECRET', env('TURNSTILE_SECRET_KEY')),
-        'hostnames' => env('TURNSTILE_HOSTNAMES'),
-        'action' => env('TURNSTILE_ACTION', 'feedback_submit'),
-    ],
-
 ];
