@@ -192,16 +192,7 @@ class LiveFeedbackFormController extends Controller
         $validatedData = $schemaValidator->validateSubmissionData($feedback->schema, $answers, $event);
 
         $submission = DB::transaction(function () use ($event, $feedback, $pData, $validatedData) {
-            $name = $pData['name'] ?? null;
-            if (empty($name)) {
-                $candidateKeys = ['name', 'full_name', 'fullname', 'participant_name', 'name_of_participant', 'respondent_name', 'your_name', 'complete_name', 'pangalan'];
-                foreach ($candidateKeys as $ck) {
-                    if (! empty($validatedData[$ck]) && is_string($validatedData[$ck])) {
-                        $name = trim($validatedData[$ck]);
-                        break;
-                    }
-                }
-            }
+            $name = $pData['name'] ?? ($validatedData['name'] ?? null);
             $agencyInput = $pData['agency'] ?? ($validatedData['agency'] ?? null);
             $designationInput = $pData['designation'] ?? ($validatedData['designation'] ?? null);
             $functionInput = $pData['function_id'] ?? ($validatedData['function'] ?? ($validatedData['function_id'] ?? null));

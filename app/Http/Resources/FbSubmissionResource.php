@@ -20,9 +20,9 @@ class FbSubmissionResource extends JsonResource
             'feedback_id' => $this->feedback_id,
             'participant' => [
                 'id' => $this->participant?->id,
-                'name' => $this->participant_name ?? $this->participant?->name,
-                'display_name' => $this->participant_name ?? ($this->participant?->display_name ?? 'Anonymous Participant'),
-                'is_anonymous' => empty($this->participant_name) && ($this->participant?->isAnonymous() ?? ($this->participant?->name === null)),
+                'name' => $this->participant?->name,
+                'display_name' => $this->participant?->display_name ?? 'Anonymous Participant',
+                'is_anonymous' => $this->participant?->isAnonymous() ?? ($this->participant?->name === null),
                 'agency' => $this->participant?->agency,
                 'designation' => $this->participant?->designation,
                 'years_in_designation' => $this->participant?->years_in_designation,

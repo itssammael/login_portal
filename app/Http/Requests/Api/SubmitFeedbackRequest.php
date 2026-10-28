@@ -103,20 +103,7 @@ class SubmitFeedbackRequest extends FormRequest
         $nested = $this->input('participant', []);
         $answers = $this->getAnswers();
 
-        $candidateName = null;
-        $candidateNameKeys = ['name', 'full_name', 'fullname', 'participant_name', 'name_of_participant', 'respondent_name', 'your_name', 'complete_name', 'pangalan'];
-        foreach ($candidateNameKeys as $key) {
-            if (! empty($nested[$key])) {
-                $candidateName = $nested[$key];
-                break;
-            }
-            if (! empty($answers[$key])) {
-                $candidateName = $answers[$key];
-                break;
-            }
-        }
-
-        $rawName = $this->input('name', $candidateName);
+        $rawName = $this->input('name', $nested['name'] ?? ($answers['name'] ?? null));
         $rawFunctionId = $this->input('function_id', $nested['function_id'] ?? ($answers['function_id'] ?? ($answers['function'] ?? null)));
         $rawCustomFunction = $this->input('custom_function', $nested['custom_function'] ?? ($answers['custom_function'] ?? ($answers['function_other'] ?? null)));
         $rawAgency = $this->input('agency', $nested['agency'] ?? ($answers['agency'] ?? null));
