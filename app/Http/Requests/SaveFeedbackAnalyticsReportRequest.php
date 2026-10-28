@@ -16,7 +16,7 @@ class SaveFeedbackAnalyticsReportRequest extends FormRequest
     {
         return [
             'configuration' => ['required', 'array:title,description,footer,columns,show_submission_count,refresh_seconds,period_start,period_end,charts,sections'],
-            'configuration.title' => ['required', 'string', 'max:200'],
+            'configuration.title' => ['required', 'string', 'max:500'],
             'configuration.description' => ['nullable', 'string', 'max:2000'],
             'configuration.footer' => ['nullable', 'string', 'max:1000'],
             'configuration.columns' => ['required', 'integer', 'between:1,12'],
@@ -28,7 +28,7 @@ class SaveFeedbackAnalyticsReportRequest extends FormRequest
             'configuration.charts.*' => ['array:id,kind,title,question,type,aggregation,color,legend,labels,annotation,width,height,position,parent_id,rows'],
             'configuration.charts.*.id' => ['required', 'string', 'alpha_dash', 'max:80', 'distinct'],
             'configuration.charts.*.kind' => ['sometimes', 'nullable', 'in:standard,custom'],
-            'configuration.charts.*.title' => ['required', 'string', 'max:200'],
+            'configuration.charts.*.title' => ['required', 'string', 'max:500'],
             'configuration.charts.*.question' => ['nullable', 'string', 'max:100'],
             'configuration.charts.*.type' => ['required', 'in:bar,column,line,area,pie,donut,radar,table,kpi'],
             'configuration.charts.*.aggregation' => ['required', 'in:count,percentage,mean,sum,median,min,max,stddev'],
@@ -43,7 +43,7 @@ class SaveFeedbackAnalyticsReportRequest extends FormRequest
             'configuration.charts.*.rows' => ['sometimes', 'nullable', 'array', 'max:24'],
             'configuration.charts.*.rows.*' => ['array:id,label,source,question,operation,value'],
             'configuration.charts.*.rows.*.id' => ['sometimes', 'nullable', 'string', 'alpha_dash', 'max:80'],
-            'configuration.charts.*.rows.*.label' => ['required_with:configuration.charts.*.rows', 'string', 'max:200'],
+            'configuration.charts.*.rows.*.label' => ['required_with:configuration.charts.*.rows', 'string', 'max:500'],
             'configuration.charts.*.rows.*.source' => ['required_with:configuration.charts.*.rows', 'in:question,manual'],
             'configuration.charts.*.rows.*.question' => ['nullable', 'string', 'max:100'],
             'configuration.charts.*.rows.*.operation' => ['nullable', 'in:sum,average,mean,count'],
@@ -63,7 +63,7 @@ class SaveFeedbackAnalyticsReportRequest extends FormRequest
             'configuration.sections.*.border_style' => ['sometimes', 'nullable', 'in:none,solid,dashed,dotted,double'],
             'configuration.sections.*.border_color' => ['sometimes', 'nullable', 'regex:/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/'],
             'configuration.sections.*.parent_id' => ['sometimes', 'nullable', 'string', 'alpha_dash', 'max:80'],
-            'configuration.sections.*.title' => ['nullable', 'string', 'max:200'],
+            'configuration.sections.*.title' => ['nullable', 'string', 'max:500'],
             'configuration.sections.*.body' => ['nullable', 'string', 'max:3000'],
         ];
     }
