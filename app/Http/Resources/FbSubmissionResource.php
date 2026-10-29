@@ -16,6 +16,7 @@ class FbSubmissionResource extends JsonResource
     {
         return [
             'id' => $this->id,
+            'reference_code' => $this->reference_code,
             'event_id' => $this->feedback?->event_id ?? $this->event_id,
             'feedback_id' => $this->feedback_id,
             'participant' => [

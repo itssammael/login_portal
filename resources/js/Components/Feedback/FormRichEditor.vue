@@ -1,5 +1,5 @@
 <script setup>
-import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick } from 'vue';
+import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick, inject } from 'vue';
 import { sanitizeHtml, stripHtml, hasHtmlTags } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
@@ -35,9 +35,25 @@ const props = defineProps({
         type: String,
         default: '',
     },
+    formData: {
+        type: Object,
+        default: null,
+    },
 });
 
 const emit = defineEmits(['update:modelValue', 'blur', 'focus', 'change']);
+
+const injectedFormData = inject('analyticsFormData', null);
+
+const resolvedFormData = computed(() => {
+    if (props.formData) return props.formData;
+    const injected = injectedFormData?.value ?? injectedFormData;
+    return injected || null;
+});
+
+const hasFormData = computed(() => {
+    return Array.isArray(resolvedFormData.value?.questions) && resolvedFormData.value.questions.length > 0;
+});
 
 const editorRef = ref(null);
 const isFocused = ref(false);
@@ -51,6 +67,24 @@ const canMergeRight = ref(false);
 const canMergeDown = ref(false);
 const canSplit = ref(false);
 const selectedCellsCount = ref(0);
+
+// Add Form Data state
+const showFormDataMenu = ref(false);
+const showQuestionDropdown = ref(false);
+const formDataSearch = ref('');
+const formDataQuestionId = ref('');
+const formDataMode = ref('calculated'); // 'calculated' | 'grouped' | 'collected'
+const formDataCalcMetric = ref('mean'); // 'mean' | 'sum' | 'median' | 'min' | 'max' | 'stddev' | 'count'
+const formDataCalcFormat = ref('value'); // 'value' | 'metric_value' | 'question_value' | 'value_count'
+const formDataGroupScope = ref('all'); // 'all' | 'top' | 'opt:<value>'
+const formDataGroupMetric = ref('count_pct'); // 'count_pct' | 'count' | 'pct'
+const formDataGroupLayout = ref('inline'); // 'inline' | 'multiline' | 'bullets'
+const formDataIncludeLabel = ref(true);
+const formDataCollectedScope = ref('all'); // 'all' | 'unique' | 'custom' | 'resp:<index>'
+const formDataCollectedFormat = ref('quoted_csv'); // 'quoted_csv' | 'bracket_array' | 'plain_csv' | 'multiline' | 'bullets'
+const formDataSelectedResponseIndices = ref([]);
+const savedSelectionRange = shallowRef(null);
+const savedTargetCell = shallowRef(null);
 
 const canBullets = computed(() => props.allowBullets !== false);
 const canTables = computed(() => props.allowTables !== false);
@@ -774,12 +808,463 @@ const onEditorFocus = (e) => {
 
 const onEditorBlur = (e) => {
     isFocused.value = false;
-    if (editorRef.value) {
+    if (editorRef.value && !showFormDataMenu.value) {
         editorRef.value.querySelectorAll('.form-rich-active-cell').forEach((el) => {
             el.classList.remove('form-rich-active-cell');
         });
     }
     emit('blur', e);
+};
+
+// Add Form Data Computed & Helpers
+const escapeHtml = (str) => {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+};
+
+const formatStatNumber = (val) => {
+    if (val === null || val === undefined || val === '' || Number.isNaN(Number(val))) {
+        return '0';
+    }
+    const num = Number(val);
+    if (Number.isInteger(num)) {
+        return String(num);
+    }
+    return String(Number(num.toFixed(2)));
+};
+
+const formQuestionsList = computed(() => {
+    return resolvedFormData.value?.questions || [];
+});
+
+const formHasSections = computed(() => {
+    return formQuestionsList.value.some((q) => Boolean(q.section_title));
+});
+
+const groupedQuestionsBySection = computed(() => {
+    const query = formDataSearch.value.trim().toLowerCase();
+    const groups = [];
+    const groupMap = new Map();
+
+    formQuestionsList.value.forEach((q) => {
+        const plainTitle = stripHtml(q.particular || q.id || '').trim();
+        const plainSection = stripHtml(q.section_title || '').trim();
+        if (
+            query &&
+            !plainTitle.toLowerCase().includes(query) &&
+            !plainSection.toLowerCase().includes(query)
+        ) {
+            return;
+        }
+
+        const sectionKey = q.section_id || (plainSection ? `sec:${plainSection}` : '__general__');
+        const sectionLabel = plainSection || (formHasSections.value ? 'General / Unsectioned' : 'Form Questions');
+
+        if (!groupMap.has(sectionKey)) {
+            const grp = {
+                key: sectionKey,
+                sectionTitle: sectionLabel,
+                hasExplicitSection: Boolean(plainSection),
+                questions: [],
+            };
+            groupMap.set(sectionKey, grp);
+            groups.push(grp);
+        }
+
+        groupMap.get(sectionKey).questions.push({
+            ...q,
+            plainTitle: plainTitle || q.id,
+            plainSection,
+        });
+    });
+
+    return groups;
+});
+
+const selectedFormQuestion = computed(() => {
+    const list = formQuestionsList.value;
+    if (!list.length) return null;
+    const found = list.find((q) => q.id === formDataQuestionId.value);
+    return found || list[0];
+});
+
+const selectedQuestionSummary = computed(() => {
+    const q = selectedFormQuestion.value;
+    if (!q) return null;
+    return resolvedFormData.value?.summaries?.[q.id] || null;
+});
+
+const questionHasCalculated = computed(() => {
+    const q = selectedFormQuestion.value;
+    if (!q) return false;
+    if (q.type === 'number') return true;
+    return Boolean(selectedQuestionSummary.value?.has_numeric_values);
+});
+
+const questionHasGrouped = computed(() => {
+    const q = selectedFormQuestion.value;
+    if (!q) return false;
+    if (['radio', 'select', 'checkbox'].includes(q.type)) return true;
+    return Array.isArray(selectedQuestionSummary.value?.grouped) && selectedQuestionSummary.value.grouped.length > 0;
+});
+
+const selectedQuestionResponses = computed(() => {
+    const responses = selectedQuestionSummary.value?.responses;
+    return Array.isArray(responses) ? responses : [];
+});
+
+const selectedQuestionOptions = computed(() => {
+    const summaryGroups = selectedQuestionSummary.value?.grouped;
+    if (Array.isArray(summaryGroups) && summaryGroups.length > 0) {
+        return summaryGroups;
+    }
+    const q = selectedFormQuestion.value;
+    if (Array.isArray(q?.options)) {
+        return q.options.map((opt) => {
+            const val = typeof opt === 'object' ? String(opt.value ?? opt.label ?? '') : String(opt);
+            const lbl = typeof opt === 'object' ? String(opt.label ?? opt.value ?? '') : String(opt);
+            return { value: val, label: stripHtml(lbl), count: 0, percentage: 0 };
+        });
+    }
+    return [];
+});
+
+const toggleCustomResponseIndex = (idx) => {
+    const current = [...formDataSelectedResponseIndices.value];
+    const pos = current.indexOf(idx);
+    if (pos >= 0) {
+        current.splice(pos, 1);
+    } else {
+        current.push(idx);
+    }
+    formDataSelectedResponseIndices.value = current;
+};
+
+const selectFormQuestion = (q) => {
+    if (!q) return;
+    formDataQuestionId.value = q.id;
+    showQuestionDropdown.value = false;
+
+    const summary = resolvedFormData.value?.summaries?.[q.id];
+    const hasCalc = q.type === 'number' || Boolean(summary?.has_numeric_values);
+    const hasGrp = ['radio', 'select', 'checkbox'].includes(q.type) || (Array.isArray(summary?.grouped) && summary.grouped.length > 0);
+
+    if (['text', 'textarea', 'date'].includes(q.type)) {
+        formDataMode.value = 'collected';
+    } else if (q.type === 'number') {
+        formDataMode.value = 'calculated';
+    } else if (hasGrp) {
+        formDataMode.value = 'grouped';
+    } else if (hasCalc) {
+        formDataMode.value = 'calculated';
+    } else {
+        formDataMode.value = 'collected';
+    }
+
+    formDataGroupScope.value = 'all';
+    formDataCollectedScope.value = 'all';
+    formDataSelectedResponseIndices.value = (summary?.responses || []).map((r) => r.index);
+};
+
+const openFormDataMenu = () => {
+    if (showFormDataMenu.value) {
+        showFormDataMenu.value = false;
+        showQuestionDropdown.value = false;
+        return;
+    }
+
+    showTableMenu.value = false;
+
+    // Capture current target cell and selection range inside editorRef before focus moves to the menu
+    savedTargetCell.value = activeTableCell.value && editorRef.value?.contains(activeTableCell.value)
+        ? activeTableCell.value
+        : null;
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editorRef.value?.contains(sel.anchorNode)) {
+        savedSelectionRange.value = sel.getRangeAt(0).cloneRange();
+        if (!savedTargetCell.value) {
+            const cell = findClosest(sel.anchorNode, 'th, td');
+            if (cell && editorRef.value.contains(cell)) {
+                savedTargetCell.value = cell;
+            }
+        }
+    } else {
+        savedSelectionRange.value = null;
+    }
+
+    if (savedTargetCell.value) {
+        savedTargetCell.value.classList.add('form-rich-active-cell');
+    }
+
+    if (!formDataQuestionId.value && formQuestionsList.value.length > 0) {
+        selectFormQuestion(formQuestionsList.value[0]);
+    } else if (selectedFormQuestion.value) {
+        if (formDataMode.value === 'calculated' && !questionHasCalculated.value) {
+            formDataMode.value = questionHasGrouped.value ? 'grouped' : 'collected';
+        } else if (formDataMode.value === 'grouped' && !questionHasGrouped.value) {
+            formDataMode.value = questionHasCalculated.value ? 'calculated' : 'collected';
+        }
+        if (
+            formDataSelectedResponseIndices.value.length === 0 &&
+            selectedQuestionResponses.value.length > 0
+        ) {
+            formDataSelectedResponseIndices.value = selectedQuestionResponses.value.map((r) => r.index);
+        }
+    }
+
+    formDataSearch.value = '';
+    showQuestionDropdown.value = false;
+    showFormDataMenu.value = true;
+};
+
+const calcMetricLabels = {
+    mean: 'Average',
+    sum: 'Total',
+    median: 'Median',
+    min: 'Minimum',
+    max: 'Maximum',
+    stddev: 'Std. Dev',
+    count: 'Responses',
+};
+
+const formatGroupedItemMetric = (g) => {
+    const count = g?.count ?? 0;
+    const pct = formatStatNumber(g?.percentage ?? 0);
+    if (formDataGroupMetric.value === 'count') {
+        return `${count}`;
+    }
+    if (formDataGroupMetric.value === 'pct') {
+        return `${pct}%`;
+    }
+    return `${count} (${pct}%)`;
+};
+
+const quoteResponseValue = (val) => {
+    const clean = String(val ?? '').replace(/"/g, '\\"');
+    return `"${clean}"`;
+};
+
+const formDataGenerated = computed(() => {
+    const q = selectedFormQuestion.value;
+    if (!q) return { text: '', html: '' };
+
+    const qTitle = stripHtml(q.particular || q.id || '').trim();
+    const summary = selectedQuestionSummary.value;
+
+    // Collected / Single Response mode
+    if (formDataMode.value === 'collected') {
+        const allResps = selectedQuestionResponses.value;
+        let items = [];
+
+        if (formDataCollectedScope.value === 'all') {
+            items = allResps.map((r) => String(r.value ?? '').trim()).filter(Boolean);
+        } else if (formDataCollectedScope.value === 'unique') {
+            items = Array.from(new Set(allResps.map((r) => String(r.value ?? '').trim()).filter(Boolean)));
+        } else if (formDataCollectedScope.value === 'custom') {
+            const selectedSet = new Set(formDataSelectedResponseIndices.value);
+            items = allResps
+                .filter((r) => selectedSet.has(r.index))
+                .map((r) => String(r.value ?? '').trim())
+                .filter(Boolean);
+        } else if (formDataCollectedScope.value.startsWith('resp:')) {
+            const targetIdx = Number(formDataCollectedScope.value.slice(5));
+            const found = allResps.find((r) => Number(r.index) === targetIdx);
+            if (found && String(found.value ?? '').trim() !== '') {
+                items = [String(found.value).trim()];
+            }
+        }
+
+        if (!items.length) {
+            const emptyText = formDataCollectedFormat.value === 'bracket_array' ? '[]' : '""';
+            return { text: emptyText, html: escapeHtml(emptyText) };
+        }
+
+        const fmt = props.singleLine && ['multiline', 'bullets'].includes(formDataCollectedFormat.value)
+            ? 'quoted_csv'
+            : formDataCollectedFormat.value;
+
+        if (fmt === 'bracket_array') {
+            const text = `[${items.map(quoteResponseValue).join(', ')}]`;
+            return { text, html: escapeHtml(text) };
+        }
+
+        if (fmt === 'plain_csv') {
+            const text = items.join(', ');
+            return { text, html: escapeHtml(text) };
+        }
+
+        if (fmt === 'multiline') {
+            const text = items.map(quoteResponseValue).join('\n');
+            const html = items.map((v) => escapeHtml(quoteResponseValue(v))).join('<br>');
+            return { text, html };
+        }
+
+        if (fmt === 'bullets' && canBullets.value) {
+            const text = items.map((v) => `• ${quoteResponseValue(v)}`).join('\n');
+            const html = `<ul>${items.map((v) => `<li>${escapeHtml(quoteResponseValue(v))}</li>`).join('')}</ul>`;
+            return { text, html };
+        }
+
+        // Default: quoted_csv -> "Value 1", "Value 2", "Value 3"
+        const text = items.map(quoteResponseValue).join(', ');
+        return { text, html: escapeHtml(text) };
+    }
+
+    if (formDataMode.value === 'calculated') {
+        const calc = summary?.calculated || {
+            count: summary?.answered ?? 0,
+            sum: 0,
+            mean: 0,
+            median: 0,
+            min: 0,
+            max: 0,
+            stddev: 0,
+        };
+        const metricKey = formDataCalcMetric.value;
+        const metricLabel = calcMetricLabels[metricKey] || 'Value';
+        const rawVal = metricKey === 'count' ? (calc.count ?? summary?.answered ?? 0) : (calc[metricKey] ?? 0);
+        const formattedVal = metricKey === 'count' ? String(rawVal) : formatStatNumber(rawVal);
+
+        let text = formattedVal;
+        if (formDataCalcFormat.value === 'metric_value') {
+            text = `${metricLabel}: ${formattedVal}`;
+        } else if (formDataCalcFormat.value === 'question_value') {
+            text = `${qTitle}: ${formattedVal}`;
+        } else if (formDataCalcFormat.value === 'value_count') {
+            text = `${formattedVal} (n = ${calc.count ?? summary?.answered ?? 0})`;
+        }
+
+        return {
+            text,
+            html: escapeHtml(text),
+        };
+    }
+
+    // Grouped mode
+    const groups = selectedQuestionOptions.value;
+    if (!groups.length) {
+        return { text: '0 (0%)', html: '0 (0%)' };
+    }
+
+    if (formDataGroupScope.value === 'top') {
+        const top = [...groups].sort((a, b) => (b.count ?? 0) - (a.count ?? 0))[0] || groups[0];
+        const metricStr = formatGroupedItemMetric(top);
+        const text = formDataIncludeLabel.value ? `${top.label}: ${metricStr}` : metricStr;
+        const html = formDataIncludeLabel.value
+            ? `<strong>${escapeHtml(top.label)}:</strong> ${escapeHtml(metricStr)}`
+            : escapeHtml(metricStr);
+        return { text, html };
+    }
+
+    if (formDataGroupScope.value.startsWith('opt:')) {
+        const targetVal = formDataGroupScope.value.slice(4);
+        const target = groups.find((g) => String(g.value) === targetVal) || groups[0];
+        const metricStr = formatGroupedItemMetric(target);
+        const text = formDataIncludeLabel.value ? `${target.label}: ${metricStr}` : metricStr;
+        const html = formDataIncludeLabel.value
+            ? `<strong>${escapeHtml(target.label)}:</strong> ${escapeHtml(metricStr)}`
+            : escapeHtml(metricStr);
+        return { text, html };
+    }
+
+    // All options breakdown
+    const layout = props.singleLine ? 'inline' : formDataGroupLayout.value;
+    if (layout === 'bullets' && canBullets.value) {
+        const text = groups.map((g) => `• ${g.label}: ${formatGroupedItemMetric(g)}`).join('\n');
+        const html = `<ul>${groups
+            .map((g) => `<li><strong>${escapeHtml(g.label)}:</strong> ${escapeHtml(formatGroupedItemMetric(g))}</li>`)
+            .join('')}</ul>`;
+        return { text, html };
+    }
+
+    if (layout === 'multiline') {
+        const text = groups.map((g) => `${g.label}: ${formatGroupedItemMetric(g)}`).join('\n');
+        const html = groups
+            .map((g) => `<strong>${escapeHtml(g.label)}:</strong> ${escapeHtml(formatGroupedItemMetric(g))}`)
+            .join('<br>');
+        return { text, html };
+    }
+
+    // Inline
+    const text = groups.map((g) => `${g.label}: ${formatGroupedItemMetric(g)}`).join(', ');
+    const html = groups
+        .map((g) => `<strong>${escapeHtml(g.label)}:</strong> ${escapeHtml(formatGroupedItemMetric(g))}`)
+        .join(', ');
+    return { text, html };
+});
+
+const insertFormData = () => {
+    if (!editorRef.value) return;
+    const { text, html } = formDataGenerated.value;
+    if (!text && !html) return;
+
+    const targetCell = savedTargetCell.value && editorRef.value.contains(savedTargetCell.value)
+        ? savedTargetCell.value
+        : null;
+
+    if (targetCell) {
+        const cellPlain = targetCell.textContent.trim();
+        const isPlaceholder = cellPlain === '' || cellPlain === 'Cell' || /^Header(\s+\d+)?$/i.test(cellPlain);
+
+        if (isPlaceholder) {
+            targetCell.innerHTML = props.singleLine ? escapeHtml(text) : html;
+            editorRef.value.focus();
+            const range = document.createRange();
+            range.selectNodeContents(targetCell);
+            range.collapse(false);
+            const sel = window.getSelection();
+            if (sel) {
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        } else if (
+            savedSelectionRange.value &&
+            targetCell.contains(savedSelectionRange.value.commonAncestorContainer)
+        ) {
+            editorRef.value.focus();
+            const sel = window.getSelection();
+            if (sel) {
+                sel.removeAllRanges();
+                sel.addRange(savedSelectionRange.value);
+            }
+            document.execCommand(props.singleLine ? 'insertText' : 'insertHTML', false, props.singleLine ? text : html);
+        } else {
+            targetCell.innerHTML = `${targetCell.innerHTML} ${props.singleLine ? escapeHtml(text) : html}`;
+            editorRef.value.focus();
+        }
+    } else if (
+        savedSelectionRange.value &&
+        editorRef.value.contains(savedSelectionRange.value.commonAncestorContainer)
+    ) {
+        editorRef.value.focus();
+        const sel = window.getSelection();
+        if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(savedSelectionRange.value);
+        }
+        document.execCommand(props.singleLine ? 'insertText' : 'insertHTML', false, props.singleLine ? text : html);
+    } else {
+        editorRef.value.focus();
+        const range = document.createRange();
+        range.selectNodeContents(editorRef.value);
+        range.collapse(false);
+        const sel = window.getSelection();
+        if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+        document.execCommand(props.singleLine ? 'insertText' : 'insertHTML', false, props.singleLine ? text : html);
+    }
+
+    showFormDataMenu.value = false;
+    showQuestionDropdown.value = false;
+    onEditorInput();
+    nextTick(() => updateActiveTableState());
 };
 
 // Sync external modelValue changes
@@ -801,6 +1286,10 @@ watch(
 const closeTableMenuOnOutside = (e) => {
     if (showTableMenu.value && !e.target.closest('.table-menu-container')) {
         showTableMenu.value = false;
+    }
+    if (showFormDataMenu.value && !e.target.closest('.form-data-menu-container') && !e.target.closest('.form-data-trigger-btn')) {
+        showFormDataMenu.value = false;
+        showQuestionDropdown.value = false;
     }
 };
 
@@ -1039,6 +1528,27 @@ onUnmounted(() => {
                 </div>
             </div>
 
+            <!-- Add Form Data Tool -->
+            <div v-if="hasFormData" class="relative inline-flex items-center">
+                <button
+                    type="button"
+                    @click="openFormDataMenu"
+                    class="form-data-trigger-btn h-7 px-2.5 rounded-lg border shadow-2xs flex items-center space-x-1.5 text-xs font-bold transition cursor-pointer"
+                    :class="[
+                        showFormDataMenu
+                            ? 'bg-forest-900 text-white border-forest-950'
+                            : 'bg-white text-forest-900 border-cream-300 hover:bg-cream-50 hover:border-forest-600'
+                    ]"
+                    title="Insert Calculated or Grouped Form Data from Submissions"
+                >
+                    <svg class="size-3.5 shrink-0" :class="showFormDataMenu ? 'text-amber-300' : 'text-forest-700'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+                    </svg>
+                    <span>Add Form Data</span>
+                    <span class="text-[9px] opacity-75">▾</span>
+                </button>
+            </div>
+
             <!-- Clear formatting -->
             <button
                 type="button"
@@ -1050,9 +1560,378 @@ onUnmounted(() => {
             </button>
         </div>
 
+        <!-- Add Form Data Configuration Panel -->
+        <div
+            v-if="hasFormData && showFormDataMenu"
+            class="form-data-menu-container border-b border-cream-300 bg-cream-50/95 p-3 text-xs space-y-2.5 select-none animate-in fade-in"
+            @mousedown.stop
+        >
+            <div class="flex items-center justify-between gap-2 pb-1.5 border-b border-cream-200">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-extrabold text-forest-950 uppercase tracking-wider text-[10px]">
+                        Insert Form Submission Data
+                    </span>
+                    <span
+                        class="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                        :class="savedTargetCell ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-forest-100 text-forest-900'"
+                    >
+                        {{ savedTargetCell ? '▦ Target: Table Cell' : '✎ Target: Selected Text / Cursor' }}
+                    </span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <span class="text-[10px] font-mono font-bold text-gray-600 bg-white px-1.5 py-0.5 rounded border border-cream-300">
+                        n = {{ resolvedFormData?.submissionCount ?? 0 }}
+                    </span>
+                    <button
+                        type="button"
+                        @click="showFormDataMenu = false; showQuestionDropdown = false"
+                        class="size-5 rounded flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-cream-200 cursor-pointer"
+                        title="Close"
+                    >
+                        ✕
+                    </button>
+                </div>
+            </div>
+
+            <!-- Searchable Question Dropdown (Arranged by Section) -->
+            <div class="space-y-1 relative">
+                <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-600">
+                    Question <span v-if="formHasSections" class="text-forest-800">(Arranged by Section)</span>
+                </label>
+
+                <button
+                    type="button"
+                    @click="showQuestionDropdown = !showQuestionDropdown"
+                    class="w-full px-2.5 py-1.5 bg-white rounded-lg border border-cream-400 hover:border-forest-600 text-left flex items-center justify-between gap-2 shadow-2xs cursor-pointer"
+                >
+                    <div class="min-w-0 flex-1">
+                        <div
+                            v-if="selectedFormQuestion?.section_title"
+                            class="text-[9px] font-extrabold uppercase tracking-wider text-forest-800 truncate"
+                        >
+                            {{ stripHtml(selectedFormQuestion.section_title) }}
+                        </div>
+                        <div class="text-xs font-semibold text-gray-900 truncate">
+                            {{ selectedFormQuestion ? stripHtml(selectedFormQuestion.particular || selectedFormQuestion.id) : 'Select a question...' }}
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1.5 shrink-0">
+                        <span
+                            v-if="selectedFormQuestion"
+                            class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-cream-100 text-gray-700 border border-cream-300"
+                        >
+                            {{ selectedFormQuestion.type }}
+                        </span>
+                        <span class="text-[10px] text-gray-500">{{ showQuestionDropdown ? '▴' : '▾' }}</span>
+                    </div>
+                </button>
+
+                <!-- Searchable Section-Grouped Dropdown List -->
+                <div
+                    v-if="showQuestionDropdown"
+                    class="mt-1 bg-white rounded-xl border border-cream-400 shadow-lg overflow-hidden z-40"
+                >
+                    <div class="p-2 border-b border-cream-200 bg-cream-50/70">
+                        <input
+                            v-model="formDataSearch"
+                            type="text"
+                            placeholder="Search question or section..."
+                            class="w-full rounded-lg border border-cream-300 bg-white px-2.5 py-1 text-xs text-gray-800 focus:border-forest-600 focus:outline-none"
+                        />
+                    </div>
+
+                    <div class="max-h-48 overflow-y-auto divide-y divide-cream-100">
+                        <template v-if="groupedQuestionsBySection.length">
+                            <div v-for="group in groupedQuestionsBySection" :key="group.key" class="py-1">
+                                <div
+                                    v-if="formHasSections || group.hasExplicitSection"
+                                    class="px-2.5 py-1 bg-cream-100/90 text-[10px] font-extrabold uppercase tracking-wider text-forest-900 sticky top-0"
+                                >
+                                    § {{ group.sectionTitle }}
+                                </div>
+                                <button
+                                    v-for="q in group.questions"
+                                    :key="q.id"
+                                    type="button"
+                                    @click="selectFormQuestion(q)"
+                                    class="w-full px-3 py-1.5 text-left flex items-center justify-between gap-2 hover:bg-cream-100/80 transition cursor-pointer"
+                                    :class="selectedFormQuestion?.id === q.id ? 'bg-forest-50/80 font-bold text-forest-950' : 'text-gray-800'"
+                                >
+                                    <span class="truncate text-xs">{{ q.plainTitle }}</span>
+                                    <span class="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-cream-100 text-gray-600 border border-cream-300">
+                                        {{ q.type }}
+                                    </span>
+                                </button>
+                            </div>
+                        </template>
+                        <div v-else class="px-3 py-3 text-center text-gray-400 italic text-xs">
+                            No matching questions found.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mode Switcher: Calculated vs Grouped vs Collected / Single Response -->
+            <div v-if="selectedFormQuestion" class="space-y-2">
+                <div class="grid grid-cols-3 gap-1 bg-white p-1 rounded-lg border border-cream-300">
+                    <button
+                        type="button"
+                        :disabled="!questionHasCalculated"
+                        @click="formDataMode = 'calculated'"
+                        class="py-1 px-1.5 rounded-md text-[11px] font-bold transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed truncate"
+                        :class="formDataMode === 'calculated' ? 'bg-forest-900 text-white shadow-2xs' : 'text-gray-700 hover:bg-cream-100'"
+                        title="Calculated (Numerical)"
+                    >
+                        ∑ Calculated (Numerical)
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="!questionHasGrouped"
+                        @click="formDataMode = 'grouped'"
+                        class="py-1 px-1.5 rounded-md text-[11px] font-bold transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed truncate"
+                        :class="formDataMode === 'grouped' ? 'bg-forest-900 text-white shadow-2xs' : 'text-gray-700 hover:bg-cream-100'"
+                        title="Grouped (Breakdown)"
+                    >
+                        ▤ Grouped (Breakdown)
+                    </button>
+                    <button
+                        type="button"
+                        @click="formDataMode = 'collected'"
+                        class="py-1 px-1.5 rounded-md text-[11px] font-bold transition cursor-pointer truncate"
+                        :class="formDataMode === 'collected' ? 'bg-forest-900 text-white shadow-2xs' : 'text-gray-700 hover:bg-cream-100'"
+                        title="Collected / Single Response"
+                    >
+                        ❝❞ Collected / Single Response
+                    </button>
+                </div>
+
+                <!-- Calculated Mode Controls -->
+                <div v-if="formDataMode === 'calculated'" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-0.5">
+                            Calculation
+                        </label>
+                        <select
+                            v-model="formDataCalcMetric"
+                            class="w-full rounded-lg border border-cream-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800 focus:border-forest-600 focus:outline-none"
+                        >
+                            <option value="mean">Average (Mean)</option>
+                            <option value="sum">Total (Sum)</option>
+                            <option value="median">Median</option>
+                            <option value="min">Minimum</option>
+                            <option value="max">Maximum</option>
+                            <option value="stddev">Std. Deviation</option>
+                            <option value="count">Response Count (n)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-0.5">
+                            Display Format
+                        </label>
+                        <select
+                            v-model="formDataCalcFormat"
+                            class="w-full rounded-lg border border-cream-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800 focus:border-forest-600 focus:outline-none"
+                        >
+                            <option value="value">Value Only (e.g. 4.5)</option>
+                            <option value="metric_value">Metric + Value (e.g. Average: 4.5)</option>
+                            <option value="question_value">Question + Value</option>
+                            <option value="value_count">Value + Count (e.g. 4.5 (n = 10))</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Grouped Mode Controls -->
+                <div v-else-if="formDataMode === 'grouped'" class="space-y-2">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-0.5">
+                                Response Group
+                            </label>
+                            <select
+                                v-model="formDataGroupScope"
+                                class="w-full rounded-lg border border-cream-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800 focus:border-forest-600 focus:outline-none"
+                            >
+                                <option value="all">All Options Breakdown</option>
+                                <option value="top">Top / Highest Response Only</option>
+                                <option
+                                    v-for="opt in selectedQuestionOptions"
+                                    :key="`opt_${opt.value}`"
+                                    :value="`opt:${opt.value}`"
+                                >
+                                    Option: {{ opt.label }} ({{ opt.count }} — {{ formatStatNumber(opt.percentage) }}%)
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-0.5">
+                                Value Format
+                            </label>
+                            <select
+                                v-model="formDataGroupMetric"
+                                class="w-full rounded-lg border border-cream-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800 focus:border-forest-600 focus:outline-none"
+                            >
+                                <option value="count_pct">Count &amp; % — e.g. 15 (60%)</option>
+                                <option value="count">Count Only — e.g. 15</option>
+                                <option value="pct">Percentage Only — e.g. 60%</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div v-if="formDataGroupScope === 'all' && !singleLine" class="flex items-center justify-between gap-2">
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-gray-600">Layout:</span>
+                        <div class="inline-flex items-center gap-1 bg-white p-0.5 rounded-lg border border-cream-300">
+                            <button
+                                type="button"
+                                @click="formDataGroupLayout = 'inline'"
+                                class="px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer"
+                                :class="formDataGroupLayout === 'inline' ? 'bg-forest-900 text-white' : 'text-gray-700 hover:bg-cream-100'"
+                            >
+                                Inline
+                            </button>
+                            <button
+                                type="button"
+                                @click="formDataGroupLayout = 'multiline'"
+                                class="px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer"
+                                :class="formDataGroupLayout === 'multiline' ? 'bg-forest-900 text-white' : 'text-gray-700 hover:bg-cream-100'"
+                            >
+                                Lines
+                            </button>
+                            <button
+                                v-if="canBullets"
+                                type="button"
+                                @click="formDataGroupLayout = 'bullets'"
+                                class="px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer"
+                                :class="formDataGroupLayout === 'bullets' ? 'bg-forest-900 text-white' : 'text-gray-700 hover:bg-cream-100'"
+                            >
+                                Bullets
+                            </button>
+                        </div>
+                    </div>
+
+                    <label
+                        v-else-if="formDataGroupScope !== 'all'"
+                        class="inline-flex items-center gap-1.5 text-[11px] font-semibold text-gray-700 cursor-pointer"
+                    >
+                        <input
+                            v-model="formDataIncludeLabel"
+                            type="checkbox"
+                            class="rounded border-cream-400 text-forest-900 focus:ring-forest-600"
+                        />
+                        <span>Include option label (uncheck to insert numbers only into table cell)</span>
+                    </label>
+                </div>
+
+                <!-- Collected / Single Response Mode Controls -->
+                <div v-else class="space-y-2">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-0.5">
+                                Response Data
+                            </label>
+                            <select
+                                v-model="formDataCollectedScope"
+                                class="w-full rounded-lg border border-cream-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800 focus:border-forest-600 focus:outline-none"
+                            >
+                                <option value="all">
+                                    Collected (All Responses — {{ selectedQuestionResponses.length }})
+                                </option>
+                                <option value="unique">
+                                    Collected (Unique Responses Only)
+                                </option>
+                                <option v-if="selectedQuestionResponses.length > 0" value="custom">
+                                    Select Specific Responses (Multi-Select)...
+                                </option>
+                                <optgroup v-if="selectedQuestionResponses.length > 0" label="Single Form Response">
+                                    <option
+                                        v-for="resp in selectedQuestionResponses"
+                                        :key="`resp_${resp.index}`"
+                                        :value="`resp:${resp.index}`"
+                                    >
+                                        Response #{{ resp.index }}: "{{ resp.value.length > 48 ? resp.value.slice(0, 48) + '...' : resp.value }}"
+                                    </option>
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold uppercase tracking-wider text-gray-600 mb-0.5">
+                                Value Format
+                            </label>
+                            <select
+                                v-model="formDataCollectedFormat"
+                                class="w-full rounded-lg border border-cream-300 bg-white px-2 py-1 text-xs font-semibold text-gray-800 focus:border-forest-600 focus:outline-none"
+                            >
+                                <option value="quoted_csv">"Value 1", "Value 2" (Quoted, Comma)</option>
+                                <option value="bracket_array">["Value 1", "Value 2"] (Array)</option>
+                                <option value="plain_csv">Value 1, Value 2 (Plain Text)</option>
+                                <option v-if="!singleLine" value="multiline">Line by Line ("Value")</option>
+                                <option v-if="!singleLine && canBullets" value="bullets">Bulleted List ("Value")</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Multi-select response picker when 'custom' is chosen -->
+                    <div
+                        v-if="formDataCollectedScope === 'custom' && selectedQuestionResponses.length > 0"
+                        class="bg-white rounded-lg border border-cream-300 p-2 space-y-1 max-h-32 overflow-y-auto"
+                    >
+                        <div class="flex items-center justify-between pb-1 border-b border-cream-200 text-[10px] font-bold text-gray-500">
+                            <span>Select which responses to include ({{ formDataSelectedResponseIndices.length }}/{{ selectedQuestionResponses.length }})</span>
+                            <div class="space-x-2">
+                                <button
+                                    type="button"
+                                    @click="formDataSelectedResponseIndices = selectedQuestionResponses.map((r) => r.index)"
+                                    class="text-forest-800 hover:underline cursor-pointer"
+                                >
+                                    All
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="formDataSelectedResponseIndices = []"
+                                    class="text-gray-500 hover:underline cursor-pointer"
+                                >
+                                    None
+                                </button>
+                            </div>
+                        </div>
+                        <label
+                            v-for="resp in selectedQuestionResponses"
+                            :key="`chk_resp_${resp.index}`"
+                            class="flex items-start gap-2 py-0.5 text-xs text-gray-800 cursor-pointer hover:bg-cream-50 rounded px-1"
+                        >
+                            <input
+                                type="checkbox"
+                                :checked="formDataSelectedResponseIndices.includes(resp.index)"
+                                @change="toggleCustomResponseIndex(resp.index)"
+                                class="mt-0.5 rounded border-cream-400 text-forest-900 focus:ring-forest-600"
+                            />
+                            <span class="min-w-0 flex-1 break-words">
+                                <span class="font-mono text-[10px] font-bold text-gray-500 mr-1">#{{ resp.index }}:</span>
+                                "{{ resp.value }}"
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Live Preview & Insert Button -->
+                <div class="pt-1.5 border-t border-cream-200 flex items-center justify-between gap-2">
+                    <div class="min-w-0 flex-1 bg-white px-2.5 py-1.5 rounded-lg border border-cream-300 text-[11px] text-gray-800 truncate" :title="formDataGenerated.text">
+                        <span class="text-[9px] font-extrabold uppercase tracking-wider text-gray-400 mr-1.5">Preview:</span>
+                        <span class="font-medium">{{ formDataGenerated.text || '—' }}</span>
+                    </div>
+                    <button
+                        type="button"
+                        @click="insertFormData"
+                        class="shrink-0 px-3 py-1.5 bg-forest-900 hover:bg-forest-800 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        + Insert Data
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Table Context Actions (shown when cursor is inside a table and editor has focus) -->
         <div
-            v-if="canTables && isFocused && activeTable"
+            v-if="canTables && (isFocused || showFormDataMenu) && activeTable"
             class="flex items-center flex-wrap gap-1 px-3 py-1.5 bg-amber-50/95 border-b border-amber-200 text-[11px] text-amber-900 font-semibold select-none shadow-2xs"
             @mousedown.prevent
         >
@@ -1144,6 +2023,18 @@ onUnmounted(() => {
                     ◫ Split Cell
                 </button>
             </div>
+
+            <template v-if="hasFormData">
+                <span class="text-amber-300">|</span>
+                <button
+                    type="button"
+                    @click="openFormDataMenu"
+                    class="form-data-trigger-btn px-2 py-0.5 bg-forest-900 text-white rounded hover:bg-forest-800 cursor-pointer font-bold flex items-center space-x-1"
+                    title="Insert Calculated or Grouped Form Data into this Table Cell"
+                >
+                    <span>📊 + Form Data</span>
+                </button>
+            </template>
 
             <span class="text-amber-300">|</span>
 

@@ -571,4 +571,204 @@ class FeedbackAnalyticsTest extends TestCase
         $report->refresh();
         $this->assertSame('Overall rating', $report->configuration['charts'][0]['title']);
     }
+
+    public function test_rich_text_html_lists_and_tables_in_analytics_fields_are_saved_and_published(): void
+    {
+        $form = Feedback::factory()->create(['schema' => ['fields' => [
+            ['id' => 'score', 'type' => 'number', 'particular' => '<b>Overall</b> Score', 'weight' => 1],
+        ]]]);
+        FbSubmission::factory()->count(5)->create(['feedback_id' => $form->id, 'data' => ['score' => 4]]);
+
+        $richTable = str_repeat('<p>Detailed section notes with bullet points and merged table cells.</p>', 80)
+            .'<ul><li>Point A</li><li>Point B</li></ul>'
+            .'<table class="form-rich-table" width="100%"><thead><tr><th colspan="2">Summary</th></tr></thead><tbody><tr><td>Metric</td><td>4.0</td></tr></tbody></table>';
+
+        $configuration = FeedbackAnalyticsReport::factory()->make()->configuration;
+        $configuration['title'] = '<b>2026</b> <u>Annual</u> Evaluation Report';
+        $configuration['description'] = '<p style="text-align: center;"><strong>Executive Overview</strong></p><ul><li>Item 1</li><li>Item 2</li></ul>';
+        $configuration['footer'] = '<i>Confidential — For internal &amp; partner review</i>';
+        $configuration['charts'][0]['question'] = 'score';
+        $configuration['charts'][0]['aggregation'] = 'mean';
+        $configuration['charts'][0]['title'] = '<b>Overall</b> <i>Score</i>';
+        $configuration['charts'][0]['annotation'] = '<p><strong>Note:</strong> Based on 5 verified responses.</p><table class="form-rich-table"><tr><td>Target</td><td>4.0</td></tr></table>';
+        $configuration['sections'] = [[
+            'id' => 'rich-sec-1',
+            'kind' => 'text',
+            'title' => '<u>Key Findings</u> &amp; Takeaways',
+            'body' => $richTable,
+            'width' => 12,
+            'height' => 4,
+            'position' => 0,
+        ]];
+
+        $report = FeedbackAnalyticsReport::factory()->create([
+            'feedback_id' => $form->id,
+            'configuration' => $configuration,
+        ]);
+
+        $admin = User::factory()->admin()->create();
+        $this->actingAs($admin)
+            ->putJson(route('feedback.analytics.update', [$form->id, $report->id]), ['configuration' => $configuration])
+            ->assertOk()
+            ->assertJsonPath('report.configuration.title', '<b>2026</b> <u>Annual</u> Evaluation Report')
+            ->assertJsonPath('report.configuration.sections.0.body', $richTable);
+
+        $this->publish($report, $admin);
+
+        $this->get($this->publicUrl($report))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('report.title', '<b>2026</b> <u>Annual</u> Evaluation Report')
+                ->where('report.description', $configuration['description'])
+                ->where('report.footer', $configuration['footer'])
+                ->where('report.sections.0.title', '<u>Key Findings</u> &amp; Takeaways')
+                ->where('report.sections.0.body', $richTable)
+                ->where('report.charts.0.title', '<b>Overall</b> <i>Score</i>')
+                ->where('report.charts.0.annotation', $configuration['charts'][0]['annotation'])
+                ->where('data.charts.rating.rows.0.label', 'Overall Score')
+                ->where('data.charts.rating.rows.0.value', 4));
+    }
+
+    public function test_returns_questions_by_section_and_calculated_and_grouped_form_data_for_editor(): void
+    {
+        $form = Feedback::factory()->create(['schema' => ['fields' => [
+            ['id' => 'general_q', 'type' => 'number', 'particular' => 'General Rating', 'weight' => 1],
+            ['id' => 'sec_speaker', 'type' => 'section', 'particular' => '<b>Part I:</b> Speaker Evaluation'],
+            ['id' => 'speaker_score', 'type' => 'number', 'particular' => 'Speaker Rating', 'weight' => 2],
+            [
+                'id' => 'sec_venue',
+                'type' => 'section',
+                'particular' => 'Part II: Venue & Logistics',
+            ],
+            [
+                'id' => 'satisfaction',
+                'type' => 'radio',
+                'particular' => 'Venue Satisfaction',
+                'options' => [
+                    ['value' => '5', 'label' => 'Very Satisfied', 'score' => 5],
+                    ['value' => '3', 'label' => 'Neutral', 'score' => 3],
+                    ['value' => '1', 'label' => 'Dissatisfied', 'score' => 1],
+                ],
+            ],
+            [
+                'id' => 'topics',
+                'type' => 'checkbox',
+                'particular' => 'Useful Topics',
+                'options' => [
+                    ['value' => 'ai', 'label' => 'AI Automation'],
+                    ['value' => 'sec', 'label' => 'Cybersecurity'],
+                ],
+            ],
+            [
+                'id' => 'recommendations',
+                'type' => 'textarea',
+                'particular' => 'Recommendations & Observations',
+                'weight' => 5,
+            ],
+        ]]]);
+
+        FbSubmission::factory()->create([
+            'feedback_id' => $form->id,
+            'data' => [
+                'general_q' => 10,
+                'speaker_score' => 4,
+                'satisfaction' => '5',
+                'topics' => ['ai', 'sec'],
+                'recommendations' => 'Improve radio communication',
+            ],
+            'created_at' => '2026-10-10 10:00:00',
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $form->id,
+            'data' => [
+                'general_q' => 20,
+                'speaker_score' => 6,
+                'satisfaction' => '5',
+                'topics' => ['ai'],
+                'recommendations' => 'Deploy fire units earlier',
+            ],
+            'created_at' => '2026-10-15 10:00:00',
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $form->id,
+            'data' => [
+                'general_q' => 30,
+                'speaker_score' => 8,
+                'satisfaction' => '3',
+                'topics' => ['sec'],
+                'recommendations' => 'More signage for evacuation routes',
+            ],
+            'created_at' => '2026-10-20 10:00:00',
+        ]);
+
+        $admin = User::factory()->admin()->create();
+
+        $response = $this->actingAs($admin)
+            ->getJson(route('feedback.analytics.publication', $form->id))
+            ->assertOk()
+            ->assertJsonPath('questions.0.id', 'general_q')
+            ->assertJsonPath('questions.0.section_id', null)
+            ->assertJsonPath('questions.0.section_title', null)
+            ->assertJsonPath('questions.1.id', 'speaker_score')
+            ->assertJsonPath('questions.1.section_id', 'sec_speaker')
+            ->assertJsonPath('questions.1.section_title', 'Part I: Speaker Evaluation')
+            ->assertJsonPath('questions.2.id', 'satisfaction')
+            ->assertJsonPath('questions.2.section_id', 'sec_venue')
+            ->assertJsonPath('questions.2.section_title', 'Part II: Venue & Logistics')
+            ->assertJsonPath('questions.3.id', 'topics')
+            ->assertJsonPath('questions.3.section_id', 'sec_venue')
+            ->assertJsonPath('questions.3.section_title', 'Part II: Venue & Logistics')
+            ->assertJsonPath('questions.4.id', 'recommendations')
+            ->assertJsonPath('questions.4.type', 'textarea')
+            ->assertJsonPath('questions.4.section_id', 'sec_venue')
+            ->assertJsonPath('questions.4.section_title', 'Part II: Venue & Logistics')
+            ->assertJsonPath('form_data.submission_count', 3)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.mean', 6)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.sum', 18)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.median', 6)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.min', 4)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.max', 8)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.count', 3)
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.0.label', 'Very Satisfied')
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.0.count', 2)
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.0.percentage', 66.67)
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.1.label', 'Neutral')
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.1.count', 1)
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.1.percentage', 33.33)
+            ->assertJsonPath('form_data.questions.topics.grouped.0.label', 'AI Automation')
+            ->assertJsonPath('form_data.questions.topics.grouped.0.count', 2)
+            ->assertJsonPath('form_data.questions.topics.grouped.0.percentage', 66.67)
+            ->assertJsonPath('form_data.questions.topics.grouped.1.label', 'Cybersecurity')
+            ->assertJsonPath('form_data.questions.topics.grouped.1.count', 2)
+            ->assertJsonPath('form_data.questions.topics.grouped.1.percentage', 66.67)
+            ->assertJsonPath('form_data.questions.recommendations.answered', 3)
+            ->assertJsonPath('form_data.questions.recommendations.responses.0.value', 'Improve radio communication')
+            ->assertJsonPath('form_data.questions.recommendations.responses.1.value', 'Deploy fire units earlier')
+            ->assertJsonPath('form_data.questions.recommendations.responses.2.value', 'More signage for evacuation routes');
+
+        $this->assertEqualsWithDelta(
+            4.33,
+            $response->json('form_data.questions.satisfaction.calculated.mean'),
+            0.01
+        );
+
+        // Verify preview endpoint filters form_data by period_start and period_end
+        $configuration = FeedbackAnalyticsReport::factory()->make()->configuration;
+        $configuration['period_start'] = '2026-10-12';
+        $configuration['period_end'] = '2026-10-25';
+        $configuration['charts'][0]['question'] = 'speaker_score';
+        $configuration['charts'][0]['aggregation'] = 'mean';
+
+        $this->actingAs($admin)
+            ->postJson(route('feedback.analytics.preview', $form->id), ['configuration' => $configuration])
+            ->assertOk()
+            ->assertJsonPath('form_data.submission_count', 2)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.mean', 7)
+            ->assertJsonPath('form_data.questions.speaker_score.calculated.sum', 14)
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.0.count', 1)
+            ->assertJsonPath('form_data.questions.satisfaction.grouped.0.percentage', 50)
+            ->assertJsonCount(2, 'form_data.questions.recommendations.responses')
+            ->assertJsonPath('form_data.questions.recommendations.responses.0.value', 'Deploy fire units earlier')
+            ->assertJsonPath('form_data.questions.recommendations.responses.1.value', 'More signage for evacuation routes');
+    }
 }

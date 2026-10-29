@@ -62,10 +62,14 @@ class AdminFeedbackTest extends TestCase
         $event = FbEvent::factory()->create();
         $feedback = Feedback::factory()->create(['event_id' => $event->id]);
         $participant = FbParticipant::factory()->create(['name' => 'Juan Dela Cruz']);
-        FbSubmission::factory()->create([
+        $submission = FbSubmission::factory()->create([
             'feedback_id' => $feedback->id,
             'participant_id' => $participant->id,
             'data' => ['satisfaction' => 5],
+        ]);
+        FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'data' => ['satisfaction' => 4],
         ]);
 
         $response = $this->actingAs($admin)->get(route('admin.feedback.submissions'));
@@ -73,8 +77,19 @@ class AdminFeedbackTest extends TestCase
         $response->assertOk();
         $response->assertInertia(fn ($page) => $page
             ->component('Admin/Feedback/Submissions')
-            ->has('submissions.data')
+            ->has('submissions.data', 2)
             ->has('filterEvents')
+        );
+
+        $searchResponse = $this->actingAs($admin)->get(route('admin.feedback.submissions', [
+            'search' => $submission->reference_code,
+        ]));
+
+        $searchResponse->assertOk();
+        $searchResponse->assertInertia(fn ($page) => $page
+            ->component('Admin/Feedback/Submissions')
+            ->has('submissions.data', 1)
+            ->where('submissions.data.0.reference_code', $submission->reference_code)
         );
     }
 

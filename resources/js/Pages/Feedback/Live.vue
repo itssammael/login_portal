@@ -3,6 +3,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
 import InputError from '@/Components/InputError.vue';
+import { useFormDraftCookie } from '@/Composables/useFormDraftCookie';
 import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
@@ -76,33 +77,6 @@ const participantData = ref({
     no_of_exercises: '',
 });
 
-// Initialize answers dictionary from dynamic schema fields
-const initAnswers = () => {
-    const initial = {};
-    sortedFields.value.forEach((field) => {
-        if (['section', 'text_only'].includes(field.type)) {
-            return;
-        }
-        if (field.type === 'checkbox') {
-            initial[field.id] = [];
-        } else {
-            initial[field.id] = '';
-        }
-        if (field.allow_other) {
-            initial[`${field.id}_other`] = '';
-        }
-    });
-    answers.value = initial;
-};
-
-watch(
-    () => props.form?.schema?.fields,
-    () => {
-        initAnswers();
-    },
-    { immediate: true }
-);
-
 // --- Pagination & Multi-Page Sections Engine ---
 const currentPageIdx = ref(0);
 const pageHistory = ref([0]);
@@ -138,6 +112,52 @@ const sectionPages = computed(() => {
 
     return pages;
 });
+
+const {
+    hasRestoredDraft,
+    lastSavedAt,
+    isOffline,
+    restoreDraft,
+    clearDraft,
+} = useFormDraftCookie(
+    () => `live_${props.apiKey}`,
+    {
+        answers,
+        participantData,
+        currentPageIdx,
+        pageHistory,
+    }
+);
+
+// Initialize answers dictionary from dynamic schema fields
+const initAnswers = () => {
+    const initial = {};
+    sortedFields.value.forEach((field) => {
+        if (['section', 'text_only'].includes(field.type)) {
+            return;
+        }
+        if (field.type === 'checkbox') {
+            initial[field.id] = [];
+        } else {
+            initial[field.id] = '';
+        }
+        if (field.allow_other) {
+            initial[`${field.id}_other`] = '';
+        }
+    });
+    answers.value = initial;
+};
+
+watch(
+    () => props.form?.schema?.fields,
+    () => {
+        initAnswers();
+        if (isFormAvailable.value) {
+            restoreDraft({ maxPages: sectionPages.value.length });
+        }
+    },
+    { immediate: true }
+);
 
 const isPaginated = computed(() => {
     return Boolean(props.form?.schema?.pagination?.enabled && sectionPages.value.length > 1);
@@ -442,8 +462,9 @@ const submitForm = async () => {
     try {
         const response = await axios.post(route('forms.live.submit', props.apiKey), payload);
         if (response.status === 201 || response.status === 200) {
+            clearDraft();
             submissionSuccess.value = true;
-            submittedRecord.value = response.data?.data || response.data || null;
+            submittedRecord.value = (response.data?.id || response.data?.reference_code) ? response.data : (response.data?.data || null);
             serverErrors.value = {};
             showQuickErrorToast.value = false;
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -463,6 +484,10 @@ const submitForm = async () => {
             quickErrorToastTimer = setTimeout(() => {
                 showQuickErrorToast.value = false;
             }, 15000);
+        } else if (!error.response) {
+            serverErrors.value = {
+                general: ['Network connection lost. Do not worry—your answers are saved in your browser cookies for 24 hours. Please submit again once your internet connection is restored.'],
+            };
         } else {
             serverErrors.value = {
                 general: [error.response?.data?.message || 'An unexpected error occurred while submitting feedback. Please try again.'],
@@ -473,7 +498,29 @@ const submitForm = async () => {
     }
 };
 
+const clearSavedProgress = () => {
+    clearDraft();
+    serverErrors.value = {};
+    clientErrors.value = {};
+    showQuickErrorToast.value = false;
+    highlightedFieldId.value = null;
+    currentPageIdx.value = 0;
+    pageHistory.value = [0];
+    initAnswers();
+    participantData.value = {
+        name: '',
+        agency: '',
+        designation: '',
+        function_id: '',
+        custom_function: '',
+        years_in_designation: '',
+        location: '',
+        no_of_exercises: '',
+    };
+};
+
 const resetForAnotherSubmission = () => {
+    clearDraft();
     submissionSuccess.value = false;
     submittedRecord.value = null;
     serverErrors.value = {};
@@ -572,8 +619,8 @@ onBeforeUnmount(() => {
                     </p>
                 </div>
 
-                <div v-if="submittedRecord?.id" class="inline-block px-4 py-2 bg-cream-100 rounded-xl border border-cream-400 text-xs font-mono text-gray-800 shadow-2xs">
-                    Submission Reference: #{{ submittedRecord.id }}
+                <div v-if="submittedRecord?.reference_code || submittedRecord?.id" class="inline-block px-4 py-2 bg-cream-100 rounded-xl border border-cream-400 text-xs font-mono text-gray-800 shadow-2xs">
+                    Submission Reference: {{ submittedRecord.reference_code || `#${submittedRecord.id}` }}
                 </div>
 
                 <div class="pt-4">
@@ -622,6 +669,30 @@ onBeforeUnmount(() => {
                         <span>Draft Preview Mode: This questionnaire is currently in Draft (Unpublished) mode. Public respondents cannot access or submit responses until it is published.</span>
                     </div>
                     <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-amber-200 text-amber-900 font-extrabold shrink-0">Draft</span>
+                </div>
+
+                <!-- Offline Connection Warning Banner -->
+                <div v-if="isOffline" class="p-4 bg-amber-50 border border-amber-300 text-amber-950 rounded-2xl text-xs font-medium flex items-center justify-between gap-3 shadow-xs">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="size-6 rounded-lg bg-amber-200 text-amber-900 flex items-center justify-center text-xs font-black shrink-0">📡</span>
+                        <span>You appear to be offline. Your form progress is automatically saved in cookies for 24 hours—you can continue filling it out and submit once reconnected.</span>
+                    </div>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-amber-200 text-amber-900 font-bold shrink-0">Offline Saved</span>
+                </div>
+
+                <!-- Restored Progress Notice Banner -->
+                <div v-if="hasRestoredDraft" class="p-3.5 bg-emerald-50/90 border border-emerald-300 text-emerald-950 rounded-2xl text-xs font-medium flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="size-6 rounded-lg bg-emerald-200 text-emerald-900 flex items-center justify-center text-xs font-black shrink-0">↺</span>
+                        <span>Your previous unsubmitted progress was restored (saved automatically for 24 hours).</span>
+                    </div>
+                    <button
+                        type="button"
+                        @click="clearSavedProgress"
+                        class="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold transition cursor-pointer shrink-0"
+                    >
+                        Clear saved progress
+                    </button>
                 </div>
 
                 <!-- General Error Alert -->

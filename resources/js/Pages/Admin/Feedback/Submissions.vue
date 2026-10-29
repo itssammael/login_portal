@@ -338,7 +338,7 @@ const getOptionDisplayLabel = (field, val) => {
                                     v-model="filterForm.search"
                                     @keyup.enter="applyFilters"
                                     type="text"
-                                    placeholder="Name, Agency, Location..."
+                                    placeholder="Ref Code, Name, Agency..."
                                     class="flex-1 px-3 py-2 bg-[#fffef9] border border-cream-500 focus:border-forest-600 rounded-xl text-xs"
                                 />
                                 <button
@@ -552,6 +552,9 @@ const getOptionDisplayLabel = (field, val) => {
                                             <span v-else class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-300">
                                                 👤 Anonymous
                                             </span>
+                                            <span v-if="s.reference_code" class="text-[10px] font-mono text-gray-500 block mt-0.5">
+                                                {{ s.reference_code }}
+                                            </span>
                                         </td>
                                         <td class="px-5 py-3.5">
                                             <div class="font-semibold text-forest-900">
@@ -623,7 +626,7 @@ const getOptionDisplayLabel = (field, val) => {
                 <div class="flex items-center justify-between pb-4 border-b border-cream-500/40 shrink-0">
                     <div>
                         <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-lime-200 text-forest-900 border border-forest-500/20">
-                            Submission #{{ selectedSubmission.id }}
+                            {{ selectedSubmission.reference_code ? `Ref: ${selectedSubmission.reference_code}` : `Submission #${selectedSubmission.id}` }}
                         </span>
                         <h3 class="text-lg font-bold text-gray-900 mt-1">
                             {{ selectedSubmission.feedback?.event?.name || 'Feedback Submission Details' }}

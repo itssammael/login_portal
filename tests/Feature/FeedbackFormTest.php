@@ -229,6 +229,16 @@ class FeedbackFormTest extends TestCase
 
         $submission = FbSubmission::latest()->firstOrFail();
         $this->assertEquals('The simulation was very well-coordinated!', $submission->data['comments']);
+        $this->assertNotNull($submission->reference_code);
+        $this->assertStringStartsWith('RSP-', $submission->reference_code);
+        $response->assertJsonPath('reference_code', $submission->reference_code);
+
+        // Verify reference_code column is nullable when explicitly set to null
+        $nullableSubmission = FbSubmission::factory()->create([
+            'feedback_id' => $feedback->id,
+            'reference_code' => null,
+        ]);
+        $this->assertNull($nullableSubmission->fresh()->reference_code);
     }
 
     public function test_feedback_submission_supports_anonymous_participant(): void

@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
+import { useFormDraftCookie } from '@/Composables/useFormDraftCookie';
 import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
@@ -98,33 +99,6 @@ const sendParentMessage = (message) => {
 // Dynamic form answers dictionary keyed by field.id
 const answers = ref({});
 
-// Initialize answers dictionary from dynamic schema fields
-const initAnswers = () => {
-    const initial = {};
-    sortedFields.value.forEach((field) => {
-        if (['section', 'text_only'].includes(field.type)) {
-            return;
-        }
-        if (field.type === 'checkbox') {
-            initial[field.id] = [];
-        } else {
-            initial[field.id] = props.userDefaults?.[field.id] ?? '';
-        }
-        if (field.allow_other) {
-            initial[`${field.id}_other`] = '';
-        }
-    });
-    answers.value = initial;
-};
-
-watch(
-    () => props.form?.schema?.fields,
-    () => {
-        initAnswers();
-    },
-    { immediate: true }
-);
-
 // --- Pagination & Multi-Page Sections Engine ---
 const currentPageIdx = ref(0);
 const pageHistory = ref([0]);
@@ -160,6 +134,52 @@ const sectionPages = computed(() => {
 
     return pages;
 });
+
+const {
+    hasRestoredDraft,
+    lastSavedAt,
+    isOffline,
+    restoreDraft,
+    clearDraft,
+} = useFormDraftCookie(
+    () => `embed_${props.publicId}`,
+    {
+        answers,
+        currentPageIdx,
+        pageHistory,
+        getDefaults: () => props.userDefaults || {},
+    }
+);
+
+// Initialize answers dictionary from dynamic schema fields
+const initAnswers = () => {
+    const initial = {};
+    sortedFields.value.forEach((field) => {
+        if (['section', 'text_only'].includes(field.type)) {
+            return;
+        }
+        if (field.type === 'checkbox') {
+            initial[field.id] = [];
+        } else {
+            initial[field.id] = props.userDefaults?.[field.id] ?? '';
+        }
+        if (field.allow_other) {
+            initial[`${field.id}_other`] = '';
+        }
+    });
+    answers.value = initial;
+};
+
+watch(
+    () => props.form?.schema?.fields,
+    () => {
+        initAnswers();
+        if (isFormAvailable.value) {
+            restoreDraft({ maxPages: sectionPages.value.length });
+        }
+    },
+    { immediate: true }
+);
 
 const isPaginated = computed(() => {
     return Boolean(props.form?.schema?.pagination?.enabled && sectionPages.value.length > 1);
@@ -472,8 +492,10 @@ const submitForm = async () => {
     try {
         const response = await axios.post(route('feedback.embed.submit', props.publicId), payload);
         if (response.status === 201 || response.status === 200) {
+            clearDraft();
+            const record = (response.data?.id || response.data?.reference_code) ? response.data : (response.data?.data || null);
             submissionSuccess.value = true;
-            submittedRecord.value = response.data?.data || null;
+            submittedRecord.value = record;
             serverErrors.value = {};
             showQuickErrorToast.value = false;
 
@@ -481,7 +503,8 @@ const submitForm = async () => {
             sendParentMessage({
                 type: 'feedback-submitted',
                 publicId: props.publicId,
-                submissionId: response.data?.data?.id || null,
+                submissionId: record?.id || null,
+                referenceCode: record?.reference_code || null,
             });
         }
     } catch (error) {
@@ -499,6 +522,10 @@ const submitForm = async () => {
             quickErrorToastTimer = setTimeout(() => {
                 showQuickErrorToast.value = false;
             }, 15000);
+        } else if (!error.response) {
+            serverErrors.value = {
+                general: ['Network connection lost. Do not worry—your answers are saved in your browser cookies for 24 hours. Please submit again once your internet connection is restored.'],
+            };
         } else {
             serverErrors.value = {
                 general: [error.response?.data?.message || 'An unexpected error occurred while submitting feedback. Please try again.'],
@@ -507,6 +534,17 @@ const submitForm = async () => {
     } finally {
         isSubmitting.value = false;
     }
+};
+
+const clearSavedProgress = () => {
+    clearDraft();
+    serverErrors.value = {};
+    clientErrors.value = {};
+    showQuickErrorToast.value = false;
+    highlightedFieldId.value = null;
+    currentPageIdx.value = 0;
+    pageHistory.value = [0];
+    initAnswers();
 };
 
 const getFieldError = (fieldId) => {
@@ -546,8 +584,8 @@ const getOtherFieldError = (fieldId) => {
                     Thank you for your valuable evaluation. Your responses for <strong>{{ event?.name }}</strong> have been securely recorded.
                 </p>
 
-                <div v-if="submittedRecord?.id" class="inline-block p-3 bg-cream-100/60 rounded-xl border border-cream-400 text-xs font-mono text-gray-700">
-                    Reference Number: #{{ submittedRecord.id }}
+                <div v-if="submittedRecord?.reference_code || submittedRecord?.id" class="inline-block p-3 bg-cream-100/60 rounded-xl border border-cream-400 text-xs font-mono text-gray-700">
+                    Reference Number: {{ submittedRecord.reference_code || `#${submittedRecord.id}` }}
                 </div>
             </div>
 
@@ -579,6 +617,30 @@ const getOtherFieldError = (fieldId) => {
 
             <!-- Active Questionnaire Form -->
             <form v-else @submit.prevent="isPaginated && !isLastPage ? goToNextPage() : submitForm()" class="space-y-6">
+                <!-- Offline Connection Warning Banner -->
+                <div v-if="isOffline" class="p-4 bg-amber-50 border border-amber-300 text-amber-950 rounded-2xl text-xs font-medium flex items-center justify-between gap-3 shadow-xs">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="size-6 rounded-lg bg-amber-200 text-amber-900 flex items-center justify-center text-xs font-black shrink-0">📡</span>
+                        <span>You appear to be offline. Your form progress is automatically saved in cookies for 24 hours—you can continue filling it out and submit once reconnected.</span>
+                    </div>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-amber-200 text-amber-900 font-bold shrink-0">Offline Saved</span>
+                </div>
+
+                <!-- Restored Progress Notice Banner -->
+                <div v-if="hasRestoredDraft" class="p-3.5 bg-emerald-50/90 border border-emerald-300 text-emerald-950 rounded-2xl text-xs font-medium flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="size-6 rounded-lg bg-emerald-200 text-emerald-900 flex items-center justify-center text-xs font-black shrink-0">↺</span>
+                        <span>Your previous unsubmitted progress was restored (saved automatically for 24 hours).</span>
+                    </div>
+                    <button
+                        type="button"
+                        @click="clearSavedProgress"
+                        class="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold transition cursor-pointer shrink-0"
+                    >
+                        Clear saved progress
+                    </button>
+                </div>
+
                 <!-- General Error Alert -->
                 <div v-if="serverErrors.general" class="p-4 bg-red-50 border border-red-200 text-red-800 rounded-2xl text-xs font-medium flex items-center shadow-xs">
                     <svg class="size-5 me-2 shrink-0 text-red-600" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">

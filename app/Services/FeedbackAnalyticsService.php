@@ -19,6 +19,40 @@ class FeedbackAnalyticsService
             ->keyBy('id')->all();
     }
 
+    /** @return array<string, array<string, mixed>> */
+    public function questionsWithSections(Feedback $feedback): array
+    {
+        $rawSchema = is_array($feedback->schema) ? $feedback->schema : [];
+        if (! empty($rawSchema['fields'])) {
+            $resolved = app(FeedbackSchemaValidator::class)->resolveSchemaForEvent($rawSchema, $feedback->event);
+            $fields = $resolved['fields'] ?? $rawSchema['fields'];
+        } else {
+            $fields = [];
+        }
+
+        $currentSectionId = null;
+        $currentSectionTitle = null;
+        $result = [];
+
+        foreach ($fields as $index => $field) {
+            $type = $field['type'] ?? '';
+            if ($type === 'section') {
+                $currentSectionId = (string) ($field['id'] ?? 'section_'.$index);
+                $currentSectionTitle = trim(strip_tags((string) ($field['particular'] ?? ''))) ?: 'Section';
+
+                continue;
+            }
+
+            if (in_array($type, ['text', 'textarea', 'number', 'date', 'radio', 'select', 'checkbox'], true) && ! empty($field['id'])) {
+                $field['section_id'] = $currentSectionId;
+                $field['section_title'] = $currentSectionTitle;
+                $result[(string) $field['id']] = $field;
+            }
+        }
+
+        return $result;
+    }
+
     /** @param array<string, mixed> $field */
     public function sensitive(array $field): bool
     {
@@ -355,7 +389,7 @@ class FeedbackAnalyticsService
                         'stddev' => sqrt(array_sum(array_map(fn (float $value): float => ($value - $mean) ** 2, $values)) / $n),
                         default => $mean,
                     };
-                    $rows[] = ['label' => $chart['title'], 'value' => round($result, 2)];
+                    $rows[] = ['label' => trim(strip_tags((string) $chart['title'])) ?: 'Value', 'value' => round($result, 2)];
                 } else {
                     foreach ($field['options'] as $option) {
                         $value = $state['counts'][(string) $option['value']] ?? 0;
@@ -376,5 +410,265 @@ class FeedbackAnalyticsService
         $key = 'feedback-analytics:'.$report->id.':'.hash('sha256', json_encode($report->published_configuration));
 
         return Cache::remember($key, $configuration['refresh_seconds'], fn (): array => $this->aggregate($feedback, $configuration, true));
+    }
+
+    /** @return array{submission_count: int, question_list: array<int, array<string, mixed>>, questions: array<string, array<string, mixed>>} */
+    public function questionDataSummary(Feedback $feedback, ?string $periodStart = null, ?string $periodEnd = null): array
+    {
+        $questions = $this->questionsWithSections($feedback);
+
+        $scoreMaps = [];
+        $labelMaps = [];
+        $otherOptionKeys = [];
+        $states = [];
+        foreach ($questions as $qId => $field) {
+            if (in_array($field['type'], ['radio', 'select', 'checkbox'], true)) {
+                $scoreMaps[$qId] = $this->optionScoreMap($field);
+                $labelMap = [];
+                $otherKeys = [];
+                foreach ($field['options'] ?? [] as $option) {
+                    $optVal = (string) ($option['value'] ?? '');
+                    if ($optVal === '') {
+                        continue;
+                    }
+                    $labelMap[$optVal] = trim(strip_tags((string) ($option['label'] ?? $optVal))) ?: $optVal;
+                    if (! empty($option['is_other']) || $optVal === 'other') {
+                        $otherKeys[$optVal] = true;
+                    }
+                }
+                $labelMaps[$qId] = $labelMap;
+                $otherOptionKeys[$qId] = $otherKeys;
+            }
+            $states[$qId] = [
+                'values' => [],
+                'counts' => [],
+                'labels' => [],
+                'responses' => [],
+                'answered' => 0,
+            ];
+        }
+
+        $query = $feedback->submissions();
+        if (! empty($periodStart)) {
+            $query->where('created_at', '>=', $periodStart.' 00:00:00');
+        }
+        if (! empty($periodEnd)) {
+            $query->where('created_at', '<=', $periodEnd.' 23:59:59');
+        }
+
+        $totalSubmissions = 0;
+        foreach ($query->select(['id', 'data'])->lazyById(500) as $submission) {
+            $totalSubmissions++;
+            foreach ($questions as $qId => $field) {
+                $value = $submission->data[$qId] ?? null;
+                $state = &$states[$qId];
+                $type = $field['type'] ?? 'text';
+
+                if ($type === 'number') {
+                    if (is_numeric($value) && is_finite((float) $value)) {
+                        $numVal = (float) $value;
+                        $state['values'][] = $numVal;
+                        $state['answered']++;
+                        $valKey = (string) round($numVal, 2);
+                        $state['counts'][$valKey] = ($state['counts'][$valKey] ?? 0) + 1;
+                        $state['labels'][$valKey] = $valKey;
+                        $state['responses'][] = [
+                            'index' => count($state['responses']) + 1,
+                            'submission_number' => $totalSubmissions,
+                            'value' => $valKey,
+                        ];
+                    }
+                } elseif (in_array($type, ['radio', 'select', 'checkbox'], true)) {
+                    $rawItems = is_array($value) ? $value : [$value];
+                    $values = array_values(array_unique(array_filter(
+                        $rawItems,
+                        fn (mixed $item): bool => is_scalar($item) && trim((string) $item) !== ''
+                    )));
+
+                    if ($values !== []) {
+                        $state['answered']++;
+                        $scoreMap = $scoreMaps[$qId] ?? [];
+                        $labelMap = $labelMaps[$qId] ?? [];
+                        $otherKeys = $otherOptionKeys[$qId] ?? [];
+                        $otherRaw = $submission->data[$qId.'_other'] ?? $submission->data['custom_'.$qId] ?? null;
+                        $otherText = is_scalar($otherRaw) ? trim((string) $otherRaw) : '';
+
+                        $rowScore = 0.0;
+                        $hasScore = false;
+                        $responseLabels = [];
+
+                        foreach ($values as $item) {
+                            $itemKey = trim((string) $item);
+                            $state['counts'][$itemKey] = ($state['counts'][$itemKey] ?? 0) + 1;
+                            $itemLabel = $labelMap[$itemKey] ?? $itemKey;
+                            $state['labels'][$itemKey] = $itemLabel;
+
+                            if (($otherKeys[$itemKey] ?? false) && $otherText !== '') {
+                                $responseLabels[] = $otherText;
+                            } else {
+                                $responseLabels[] = $itemLabel;
+                            }
+
+                            if (array_key_exists($itemKey, $scoreMap)) {
+                                $rowScore += $scoreMap[$itemKey];
+                                $hasScore = true;
+                            }
+                        }
+
+                        if ($hasScore) {
+                            $state['values'][] = $rowScore;
+                        }
+
+                        $displayText = implode(', ', $responseLabels);
+                        if ($displayText !== '') {
+                            $state['responses'][] = [
+                                'index' => count($state['responses']) + 1,
+                                'submission_number' => $totalSubmissions,
+                                'value' => $displayText,
+                            ];
+                        }
+                    }
+                } else {
+                    // text, textarea, date, or other string/non-numerical responses
+                    $strVal = '';
+                    if (is_array($value)) {
+                        $parts = array_filter(array_map(
+                            fn (mixed $v): string => is_scalar($v) ? trim((string) $v) : '',
+                            $value
+                        ), fn (string $v): bool => $v !== '');
+                        $strVal = implode(', ', $parts);
+                    } elseif (is_scalar($value)) {
+                        $strVal = trim((string) $value);
+                    }
+
+                    if ($strVal !== '') {
+                        $state['answered']++;
+                        $state['counts'][$strVal] = ($state['counts'][$strVal] ?? 0) + 1;
+                        $state['labels'][$strVal] = $strVal;
+                        $state['responses'][] = [
+                            'index' => count($state['responses']) + 1,
+                            'submission_number' => $totalSubmissions,
+                            'value' => $strVal,
+                        ];
+
+                        if (is_numeric($strVal) && is_finite((float) $strVal)) {
+                            $state['values'][] = (float) $strVal;
+                        }
+                    }
+                }
+                unset($state);
+            }
+        }
+
+        $summaries = [];
+        foreach ($questions as $qId => $field) {
+            $state = $states[$qId];
+            $answered = $state['answered'];
+            $values = $state['values'];
+            $n = count($values);
+            $type = $field['type'] ?? 'text';
+
+            if ($n > 0) {
+                sort($values, SORT_NUMERIC);
+                $sum = array_sum($values);
+                $mean = $sum / $n;
+                $median = ($values[(int) floor(($n - 1) / 2)] + $values[(int) floor($n / 2)]) / 2;
+                $min = min($values);
+                $max = max($values);
+                $stddev = sqrt(array_sum(array_map(fn (float $v): float => ($v - $mean) ** 2, $values)) / $n);
+
+                $calculated = [
+                    'mean' => round($mean, 2),
+                    'sum' => round($sum, 2),
+                    'median' => round($median, 2),
+                    'min' => round($min, 2),
+                    'max' => round($max, 2),
+                    'stddev' => round($stddev, 2),
+                    'count' => $answered,
+                ];
+            } else {
+                $calculated = [
+                    'mean' => 0,
+                    'sum' => 0,
+                    'median' => 0,
+                    'min' => 0,
+                    'max' => 0,
+                    'stddev' => 0,
+                    'count' => $answered,
+                ];
+            }
+
+            $grouped = [];
+            if ($type === 'number') {
+                $counts = $state['counts'];
+                ksort($counts, SORT_NUMERIC);
+                foreach ($counts as $valKey => $cnt) {
+                    $grouped[] = [
+                        'value' => (string) $valKey,
+                        'label' => (string) $valKey,
+                        'count' => $cnt,
+                        'percentage' => $answered > 0 ? round($cnt / $answered * 100, 2) : 0.0,
+                    ];
+                }
+            } elseif (in_array($type, ['radio', 'select', 'checkbox'], true)) {
+                $seenOptionValues = [];
+                foreach ($field['options'] ?? [] as $option) {
+                    $optVal = (string) ($option['value'] ?? '');
+                    if ($optVal === '') {
+                        continue;
+                    }
+                    $seenOptionValues[$optVal] = true;
+                    $optLabel = trim(strip_tags((string) ($option['label'] ?? $optVal))) ?: $optVal;
+                    $cnt = $state['counts'][$optVal] ?? 0;
+                    $grouped[] = [
+                        'value' => $optVal,
+                        'label' => $optLabel,
+                        'count' => $cnt,
+                        'percentage' => $answered > 0 ? round($cnt / $answered * 100, 2) : 0.0,
+                    ];
+                }
+                foreach ($state['counts'] as $valKey => $cnt) {
+                    $valStr = (string) $valKey;
+                    if (isset($seenOptionValues[$valStr])) {
+                        continue;
+                    }
+                    $grouped[] = [
+                        'value' => $valStr,
+                        'label' => (string) ($state['labels'][$valStr] ?? $valStr),
+                        'count' => $cnt,
+                        'percentage' => $answered > 0 ? round($cnt / $answered * 100, 2) : 0.0,
+                    ];
+                }
+            } else {
+                foreach ($state['counts'] as $valKey => $cnt) {
+                    $valStr = (string) $valKey;
+                    $grouped[] = [
+                        'value' => $valStr,
+                        'label' => $valStr,
+                        'count' => $cnt,
+                        'percentage' => $answered > 0 ? round($cnt / $answered * 100, 2) : 0.0,
+                    ];
+                }
+            }
+
+            $summaries[$qId] = [
+                'id' => $qId,
+                'type' => $type,
+                'particular' => trim(strip_tags((string) ($field['particular'] ?? ''))),
+                'section_id' => $field['section_id'] ?? null,
+                'section_title' => $field['section_title'] ?? null,
+                'answered' => $answered,
+                'has_numeric_values' => $n > 0,
+                'calculated' => $calculated,
+                'grouped' => $grouped,
+                'responses' => $state['responses'],
+            ];
+        }
+
+        return [
+            'submission_count' => $totalSubmissions,
+            'question_list' => array_values($questions),
+            'questions' => $summaries,
+        ];
     }
 }

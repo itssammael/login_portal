@@ -17,8 +17,8 @@ class SaveFeedbackAnalyticsReportRequest extends FormRequest
         return [
             'configuration' => ['required', 'array:title,description,footer,columns,show_submission_count,refresh_seconds,period_start,period_end,charts,sections'],
             'configuration.title' => ['required', 'string', 'max:500'],
-            'configuration.description' => ['nullable', 'string', 'max:2000'],
-            'configuration.footer' => ['nullable', 'string', 'max:1000'],
+            'configuration.description' => ['nullable', 'string', 'max:20000'],
+            'configuration.footer' => ['nullable', 'string', 'max:10000'],
             'configuration.columns' => ['required', 'integer', 'between:1,12'],
             'configuration.show_submission_count' => ['required', 'boolean'],
             'configuration.refresh_seconds' => ['required', 'integer', 'between:300,86400'],
@@ -35,7 +35,7 @@ class SaveFeedbackAnalyticsReportRequest extends FormRequest
             'configuration.charts.*.color' => ['required', 'regex:/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/'],
             'configuration.charts.*.legend' => ['required', 'boolean'],
             'configuration.charts.*.labels' => ['required', 'boolean'],
-            'configuration.charts.*.annotation' => ['nullable', 'string', 'max:1000'],
+            'configuration.charts.*.annotation' => ['nullable', 'string', 'max:20000'],
             'configuration.charts.*.position' => ['sometimes', 'integer', 'between:0,60'],
             'configuration.charts.*.width' => ['required', 'integer', 'between:1,12'],
             'configuration.charts.*.height' => ['sometimes', 'nullable', 'integer', 'between:1,9'],
@@ -64,7 +64,7 @@ class SaveFeedbackAnalyticsReportRequest extends FormRequest
             'configuration.sections.*.border_color' => ['sometimes', 'nullable', 'regex:/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/'],
             'configuration.sections.*.parent_id' => ['sometimes', 'nullable', 'string', 'alpha_dash', 'max:80'],
             'configuration.sections.*.title' => ['nullable', 'string', 'max:500'],
-            'configuration.sections.*.body' => ['nullable', 'string', 'max:3000'],
+            'configuration.sections.*.body' => ['nullable', 'string', 'max:50000'],
         ];
     }
 }

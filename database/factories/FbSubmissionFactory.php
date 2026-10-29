@@ -22,6 +22,7 @@ class FbSubmissionFactory extends Factory
     public function definition(): array
     {
         return [
+            'reference_code' => fn (): string => FbSubmission::generateUniqueReferenceCode(),
             'feedback_id' => Feedback::factory(),
             'participant_id' => FbParticipant::factory(),
             'data' => [

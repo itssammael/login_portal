@@ -4,6 +4,7 @@ import * as am5 from '@amcharts/amcharts5';
 import * as xy from '@amcharts/amcharts5/xy';
 import * as percent from '@amcharts/amcharts5/percent';
 import * as radar from '@amcharts/amcharts5/radar';
+import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({ chart: Object, result: Object });
 const container = ref(null);
@@ -14,6 +15,7 @@ function render() {
     if (!container.value || !props.result?.rows?.length || ['table', 'kpi'].includes(props.chart.type)) return;
     root = am5.Root.new(container.value);
     const options = props.chart;
+    const plainTitle = stripHtml(options.title || '');
     const rows = props.result.rows;
     let color;
     try {
@@ -34,7 +36,7 @@ function render() {
         const xAxis = chart.xAxes.push(xy.CategoryAxis.new(root, { categoryField: 'label', renderer: radar.AxisRendererCircular.new(root, {}) }));
         const yAxis = chart.yAxes.push(xy.ValueAxis.new(root, { min: 0, renderer: radar.AxisRendererRadial.new(root, {}) }));
         xAxis.data.setAll(rows);
-        series = chart.series.push(radar.RadarLineSeries.new(root, { name: options.title, xAxis, yAxis, categoryXField: 'label', valueYField: 'value', stroke: color, fill: color, tooltip: am5.Tooltip.new(root, { labelText: '{categoryX}: {valueY}' }) }));
+        series = chart.series.push(radar.RadarLineSeries.new(root, { name: plainTitle, xAxis, yAxis, categoryXField: 'label', valueYField: 'value', stroke: color, fill: color, tooltip: am5.Tooltip.new(root, { labelText: '{categoryX}: {valueY}' }) }));
         series.fills.template.setAll({ visible: true, fillOpacity: 0.15 });
         if (options.labels) series.bullets.push(() => am5.Bullet.new(root, { sprite: am5.Label.new(root, { text: '{valueY}', populateText: true, centerX: am5.p50, centerY: am5.p100 }) }));
     } else {
@@ -47,7 +49,7 @@ function render() {
         category.data.setAll(rows);
         const Series = ['line', 'area'].includes(options.type) ? xy.LineSeries : xy.ColumnSeries;
         series = chart.series.push(Series.new(root, {
-            name: options.title, xAxis, yAxis, stroke: color, fill: color,
+            name: plainTitle, xAxis, yAxis, stroke: color, fill: color,
             ...(horizontal ? { valueXField: 'value', categoryYField: 'label' } : { valueYField: 'value', categoryXField: 'label' }),
             tooltip: am5.Tooltip.new(root, { labelText: horizontal ? '{categoryY}: {valueX}' : '{categoryX}: {valueY}' }),
         }));
@@ -69,7 +71,7 @@ onBeforeUnmount(() => root?.dispose());
 <template>
     <section class="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border border-cream-500 bg-white p-5 shadow-sm h-full">
         <div>
-            <h3 class="font-bold text-gray-900">{{ chart.title }}</h3>
+            <h3 class="font-bold text-gray-900 form-rich-content" v-html="sanitizeHtml(chart.title)" />
             <p class="text-xs capitalize text-gray-500">
                 {{ chart.kind === 'custom' ? 'Custom data table' : chart.aggregation }} · {{ result?.answered ?? '—' }} responses
             </p>
@@ -77,8 +79,8 @@ onBeforeUnmount(() => root?.dispose());
         <p v-if="result?.suppressed" class="rounded-xl bg-cream-100 p-6 text-sm text-gray-600">Not enough responses to display this chart safely. Every populated group needs at least five responses.</p>
         <p v-else-if="!result?.rows?.length" class="p-6 text-sm text-gray-500">No data for this reporting period.</p>
         <dl v-else-if="chart.type === 'kpi'" class="flex flex-wrap gap-6"><div v-for="row in result.rows" :key="row.label"><dt class="text-xs text-gray-500">{{ row.label }}</dt><dd class="text-3xl font-black text-forest-900">{{ row.value }}{{ chart.kind !== 'custom' && chart.aggregation === 'percentage' ? '%' : '' }}</dd></div></dl>
-        <div v-if="!['table', 'kpi'].includes(chart.type)" ref="container" class="w-full flex-1 min-h-[160px]" role="img" :aria-label="chart.title" />
-        <details v-if="result?.rows?.length && chart.type !== 'kpi'" :open="chart.type === 'table'" class="text-sm"><summary v-if="chart.type !== 'table'" class="cursor-pointer text-forest-800">View data table</summary><table class="mt-2 w-full text-left"><caption class="sr-only">{{ chart.title }}</caption><thead><tr class="border-b"><th class="py-2">Label</th><th class="py-2 text-right">{{ chart.kind === 'custom' ? 'Value' : chart.aggregation }}</th></tr></thead><tbody><tr v-for="row in result.rows" :key="row.label" class="border-b border-gray-100"><td class="py-2">{{ row.label }}</td><td class="py-2 text-right tabular-nums">{{ row.value }}{{ chart.kind !== 'custom' && chart.aggregation === 'percentage' ? '%' : '' }}</td></tr></tbody></table></details>
-        <p v-if="chart.annotation" class="whitespace-pre-line text-sm leading-6 text-gray-600">{{ chart.annotation }}</p>
+        <div v-if="!['table', 'kpi'].includes(chart.type)" ref="container" class="w-full flex-1 min-h-[160px]" role="img" :aria-label="stripHtml(chart.title)" />
+        <details v-if="result?.rows?.length && chart.type !== 'kpi'" :open="chart.type === 'table'" class="text-sm"><summary v-if="chart.type !== 'table'" class="cursor-pointer text-forest-800">View data table</summary><table class="mt-2 w-full text-left"><caption class="sr-only">{{ stripHtml(chart.title) }}</caption><thead><tr class="border-b"><th class="py-2">Label</th><th class="py-2 text-right">{{ chart.kind === 'custom' ? 'Value' : chart.aggregation }}</th></tr></thead><tbody><tr v-for="row in result.rows" :key="row.label" class="border-b border-gray-100"><td class="py-2">{{ row.label }}</td><td class="py-2 text-right tabular-nums">{{ row.value }}{{ chart.kind !== 'custom' && chart.aggregation === 'percentage' ? '%' : '' }}</td></tr></tbody></table></details>
+        <div v-if="chart.annotation" class="whitespace-pre-line text-sm leading-6 text-gray-600 form-rich-content" v-html="sanitizeHtml(chart.annotation)" />
     </section>
 </template>
