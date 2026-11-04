@@ -72,14 +72,25 @@ function deleteRawCookie(name) {
 }
 
 /**
- * Check if a value is considered non-empty user input.
+ * Check if a value is considered non-empty serializable user input.
+ * Browser File/Blob instances and non-array objects are excluded so binary
+ * uploads or "{}" placeholders are never written to draft cookies/storage.
  */
 function hasMeaningfulValue(val, defaultVal = '') {
     if (val === null || val === undefined || val === '') {
         return false;
     }
+    if (typeof File !== 'undefined' && val instanceof File) {
+        return false;
+    }
+    if (typeof Blob !== 'undefined' && val instanceof Blob) {
+        return false;
+    }
     if (Array.isArray(val)) {
         return val.length > 0;
+    }
+    if (typeof val === 'object') {
+        return false;
     }
     if (defaultVal !== undefined && defaultVal !== '' && String(val) === String(defaultVal)) {
         return false;
@@ -345,7 +356,13 @@ export function useFormDraftCookie(formIdentifier, {
                                 updatedAnswers[fieldId] = [...savedVal];
                                 restoredSomething = true;
                             }
-                        } else if (savedVal !== undefined && savedVal !== null && savedVal !== '') {
+                        } else if (
+                            updatedAnswers[fieldId] !== null
+                            && savedVal !== undefined
+                            && savedVal !== null
+                            && savedVal !== ''
+                            && typeof savedVal !== 'object'
+                        ) {
                             updatedAnswers[fieldId] = savedVal;
                             restoredSomething = true;
                         }

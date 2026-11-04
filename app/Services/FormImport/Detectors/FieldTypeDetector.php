@@ -28,7 +28,11 @@ class FieldTypeDetector
             return 'radio';
         }
 
-        // No options: examine question text for numbers or long-form textarea
+        // No options: examine question text for photo upload, numbers, or long-form textarea
+        if (preg_match('/\b(?:(?:upload|attach|submit|provide)\b[^.?:\n]{0,40}\b(?:photo|photograph|picture|image|snapshot)s?|(?:photo|picture|image)\s+upload)\b/i', $lower)) {
+            return 'photo';
+        }
+
         if (preg_match('/\b(how many|number of|total number|quantity|count of|rate on a scale|score \(?\d|years of|age)\b/i', $lower)) {
             return 'number';
         }

@@ -220,6 +220,12 @@ Route::middleware([
         Route::prefix('feedback')->name('feedback.')->group(function () {
             Route::get('/setup', [FeedbackController::class, 'setup'])->name('setup');
             Route::get('/submissions', [FeedbackController::class, 'submissions'])->name('submissions');
+            Route::get('/submissions/{submission}/photos/{field}/{filename}', [FeedbackController::class, 'submissionPhoto'])
+                ->where([
+                    'field' => '[A-Za-z0-9_-]+',
+                    'filename' => '[A-Za-z0-9._-]+',
+                ])
+                ->name('submissions.photo');
 
             // Events CRUD, API Key & Embed
             Route::post('/events', [FeedbackController::class, 'storeEvent'])->name('events.store');

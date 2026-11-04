@@ -236,7 +236,21 @@ const getAvailableConditionQuestions = (sectionIdx) => {
     if (!formConfig.schema?.fields) return [];
     return formConfig.schema.fields
         .slice(0, sectionIdx)
-        .filter((f) => f.type !== 'section' && ['radio', 'select', 'checkbox', 'text'].includes(f.type));
+        .filter((f) => f.type !== 'section' && ['radio', 'select', 'checkbox', 'text', 'textarea', 'number', 'date', 'photo'].includes(f.type));
+};
+
+const getTriggerFieldType = (fieldId) => {
+    const found = formConfig.schema?.fields?.find((f) => f.id === fieldId);
+    return found?.type || null;
+};
+
+const onConditionFieldChange = (cond) => {
+    if (getTriggerFieldType(cond.field_id) === 'photo') {
+        if (!['is_answered', 'is_not_answered'].includes(cond.operator)) {
+            cond.operator = 'is_answered';
+        }
+        cond.value = '';
+    }
 };
 
 // Available destination options for "Go to section based on answer"
@@ -559,8 +573,21 @@ const onFieldTypeChange = (field) => {
                 { value: 'option_2', label: 'Option 2', is_other: false, goto_section: null },
             ];
         }
+    } else if (field.type === 'photo') {
+        field.options = [];
+        field.option_source = 'static';
+        field.function_ids = [];
+        field.allow_other = false;
+        field.allow_custom_value = false;
+        field.min = null;
+        field.max = null;
+        field._show_branching = false;
     } else if (field.type === 'text_only') {
         field.required = false;
+        field.options = [];
+        field.option_source = 'static';
+        field.allow_other = false;
+        field.allow_custom_value = false;
         if (!field.description_type) {
             field.description_type = 'textarea';
         }
@@ -573,11 +600,12 @@ const addSectionCondition = (sectionField) => {
     if (!sectionField.conditions) sectionField.conditions = [];
     const available = getAvailableConditionQuestions(sectionField.weight - 1);
     const triggerField = available[0] || null;
+    const isPhotoTrigger = triggerField?.type === 'photo';
 
     sectionField.conditions.push({
         field_id: triggerField ? triggerField.id : '',
-        operator: 'equals',
-        value: triggerField?.options?.[0]?.value || '',
+        operator: isPhotoTrigger ? 'is_answered' : 'equals',
+        value: isPhotoTrigger ? '' : (triggerField?.options?.[0]?.value || ''),
     });
     reindexWeights();
 };
@@ -1399,6 +1427,7 @@ onUnmounted(() => {
                                             >
                                                 <select
                                                     v-model="cond.field_id"
+                                                    @change="onConditionFieldChange(cond)"
                                                     class="px-2 py-1 bg-white border border-amber-300 rounded-lg text-xs"
                                                 >
                                                     <option value="" disabled>-- Select Question --</option>
@@ -1415,13 +1444,13 @@ onUnmounted(() => {
                                                     v-model="cond.operator"
                                                     class="px-2 py-1 bg-white border border-amber-300 rounded-lg text-xs font-medium"
                                                 >
-                                                    <option value="equals">is equal to</option>
-                                                    <option value="not_equals">is not equal to</option>
+                                                    <option v-if="getTriggerFieldType(cond.field_id) !== 'photo'" value="equals">is equal to</option>
+                                                    <option v-if="getTriggerFieldType(cond.field_id) !== 'photo'" value="not_equals">is not equal to</option>
                                                     <option value="is_answered">is answered</option>
                                                     <option value="is_not_answered">is not answered</option>
                                                 </select>
 
-                                                <template v-if="['equals', 'not_equals'].includes(cond.operator)">
+                                                <template v-if="getTriggerFieldType(cond.field_id) !== 'photo' && ['equals', 'not_equals'].includes(cond.operator)">
                                                     <select
                                                         v-if="getTriggerFieldOptions(cond.field_id).length > 0"
                                                         v-model="cond.value"
@@ -1517,6 +1546,7 @@ onUnmounted(() => {
                                                 <option value="textarea">📄 Paragraph</option>
                                                 <option value="number">🔢 Linear scale / Number</option>
                                                 <option value="date">📅 Date</option>
+                                                <option value="photo">📷 Photo upload</option>
                                                 <option value="section">〓 Section header</option>
                                                 <option value="text_only">ℹ️ Text only section</option>
                                             </select>
@@ -1721,6 +1751,22 @@ onUnmounted(() => {
                                         </div>
                                     </div>
 
+                                    <!-- Photo Upload Preview Mockup -->
+                                    <div v-else-if="field.type === 'photo'" class="py-2">
+                                        <div class="p-3.5 rounded-xl border border-dashed border-cream-500 bg-cream-100/60 flex items-center justify-between gap-3">
+                                            <div class="flex items-center space-x-2.5 text-xs text-gray-600">
+                                                <span class="size-8 rounded-lg bg-white border border-cream-400 flex items-center justify-center text-base shrink-0">📷</span>
+                                                <div>
+                                                    <div class="font-bold text-gray-800">Respondent attaches 1 photo</div>
+                                                    <div class="text-[11px] text-gray-500">Accepted formats: JPG, PNG, WebP • Max 5 MB</div>
+                                                </div>
+                                            </div>
+                                            <span class="px-2.5 py-1 rounded-lg bg-white border border-cream-400 text-[11px] font-semibold text-gray-500 shrink-0">
+                                                Choose Photo
+                                            </span>
+                                        </div>
+                                    </div>
+
                                     <!-- Card Bottom Actions Toolbar -->
                                     <div class="pt-3 border-t border-cream-300/80 flex items-center justify-end space-x-3 text-gray-600">
                                         <button
@@ -1850,7 +1896,7 @@ onUnmounted(() => {
                                             <span v-if="field.required && field.type !== 'text_only'" class="text-red-500 font-bold ml-0.5 shrink-0">*</span>
                                         </div>
                                         <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-cream-200 text-gray-600 shrink-0">
-                                            {{ field.type === 'text_only' ? 'text only' : field.type }}
+                                            {{ field.type === 'text_only' ? 'text only' : (field.type === 'photo' ? 'photo upload' : field.type) }}
                                         </span>
                                     </div>
 
@@ -1893,6 +1939,11 @@ onUnmounted(() => {
 
                                     <div v-else-if="field.type === 'number'" class="text-xs text-gray-500 italic">
                                         Scale: {{ field.min ?? 1 }} to {{ field.max ?? 5 }}
+                                    </div>
+
+                                    <div v-else-if="field.type === 'photo'" class="text-xs text-gray-500 italic flex items-center space-x-1.5 pt-0.5">
+                                        <span>📷</span>
+                                        <span>Single photo upload (JPG, PNG, WebP • up to 5 MB)</span>
                                     </div>
                                 </div>
                             </div>

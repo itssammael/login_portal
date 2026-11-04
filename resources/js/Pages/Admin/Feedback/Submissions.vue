@@ -4,6 +4,7 @@ import { Head, Link, router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
 import { sanitizeHtml } from '@/Utils/htmlSanitizer';
+import { formatPhotoSize } from '@/Utils/feedbackFormData';
 
 const props = defineProps({
     submissions: {
@@ -163,6 +164,28 @@ const getOptionDisplayLabel = (field, val) => {
     if (!field.options || !Array.isArray(field.options)) return val;
     const match = field.options.find(opt => opt.value === val);
     return match ? match.label : val;
+};
+
+const getPhotoAnswerMeta = (submission, fieldId) => {
+    const val = getFieldValue(submission, fieldId);
+    if (!val || typeof val !== 'object' || Array.isArray(val)) {
+        return null;
+    }
+    if (val.type !== 'photo' || !val.filename || typeof val.filename !== 'string') {
+        return null;
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(val.filename)) {
+        return null;
+    }
+
+    return {
+        url: route('admin.feedback.submissions.photo', [submission.id, fieldId, val.filename]),
+        displayName: (typeof val.original_name === 'string' && val.original_name.trim() !== '')
+            ? val.original_name
+            : val.filename,
+        sizeLabel: val.size ? formatPhotoSize(val.size) : null,
+        mimeType: typeof val.mime_type === 'string' ? val.mime_type : null,
+    };
 };
 </script>
 
@@ -497,6 +520,22 @@ const getOptionDisplayLabel = (field, val) => {
                                         </div>
                                     </div>
 
+                                    <!-- Photo Upload Question Summary Card -->
+                                    <div v-else-if="q.is_photo" class="p-3 bg-cream-100/70 rounded-xl border border-cream-300 text-xs text-gray-600 space-y-1">
+                                        <div class="flex items-center justify-between gap-2">
+                                            <span class="font-semibold text-gray-800 flex items-center gap-1.5">
+                                                <span>📷</span>
+                                                <span>Photo Upload Responses</span>
+                                            </span>
+                                            <span class="px-2 py-0.5 rounded-full bg-forest-900 text-white font-mono text-[11px] font-bold">
+                                                {{ q.answered_count }} uploaded
+                                            </span>
+                                        </div>
+                                        <p class="text-[11px] text-gray-500">
+                                            Photo attachments are excluded from text and percentage charts. Open the Individual Responses tab to preview and inspect submitted images.
+                                        </p>
+                                    </div>
+
                                     <!-- Free-text / Qualitative Question Card -->
                                     <div v-else class="p-3 bg-cream-100/70 rounded-xl border border-cream-300 text-xs text-gray-600 space-y-1">
                                         <div class="font-semibold text-gray-800">Qualitative Text Response</div>
@@ -698,9 +737,52 @@ const getOptionDisplayLabel = (field, val) => {
                                 <!-- Text Only Instructional Section -->
                                 <div v-if="field.type === 'text_only'" class="text-xs text-gray-700 bg-cream-100 p-3 rounded-xl border border-cream-400/40 form-rich-content overflow-x-auto" v-html="sanitizeHtml(field.description || 'Instructional text block (no response required).')"></div>
 
-                                <!-- Text Type -->
-                                <div v-else-if="field.type === 'text'" class="text-xs text-gray-800 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-wrap">
-                                    {{ getFieldValue(selectedSubmission, field.id) || 'No response provided.' }}
+                                <!-- Text / Textarea / Number / Date Type -->
+                                <div v-else-if="['text', 'textarea', 'number', 'date'].includes(field.type)" class="text-xs text-gray-800 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-wrap">
+                                    {{ (getFieldValue(selectedSubmission, field.id) !== null && getFieldValue(selectedSubmission, field.id) !== '') ? getFieldValue(selectedSubmission, field.id) : 'No response provided.' }}
+                                </div>
+
+                                <!-- Photo Upload Answer -->
+                                <div v-else-if="field.type === 'photo'">
+                                    <div
+                                        v-if="getPhotoAnswerMeta(selectedSubmission, field.id)"
+                                        class="p-3.5 bg-cream-100/70 rounded-xl border border-cream-400/60 space-y-3"
+                                    >
+                                        <a
+                                            :href="getPhotoAnswerMeta(selectedSubmission, field.id).url"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="inline-block rounded-xl overflow-hidden border border-cream-400 bg-white shadow-2xs hover:ring-2 hover:ring-forest-600 transition"
+                                        >
+                                            <img
+                                                :src="getPhotoAnswerMeta(selectedSubmission, field.id).url"
+                                                :alt="getPhotoAnswerMeta(selectedSubmission, field.id).displayName"
+                                                loading="lazy"
+                                                class="max-h-56 w-auto object-contain block"
+                                            />
+                                        </a>
+                                        <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                            <div class="min-w-0">
+                                                <span class="font-semibold text-gray-900 break-all">
+                                                    {{ getPhotoAnswerMeta(selectedSubmission, field.id).displayName }}
+                                                </span>
+                                                <span v-if="getPhotoAnswerMeta(selectedSubmission, field.id).sizeLabel" class="text-gray-500 ml-1.5 font-mono text-[11px]">
+                                                    ({{ getPhotoAnswerMeta(selectedSubmission, field.id).sizeLabel }})
+                                                </span>
+                                            </div>
+                                            <a
+                                                :href="getPhotoAnswerMeta(selectedSubmission, field.id).url"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="inline-flex items-center px-3 py-1.5 rounded-xl bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold transition shrink-0"
+                                            >
+                                                View Full Image ↗
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <div v-else class="text-xs text-gray-400 italic bg-cream-100/60 p-3 rounded-xl border border-cream-300">
+                                        No photo uploaded.
+                                    </div>
                                 </div>
 
                                 <!-- Radio or Select Type with Display Label -->

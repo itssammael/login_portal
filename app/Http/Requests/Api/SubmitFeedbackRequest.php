@@ -4,6 +4,7 @@ namespace App\Http\Requests\Api;
 
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
 
 class SubmitFeedbackRequest extends FormRequest
 {
@@ -122,12 +123,39 @@ class SubmitFeedbackRequest extends FormRequest
     }
 
     /**
-     * Extract feedback answers from request.
+     * Configure the validator instance to reject unexpected top-level file keys.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator): void {
+            foreach (array_keys($this->allFiles()) as $topLevelKey) {
+                if (! in_array($topLevelKey, ['answers', 'data'], true)) {
+                    $validator->errors()->add(
+                        (string) $topLevelKey,
+                        "Unexpected file upload parameter '{$topLevelKey}'. Submit photo answers under answers[<question_id>]."
+                    );
+                }
+            }
+        });
+    }
+
+    /**
+     * Extract feedback answers (including uploaded files) from request.
      *
      * @return array<string, mixed>
      */
     public function getAnswers(): array
     {
+        $all = $this->all();
+
+        if (array_key_exists('answers', $all) && is_array($all['answers'])) {
+            return $all['answers'];
+        }
+
+        if (array_key_exists('data', $all) && is_array($all['data'])) {
+            return $all['data'];
+        }
+
         $answers = $this->input('answers');
         if ($answers === null) {
             $answers = $this->input('data');

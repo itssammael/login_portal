@@ -17,14 +17,17 @@ use App\Models\FbFunction;
 use App\Models\FbSubmission;
 use App\Models\Feedback;
 use App\Services\FeedbackSchemaValidator;
+use App\Services\FeedbackSubmissionPersistenceService;
 use App\Services\FormImport\FormImportService;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class FeedbackController extends Controller
 {
@@ -235,11 +238,35 @@ class FeedbackController extends Controller
                             'particular' => $particular,
                             'type' => $type,
                             'is_choice' => true,
+                            'is_photo' => false,
                             'is_multiselect' => $isCheckbox,
                             'total_submissions' => $totalFilteredSubmissions,
                             'answered_count' => $answeredCount,
                             'unanswered_count' => max(0, $totalFilteredSubmissions - $answeredCount),
                             'options' => $optionsList,
+                        ];
+                    } elseif ($type === 'photo') {
+                        $answeredCount = 0;
+                        foreach ($allSubmissionsData as $submissionData) {
+                            if (is_array($submissionData) && array_key_exists($fieldId, $submissionData)) {
+                                $val = $submissionData[$fieldId];
+                                if (is_array($val) && ($val['type'] ?? null) === 'photo' && ! empty($val['path'])) {
+                                    $answeredCount++;
+                                }
+                            }
+                        }
+
+                        $compiledQuestions[] = [
+                            'id' => $fieldId,
+                            'particular' => $particular,
+                            'type' => $type,
+                            'is_choice' => false,
+                            'is_photo' => true,
+                            'is_multiselect' => false,
+                            'total_submissions' => $totalFilteredSubmissions,
+                            'answered_count' => $answeredCount,
+                            'unanswered_count' => max(0, $totalFilteredSubmissions - $answeredCount),
+                            'options' => [],
                         ];
                     } else {
                         // Free-text, date, or number questions
@@ -258,6 +285,7 @@ class FeedbackController extends Controller
                             'particular' => $particular,
                             'type' => $type,
                             'is_choice' => false,
+                            'is_photo' => false,
                             'is_multiselect' => false,
                             'total_submissions' => $totalFilteredSubmissions,
                             'answered_count' => $answeredCount,
@@ -296,6 +324,79 @@ class FeedbackController extends Controller
             ),
             'compiledResponses' => $compiledResponses,
             'compiledResponseMeta' => $compiledResponseMeta,
+        ]);
+    }
+
+    /**
+     * Serve an uploaded submission photo to an authorized administrator.
+     */
+    public function submissionPhoto(
+        Request $request,
+        FbSubmission $submission,
+        string $field,
+        string $filename
+    ): StreamedResponse {
+        abort_unless($request->user()?->canAccessAdmin(), 403);
+
+        $submission->loadMissing('feedback');
+        $feedback = $submission->feedback;
+        if (! $feedback || ! is_array($feedback->schema)) {
+            abort(403);
+        }
+
+        $schemaFields = $feedback->schema['fields'] ?? [];
+        $matchedField = collect($schemaFields)->first(
+            fn ($item): bool => is_array($item) && (string) ($item['id'] ?? '') === $field && ($item['type'] ?? null) === 'photo'
+        );
+
+        if (! $matchedField) {
+            abort(403);
+        }
+
+        $submissionData = $submission->data;
+        $photoData = is_array($submissionData) ? ($submissionData[$field] ?? null) : null;
+
+        if (! is_array($photoData) || ($photoData['type'] ?? null) !== 'photo') {
+            abort(403);
+        }
+
+        $disk = (string) ($photoData['disk'] ?? '');
+        $storedPath = (string) ($photoData['path'] ?? '');
+        $storedFilename = (string) ($photoData['filename'] ?? basename($storedPath));
+        $safeField = preg_replace('/[^a-zA-Z0-9_-]/', '', $field) ?: '';
+
+        $expectedPrefix = FeedbackSubmissionPersistenceService::STORAGE_BASE_DIR
+            ."/{$submission->feedback_id}/{$submission->id}/{$safeField}/";
+
+        if (
+            $disk !== FeedbackSubmissionPersistenceService::STORAGE_DISK ||
+            $storedPath === '' ||
+            str_contains($storedPath, '..') ||
+            ! str_starts_with($storedPath, $expectedPrefix) ||
+            basename($storedPath) !== $filename ||
+            $storedFilename !== $filename ||
+            $storedPath !== $expectedPrefix.$filename
+        ) {
+            abort(403);
+        }
+
+        if (! Storage::disk($disk)->exists($storedPath)) {
+            abort(404);
+        }
+
+        $detectedMime = strtolower((string) Storage::disk($disk)->mimeType($storedPath));
+        if (! in_array($detectedMime, FeedbackSchemaValidator::PHOTO_ALLOWED_MIMES, true)) {
+            abort(403);
+        }
+
+        $rawOriginalName = (string) ($photoData['original_name'] ?? $filename);
+        $safeInlineName = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($rawOriginalName)) ?: $filename;
+
+        return Storage::disk($disk)->response($storedPath, $safeInlineName, [
+            'Content-Type' => $detectedMime,
+            'Content-Disposition' => 'inline; filename="'.$safeInlineName.'"',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store, max-age=0',
         ]);
     }
 

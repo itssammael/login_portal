@@ -5,11 +5,46 @@ namespace App\Services;
 use App\Models\Agency;
 use App\Models\Designation;
 use App\Models\FbEvent;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class FeedbackSchemaValidator
 {
+    /**
+     * Maximum uploaded photo size in kilobytes (5 MB).
+     */
+    public const PHOTO_MAX_KILOBYTES = 5120;
+
+    /**
+     * Maximum uploaded photo size in bytes (5 MB).
+     */
+    public const PHOTO_MAX_BYTES = 5242880;
+
+    /**
+     * Explicitly supported raster image MIME types for photo upload answers.
+     *
+     * @var array<int, string>
+     */
+    public const PHOTO_ALLOWED_MIMES = [
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+    ];
+
+    /**
+     * Explicitly supported raster image file extensions for photo upload answers.
+     *
+     * @var array<int, string>
+     */
+    public const PHOTO_ALLOWED_EXTENSIONS = [
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+    ];
+
     /**
      * The supported field types.
      *
@@ -23,6 +58,7 @@ class FeedbackSchemaValidator
         'radio',
         'select',
         'checkbox',
+        'photo',
         'section',
         'text_only',
     ];
@@ -96,8 +132,9 @@ class FeedbackSchemaValidator
             }
 
             $particular = trim((string) ($field['particular'] ?? ''));
-            $cleanParticular = trim(strip_tags($particular)) ?: 'Question #'.$questionNum;
-            if ($particular === '') {
+            $strippedParticular = trim(strip_tags($particular));
+            $cleanParticular = $strippedParticular !== '' ? $strippedParticular : 'Question #'.$questionNum;
+            if ($particular === '' || $strippedParticular === '') {
                 $err = 'Question #'.$questionNum.' requires a prompt or question title.';
                 throw ValidationException::withMessages([
                     "schema.fields.{$index}.particular" => $err,
@@ -136,19 +173,75 @@ class FeedbackSchemaValidator
                 ]);
             }
 
+            if (
+                array_key_exists('required', $field) &&
+                $field['required'] !== null &&
+                ! is_bool($field['required']) &&
+                ! in_array($field['required'], [0, 1, '0', '1'], true)
+            ) {
+                $err = 'Question #'.$questionNum." ('{$cleanParticular}'): The required flag must be a boolean.";
+                throw ValidationException::withMessages([
+                    "schema.fields.{$index}.required" => $err,
+                    "fields.{$index}.required" => $err,
+                ]);
+            }
+
+            if ($type === 'photo') {
+                if (! empty($field['options'])) {
+                    $err = 'Question #'.$questionNum." ('{$cleanParticular}'): Photo upload questions cannot define choice options.";
+                    throw ValidationException::withMessages([
+                        "schema.fields.{$index}.options" => $err,
+                        "fields.{$index}.options" => $err,
+                    ]);
+                }
+
+                $rawPhotoOptionSource = isset($field['option_source']) ? trim((string) $field['option_source']) : 'static';
+                if ($rawPhotoOptionSource !== '' && $rawPhotoOptionSource !== 'static') {
+                    $err = 'Question #'.$questionNum." ('{$cleanParticular}'): Photo upload questions cannot use a dynamic option source.";
+                    throw ValidationException::withMessages([
+                        "schema.fields.{$index}.option_source" => $err,
+                        "fields.{$index}.option_source" => $err,
+                    ]);
+                }
+
+                if (! empty($field['allow_other']) || ! empty($field['allow_custom_value'])) {
+                    $err = 'Question #'.$questionNum." ('{$cleanParticular}'): Photo upload questions do not support custom/other option inputs.";
+                    throw ValidationException::withMessages([
+                        "schema.fields.{$index}.allow_other" => $err,
+                        "fields.{$index}.allow_other" => $err,
+                    ]);
+                }
+
+                if (! empty($field['multiple'])) {
+                    $err = 'Question #'.$questionNum." ('{$cleanParticular}'): Photo upload questions accept only one photo per answer.";
+                    throw ValidationException::withMessages([
+                        "schema.fields.{$index}.multiple" => $err,
+                        "fields.{$index}.multiple" => $err,
+                    ]);
+                }
+
+                if (($field['min'] ?? null) !== null || ($field['max'] ?? null) !== null) {
+                    $err = 'Question #'.$questionNum." ('{$cleanParticular}'): Photo upload questions cannot define numeric scale bounds.";
+                    throw ValidationException::withMessages([
+                        "schema.fields.{$index}.min" => $err,
+                        "fields.{$index}.min" => $err,
+                    ]);
+                }
+            }
+
             $weight = isset($field['weight']) && is_numeric($field['weight']) ? (int) $field['weight'] : $questionNum;
             $required = in_array($type, ['section', 'text_only'], true) ? false : (bool) ($field['required'] ?? false);
-            $allowOther = (bool) ($field['allow_other'] ?? false);
-            $allowCustomValue = (bool) ($field['allow_custom_value'] ?? false);
+            $allowOther = $type === 'photo' ? false : (bool) ($field['allow_other'] ?? false);
+            $allowCustomValue = $type === 'photo' ? false : (bool) ($field['allow_custom_value'] ?? false);
             $placeholder = isset($field['placeholder']) && is_string($field['placeholder']) ? trim($field['placeholder']) : null;
             $description = isset($field['description']) && is_string($field['description']) ? trim($field['description']) : null;
             $descriptionType = isset($field['description_type']) && in_array($field['description_type'], ['text', 'textarea'], true)
                 ? $field['description_type']
                 : ($type === 'text_only' || ($type === 'section' && $description !== null && str_contains($description, "\n")) ? 'textarea' : 'text');
-            $min = isset($field['min']) && is_numeric($field['min']) ? (float) $field['min'] : null;
-            $max = isset($field['max']) && is_numeric($field['max']) ? (float) $field['max'] : null;
+            $min = $type === 'photo' ? null : (isset($field['min']) && is_numeric($field['min']) ? (float) $field['min'] : null);
+            $max = $type === 'photo' ? null : (isset($field['max']) && is_numeric($field['max']) ? (float) $field['max'] : null);
 
-            $optionSource = trim((string) ($field['option_source'] ?? 'static'));
+            $optionSource = $type === 'photo' ? 'static' : trim((string) ($field['option_source'] ?? 'static'));
             if (! in_array($optionSource, self::SUPPORTED_OPTION_SOURCES, true)) {
                 $optionSource = 'static';
             }
@@ -422,9 +515,13 @@ class FeedbackSchemaValidator
             $operator = $cond['operator'] ?? 'equals';
             $targetVal = (string) ($cond['value'] ?? '');
             $actualVal = $data[$triggerFieldId] ?? null;
+            $isPhotoObject = $actualVal instanceof UploadedFile
+                || (is_array($actualVal) && ($actualVal['type'] ?? null) === 'photo');
 
             if ($operator === 'equals') {
-                if (is_array($actualVal)) {
+                if ($isPhotoObject) {
+                    $matches = false;
+                } elseif (is_array($actualVal)) {
                     $matches = in_array($targetVal, array_map('strval', $actualVal), true);
                 } else {
                     $matches = (string) $actualVal === $targetVal;
@@ -433,7 +530,9 @@ class FeedbackSchemaValidator
                     return false;
                 }
             } elseif ($operator === 'not_equals') {
-                if (is_array($actualVal)) {
+                if ($isPhotoObject) {
+                    $matches = false;
+                } elseif (is_array($actualVal)) {
                     $matches = in_array($targetVal, array_map('strval', $actualVal), true);
                 } else {
                     $matches = (string) $actualVal === $targetVal;
@@ -442,10 +541,12 @@ class FeedbackSchemaValidator
                     return false;
                 }
             } elseif ($operator === 'contains') {
-                if (is_array($actualVal)) {
+                if ($isPhotoObject) {
+                    $matches = false;
+                } elseif (is_array($actualVal)) {
                     $matches = false;
                     foreach ($actualVal as $item) {
-                        if (str_contains(strtolower((string) $item), strtolower($targetVal))) {
+                        if (is_scalar($item) && str_contains(strtolower((string) $item), strtolower($targetVal))) {
                             $matches = true;
                             break;
                         }
@@ -457,10 +558,12 @@ class FeedbackSchemaValidator
                     return false;
                 }
             } elseif ($operator === 'not_contains') {
-                if (is_array($actualVal)) {
+                if ($isPhotoObject) {
+                    $matches = false;
+                } elseif (is_array($actualVal)) {
                     $matches = false;
                     foreach ($actualVal as $item) {
-                        if (str_contains(strtolower((string) $item), strtolower($targetVal))) {
+                        if (is_scalar($item) && str_contains(strtolower((string) $item), strtolower($targetVal))) {
                             $matches = true;
                             break;
                         }
@@ -472,11 +575,27 @@ class FeedbackSchemaValidator
                     return false;
                 }
             } elseif ($operator === 'is_answered') {
-                if ($actualVal === null || $actualVal === '' || (is_array($actualVal) && empty($actualVal))) {
+                if ($actualVal instanceof UploadedFile) {
+                    if (! $actualVal->isValid()) {
+                        return false;
+                    }
+                } elseif (is_array($actualVal) && ($actualVal['type'] ?? null) === 'photo') {
+                    if (empty($actualVal['path'])) {
+                        return false;
+                    }
+                } elseif ($actualVal === null || $actualVal === '' || (is_array($actualVal) && empty($actualVal))) {
                     return false;
                 }
             } elseif ($operator === 'is_not_answered') {
-                if ($actualVal !== null && $actualVal !== '' && (! is_array($actualVal) || ! empty($actualVal))) {
+                if ($actualVal instanceof UploadedFile) {
+                    if ($actualVal->isValid()) {
+                        return false;
+                    }
+                } elseif (is_array($actualVal) && ($actualVal['type'] ?? null) === 'photo') {
+                    if (! empty($actualVal['path'])) {
+                        return false;
+                    }
+                } elseif ($actualVal !== null && $actualVal !== '' && (! is_array($actualVal) || ! empty($actualVal))) {
                     return false;
                 }
             }
@@ -541,7 +660,9 @@ class FeedbackSchemaValidator
                 $fVal = $data[$f['id']] ?? null;
                 if ($fVal !== null && ! empty($f['options'])) {
                     foreach ($f['options'] as $opt) {
-                        $isMatch = is_array($fVal) ? in_array($opt['value'], $fVal, true) : (string) $fVal === (string) $opt['value'];
+                        $isMatch = is_array($fVal)
+                            ? in_array($opt['value'], $fVal, true)
+                            : (is_scalar($fVal) && (string) $fVal === (string) $opt['value']);
                         if ($isMatch && ! empty($opt['goto_section'])) {
                             $nextSecTarget = $opt['goto_section'];
                             break 2;
@@ -603,16 +724,32 @@ class FeedbackSchemaValidator
 
         $errors = [];
 
-        // Check for unknown fields (ignoring valid _other suffix keys)
+        // Check for unknown fields and disallow file uploads on non-photo fields
         foreach ($data as $key => $val) {
             if (str_ends_with($key, '_other')) {
                 $baseKey = substr($key, 0, -6);
                 if (isset($fieldMap[$baseKey])) {
+                    if ($this->valueContainsUploadedFile($val)) {
+                        $label = strip_tags((string) ($fieldMap[$baseKey]['particular'] ?? $baseKey));
+                        $errors["answers.{$key}"] = "File uploads are not accepted for '{$label}'.";
+                        $errors["data.{$key}"] = "File uploads are not accepted for '{$label}'.";
+                    }
+
                     continue;
                 }
             }
+
             if (! isset($fieldMap[$key])) {
                 $errors["answers.{$key}"] = "Unknown field '{$key}' is not part of this feedback form.";
+                $errors["data.{$key}"] = "Unknown field '{$key}' is not part of this feedback form.";
+
+                continue;
+            }
+
+            if (($fieldMap[$key]['type'] ?? null) !== 'photo' && $this->valueContainsUploadedFile($val)) {
+                $label = strip_tags((string) ($fieldMap[$key]['particular'] ?? $key));
+                $errors["answers.{$key}"] = "File uploads are not accepted for '{$label}'.";
+                $errors["data.{$key}"] = "File uploads are not accepted for '{$label}'.";
             }
         }
 
@@ -803,6 +940,16 @@ class FeedbackSchemaValidator
                         }
                     }
                     break;
+
+                case 'photo':
+                    $photoError = $this->validatePhotoUploadValue($value, $particular);
+                    if ($photoError !== null) {
+                        $errors["answers.{$id}"] = $photoError;
+                        $errors["data.{$id}"] = $photoError;
+                    } else {
+                        $sanitized[$id] = $value;
+                    }
+                    break;
             }
         }
 
@@ -811,5 +958,101 @@ class FeedbackSchemaValidator
         }
 
         return $sanitized;
+    }
+
+    /**
+     * Determine whether a submitted value is or contains an UploadedFile instance.
+     */
+    protected function valueContainsUploadedFile(mixed $value): bool
+    {
+        if ($value instanceof UploadedFile) {
+            return true;
+        }
+
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                if ($this->valueContainsUploadedFile($item)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Validate a single photo answer upload and return an error message on failure.
+     */
+    protected function validatePhotoUploadValue(mixed $value, string $particular): ?string
+    {
+        if (is_array($value) && $this->valueContainsUploadedFile($value)) {
+            return "Only one photo may be uploaded for '{$particular}'.";
+        }
+
+        if (! ($value instanceof UploadedFile)) {
+            return "The '{$particular}' field must be an uploaded photo file (JPEG, PNG, or WebP).";
+        }
+
+        if (! $value->isValid()) {
+            if (in_array($value->getError(), [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)) {
+                return "The '{$particular}' photo may not be greater than 5 MB.";
+            }
+
+            return "The uploaded photo for '{$particular}' is invalid or failed to upload.";
+        }
+
+        $sizeBytes = $value->getSize();
+        if ($sizeBytes === false || $sizeBytes <= 0) {
+            return "The uploaded photo for '{$particular}' cannot be empty.";
+        }
+
+        if ($sizeBytes > self::PHOTO_MAX_BYTES) {
+            return "The '{$particular}' photo may not be greater than 5 MB.";
+        }
+
+        $clientExt = strtolower(trim($value->getClientOriginalExtension()));
+        if ($clientExt !== '' && ! in_array($clientExt, self::PHOTO_ALLOWED_EXTENSIONS, true)) {
+            return "The '{$particular}' photo must be a JPEG, PNG, or WebP image.";
+        }
+
+        $detectedMime = strtolower((string) $value->getMimeType());
+        if (! in_array($detectedMime, self::PHOTO_ALLOWED_MIMES, true)) {
+            return "The '{$particular}' photo must be a JPEG, PNG, or WebP image.";
+        }
+
+        $validator = Validator::make(
+            ['photo' => $value],
+            [
+                'photo' => [
+                    'required',
+                    'file',
+                    'image',
+                    'mimes:jpg,jpeg,png,webp',
+                    'extensions:jpg,jpeg,png,webp',
+                    'max:'.self::PHOTO_MAX_KILOBYTES,
+                ],
+            ]
+        );
+
+        if ($validator->fails()) {
+            if ($sizeBytes > self::PHOTO_MAX_BYTES) {
+                return "The '{$particular}' photo may not be greater than 5 MB.";
+            }
+
+            return "The '{$particular}' photo must be a valid JPEG, PNG, or WebP image (max 5 MB).";
+        }
+
+        $realPath = $value->getRealPath();
+        $imageInfo = is_string($realPath) && $realPath !== '' ? @getimagesize($realPath) : false;
+        if (
+            ! is_array($imageInfo) ||
+            ($imageInfo[0] ?? 0) < 1 ||
+            ($imageInfo[1] ?? 0) < 1 ||
+            ! in_array($imageInfo[2] ?? null, [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_WEBP], true)
+        ) {
+            return "The '{$particular}' photo must be a valid raster JPEG, PNG, or WebP image.";
+        }
+
+        return null;
     }
 }
