@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue';
 import { Head, Link, router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
+import FeedbackExportModal from '@/Components/Feedback/FeedbackExportModal.vue';
 import { sanitizeHtml } from '@/Utils/htmlSanitizer';
 import { formatPhotoSize } from '@/Utils/feedbackFormData';
 
@@ -42,6 +43,10 @@ const props = defineProps({
     compiledResponseMeta: {
         type: Object,
         default: null,
+    },
+    exportableFields: {
+        type: Object,
+        default: () => ({ metadata: [], questions: [] }),
     },
 });
 
@@ -89,6 +94,7 @@ const switchTab = (tab) => {
     if (tab === currentTab.value) return;
 
     closeDetailModal();
+    closeExportModal();
 
     router.get(route('admin.feedback.submissions'), {
         ...filterForm.value,
@@ -127,6 +133,26 @@ const resetFilters = () => {
         preserveState: true,
         preserveScroll: true,
     });
+};
+
+const exportableCount = computed(() => {
+    if (currentTab.value === 'compiled') {
+        return Number(props.compiledResponseMeta?.total_filtered_submissions ?? 0);
+    }
+
+    return Number(props.submissions?.total ?? 0);
+});
+
+const showExportModal = ref(false);
+const exportModalFormat = ref('csv');
+
+const openExportModal = (format = 'csv') => {
+    exportModalFormat.value = format === 'pdf' ? 'pdf' : 'csv';
+    showExportModal.value = true;
+};
+
+const closeExportModal = () => {
+    showExportModal.value = false;
 };
 
 // Response Detail Modal
@@ -396,6 +422,52 @@ const getPhotoAnswerMeta = (submission, fieldId) => {
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                                 </svg>
                                 <span>Clear Filters</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Export Controls (shown whenever matching submissions exist) -->
+                    <div
+                        v-if="exportableCount > 0"
+                        class="mt-3.5 pt-3.5 border-t border-cream-500/40 flex flex-wrap items-center justify-between gap-3"
+                    >
+                        <div class="flex items-center gap-2 text-xs text-gray-700">
+                            <span class="inline-flex items-center justify-center size-6 rounded-lg bg-forest-900/10 text-forest-900 shrink-0">
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                                </svg>
+                            </span>
+                            <span>
+                                Export all
+                                <strong class="font-bold text-forest-900">{{ exportableCount }}</strong>
+                                matching {{ exportableCount === 1 ? 'submission' : 'submissions' }}
+                                <span class="text-gray-500">
+                                    ({{ currentTab === 'compiled' ? 'compiled event scope & responses' : 'across all pages matching current filters' }})
+                                </span>
+                            </span>
+                        </div>
+
+                        <div class="flex items-center flex-wrap gap-2">
+                            <button
+                                type="button"
+                                @click="openExportModal('csv')"
+                                class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#fffef9] hover:bg-cream-100 text-forest-900 border border-cream-500 rounded-xl text-xs font-bold shadow-2xs transition cursor-pointer"
+                            >
+                                <svg class="size-3.5 text-emerald-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 0 1-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0 1 12 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125M12 10.875v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125M13.125 12h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125M20.625 12c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5M12 14.625v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 14.625c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m0 1.5v-1.5m0 0c0-.621.504-1.125 1.125-1.125m0 0h7.5" />
+                                </svg>
+                                <span>Export CSV (Excel)</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                @click="openExportModal('pdf')"
+                                class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-forest-900 hover:bg-forest-950 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                            >
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                                </svg>
+                                <span>Export PDF</span>
                             </button>
                         </div>
                     </div>
@@ -824,5 +896,16 @@ const getPhotoAnswerMeta = (submission, fieldId) => {
                 </div>
             </div>
         </div>
+
+        <!-- Export Field Builder Modal -->
+        <FeedbackExportModal
+            :show="showExportModal"
+            :initial-format="exportModalFormat"
+            :exportable-count="exportableCount"
+            :exportable-fields="exportableFields"
+            :filters="filters"
+            :current-tab="currentTab"
+            @close="closeExportModal"
+        />
     </AppLayout>
 </template>
