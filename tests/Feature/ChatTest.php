@@ -432,6 +432,75 @@ class ChatTest extends TestCase
         $forbiddenResponse->assertForbidden();
     }
 
+    public function test_async_messages_endpoint_returns_metadata_and_marks_conversation_read_when_requested(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $conversation = Conversation::create(['type' => 'direct', 'last_message_at' => now()]);
+        $participant1 = ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $user1->id,
+            'last_read_at' => null,
+        ]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $user2->id,
+            'last_read_at' => null,
+        ]);
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user2->id,
+            'body' => 'Hello from User 2',
+            'type' => 'text',
+        ]);
+
+        $this->assertNull($participant1->fresh()->last_read_at);
+
+        // Fetch initial messages with metadata and mark_read flag
+        $response = $this->actingAs($user1)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+            'include_meta' => 1,
+            'mark_read' => 1,
+        ]));
+
+        $response->assertOk();
+        $response->assertJsonStructure([
+            'messages',
+            'has_more',
+            'oldest_id',
+            'conversation' => [
+                'id',
+                'type',
+                'title',
+                'participants',
+                'shared_attachments',
+            ],
+        ]);
+
+        $data = $response->json();
+        $this->assertCount(1, $data['messages']);
+        $this->assertEquals('Hello from User 2', $data['messages'][0]['body']);
+        $this->assertEquals($conversation->id, $data['conversation']['id']);
+
+        // Verify participant last_read_at was updated
+        $this->assertNotNull($participant1->fresh()->last_read_at);
+        $this->assertDatabaseHas('message_reads', [
+            'message_id' => $message->id,
+            'user_id' => $user1->id,
+        ]);
+
+        // When fetching pagination messages without include_meta, conversation meta is omitted
+        $pageResponse = $this->actingAs($user1)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+            'before_id' => $message->id,
+        ]));
+
+        $pageResponse->assertOk();
+        $this->assertArrayNotHasKey('conversation', $pageResponse->json());
+    }
+
     public function test_lazy_contact_search_endpoint_returns_filtered_results(): void
     {
         $currentUser = User::factory()->create(['name' => 'John Doe', 'email' => 'john@example.com']);

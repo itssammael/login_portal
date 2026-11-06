@@ -296,79 +296,14 @@ class ChatController extends Controller
                     return $this->formatMessage($message, $currentUser, $senderKey, $otherUserLastReadAt);
                 });
 
-                $participantsByUserId = $convModel->participants->keyBy('user_id');
-                $participants = $convModel->users->map(function (User $u) use ($participantsByUserId): array {
-                    $p = $participantsByUserId->get($u->id);
-                    $role = $p?->role ?? 'member';
-
-                    return [
-                        'id' => $u->id,
-                        'name' => $u->name,
-                        'username' => $u->username,
-                        'email' => $u->email,
-                        'profile_photo_url' => $u->profile_photo_url,
-                        'is_online' => $u->is_online,
-                        'last_seen_at' => $u->last_seen_at?->diffForHumans(),
-                        'role' => $role,
-                        'is_admin' => $role === 'admin',
-                        'is_banned' => (bool) $u->is_banned,
-                    ];
-                })->values();
-
-                $sharedAttachments = $convModel->messages()
-                    ->visibleToUser($currentUser->id)
-                    ->where('is_deleted', false)
-                    ->whereNotNull('attachment_path')
-                    ->orderByDesc('created_at')
-                    ->limit(50)
-                    ->get()
-                    ->map(fn (Message $m): array => [
-                        'id' => $m->id,
-                        'type' => $m->type,
-                        'name' => $m->attachment_name ?? 'Attachment',
-                        'url' => $m->attachment_url,
-                        'created_at' => $m->created_at->format('M j, g:i a'),
-                    ])
-                    ->values();
-
-                $totalMessages = $convModel->messages()
-                    ->where(function ($query) use ($currentUser): void {
-                        $query->where('type', '!=', 'system')
-                            ->orWhere('sender_id', '!=', $currentUser->id);
-                    })
-                    ->count();
-
-                $currentParticipant = $convModel->participants->firstWhere('user_id', $currentUser->id);
-                $isActiveMuted = (bool) ($currentParticipant?->is_muted || $currentParticipant?->notification_preference === ConversationParticipant::NOTIFICATION_NONE);
-                $activeNotifPref = $currentParticipant?->notification_preference ?? ($isActiveMuted ? 'none' : 'all');
-
-                $activeConversation = [
-                    'id' => $convModel->id,
-                    'type' => $convModel->type,
-                    'title' => $convModel->type === 'system' ? 'System Notifications' : ($convModel->type === 'group' ? $convModel->title : ($otherUser?->name ?? 'Conversation')),
-                    'is_system' => $convModel->type === 'system',
-                    'is_pinned' => (bool) ($currentParticipant?->is_pinned ?? false),
-                    'is_muted' => $isActiveMuted,
-                    'notification_preference' => $activeNotifPref,
-                    'is_admin' => $convModel->type === 'group' && ($currentParticipant?->role === 'admin'),
-                    'created_at' => $convModel->created_at->format('M j, Y'),
-                    'other_user' => $otherUser ? [
-                        'id' => $otherUser->id,
-                        'name' => $otherUser->name,
-                        'username' => $otherUser->username,
-                        'email' => $otherUser->email,
-                        'profile_photo_url' => $otherUser->profile_photo_url,
-                        'is_online' => $otherUser->is_online,
-                        'last_seen_at' => $otherUser->last_seen_at?->diffForHumans(),
-                        'is_banned' => (bool) $otherUser->is_banned,
-                    ] : null,
-                    'participants' => $participants,
-                    'total_messages' => $totalMessages,
-                    'shared_attachments' => $sharedAttachments,
-                    'messages' => $formattedMessages,
-                    'has_more' => $hasMoreMessages,
-                    'oldest_id' => $pagedMessages->first()?->id,
-                ];
+                $activeConversation = array_merge(
+                    $this->formatConversationMetadata($convModel, $currentUser),
+                    [
+                        'messages' => $formattedMessages,
+                        'has_more' => $hasMoreMessages,
+                        'oldest_id' => $pagedMessages->first()?->id,
+                    ]
+                );
             }
         }
 
@@ -611,11 +546,118 @@ class ChatController extends Controller
             return $this->formatMessage($message, $currentUser, $senderKey, $otherUserLastReadAt);
         });
 
-        return response()->json([
+        $response = [
             'messages' => $formattedMessages,
             'has_more' => $hasMore,
             'oldest_id' => $pagedMessages->first()?->id,
+        ];
+
+        if ($beforeId === null || $request->boolean('include_meta')) {
+            $response['conversation'] = $this->formatConversationMetadata($conversation, $currentUser);
+        }
+
+        if ($request->boolean('mark_read')) {
+            ConversationParticipant::where('conversation_id', $conversation->id)
+                ->where('user_id', $currentUser->id)
+                ->update(['last_read_at' => now()]);
+
+            $this->recordMessageReads($conversation->id, $currentUser->id);
+
+            broadcast(new MessageSent('Conversation read', $conversation->id, [
+                'user_id' => $currentUser->id,
+                'read_at' => now()->toISOString(),
+            ], 'read'));
+        }
+
+        return response()->json($response);
+    }
+
+    /**
+     * Format conversation metadata required by the active chat UI.
+     *
+     * @return array<string, mixed>
+     */
+    protected function formatConversationMetadata(Conversation $conversation, User $currentUser): array
+    {
+        $conversation->loadMissing([
+            'users:id,name,username,email,profile_photo_path,last_seen_at,is_banned',
+            'participants',
         ]);
+
+        $otherUser = $conversation->type === 'direct'
+            ? $conversation->getOtherUser($currentUser->id)
+            : null;
+
+        $participantsByUserId = $conversation->participants->keyBy('user_id');
+        $participants = $conversation->users->map(function (User $u) use ($participantsByUserId): array {
+            $p = $participantsByUserId->get($u->id);
+            $role = $p?->role ?? 'member';
+
+            return [
+                'id' => $u->id,
+                'name' => $u->name,
+                'username' => $u->username,
+                'email' => $u->email,
+                'profile_photo_url' => $u->profile_photo_url,
+                'is_online' => $u->is_online,
+                'last_seen_at' => $u->last_seen_at?->diffForHumans(),
+                'role' => $role,
+                'is_admin' => $role === 'admin',
+                'is_banned' => (bool) $u->is_banned,
+            ];
+        })->values();
+
+        $sharedAttachments = $conversation->messages()
+            ->visibleToUser($currentUser->id)
+            ->where('is_deleted', false)
+            ->whereNotNull('attachment_path')
+            ->orderByDesc('created_at')
+            ->limit(50)
+            ->get()
+            ->map(fn (Message $m): array => [
+                'id' => $m->id,
+                'type' => $m->type,
+                'name' => $m->attachment_name ?? 'Attachment',
+                'url' => $m->attachment_url,
+                'created_at' => $m->created_at->format('M j, g:i a'),
+            ])
+            ->values();
+
+        $totalMessages = $conversation->messages()
+            ->where(function ($query) use ($currentUser): void {
+                $query->where('type', '!=', 'system')
+                    ->orWhere('sender_id', '!=', $currentUser->id);
+            })
+            ->count();
+
+        $currentParticipant = $conversation->participants->firstWhere('user_id', $currentUser->id);
+        $isActiveMuted = (bool) ($currentParticipant?->is_muted || $currentParticipant?->notification_preference === ConversationParticipant::NOTIFICATION_NONE);
+        $activeNotifPref = $currentParticipant?->notification_preference ?? ($isActiveMuted ? 'none' : 'all');
+
+        return [
+            'id' => $conversation->id,
+            'type' => $conversation->type,
+            'title' => $conversation->type === 'system' ? 'System Notifications' : ($conversation->type === 'group' ? $conversation->title : ($otherUser?->name ?? 'Conversation')),
+            'is_system' => $conversation->type === 'system',
+            'is_pinned' => (bool) ($currentParticipant?->is_pinned ?? false),
+            'is_muted' => $isActiveMuted,
+            'notification_preference' => $activeNotifPref,
+            'is_admin' => $conversation->type === 'group' && ($currentParticipant?->role === 'admin'),
+            'created_at' => $conversation->created_at->format('M j, Y'),
+            'other_user' => $otherUser ? [
+                'id' => $otherUser->id,
+                'name' => $otherUser->name,
+                'username' => $otherUser->username,
+                'email' => $otherUser->email,
+                'profile_photo_url' => $otherUser->profile_photo_url,
+                'is_online' => $otherUser->is_online,
+                'last_seen_at' => $otherUser->last_seen_at?->diffForHumans(),
+                'is_banned' => (bool) $otherUser->is_banned,
+            ] : null,
+            'participants' => $participants,
+            'total_messages' => $totalMessages,
+            'shared_attachments' => $sharedAttachments,
+        ];
     }
 
     /**
