@@ -7,18 +7,16 @@ use App\Http\Resources\FbSubmissionResource;
 use App\Models\Agency;
 use App\Models\Designation;
 use App\Models\FbEvent;
-use App\Models\FbParticipant;
-use App\Models\FbSubmission;
 use App\Models\Feedback;
 use App\Services\FeedbackAnalyticsService;
 use App\Services\FeedbackSchemaValidator;
+use App\Services\FeedbackSubmissionPersistenceService;
 use BaconQrCode\Renderer\Image\SvgImageBackEnd;
 use BaconQrCode\Renderer\ImageRenderer;
 use BaconQrCode\Renderer\RendererStyle\RendererStyle;
 use BaconQrCode\Writer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -140,7 +138,7 @@ class FeedbackFormController extends Controller
      */
     public function submit(
         SubmitFeedbackRequest $request,
-        FeedbackSchemaValidator $schemaValidator
+        FeedbackSubmissionPersistenceService $persistenceService
     ): JsonResponse {
         $event = $this->resolveConfiguredEvent();
 
@@ -193,51 +191,12 @@ class FeedbackFormController extends Controller
         $pData = $request->getParticipantData();
         $answers = $request->getAnswers();
 
-        // Validate submission answers against schema in context of this event
-        $validatedData = $schemaValidator->validateSubmissionData($feedback->schema, $answers, $event);
-
-        $submission = DB::transaction(function () use ($event, $feedback, $pData, $validatedData) {
-            $name = $pData['name'] ?? ($validatedData['name'] ?? null);
-            $agencyInput = $pData['agency'] ?? ($validatedData['agency'] ?? null);
-            $designationInput = $pData['designation'] ?? ($validatedData['designation'] ?? null);
-            $functionInput = $pData['function_id'] ?? ($validatedData['function'] ?? ($validatedData['function_id'] ?? null));
-            $customFunctionInput = $pData['custom_function'] ?? ($validatedData['function_other'] ?? ($validatedData['custom_function'] ?? null));
-            $yearsInDesignation = $pData['years_in_designation'] ?? ($validatedData['years_in_designation'] ?? 0);
-            $location = $pData['location'] ?? ($validatedData['location'] ?? null);
-            $noOfExercises = $pData['no_of_exercises'] ?? ($validatedData['no_of_exercises'] ?? 0);
-
-            // 1. Resolve or dynamically create Agency
-            $agencyName = Agency::findOrCreateByName($agencyInput);
-
-            // 2. Resolve or dynamically create Designation
-            $designationName = Designation::findOrCreateByName($designationInput);
-
-            // 3. Resolve Function (must belong to this event)
-            $functionId = null;
-            if ($functionInput && is_numeric($functionInput)) {
-                $func = $event->functions()->where('fb_functions.id', (int) $functionInput)->first();
-                $functionId = $func?->id;
-            }
-
-            // 4. Create Participant (name is nullable for anonymous submissions, custom_function persisted)
-            $participant = FbParticipant::create([
-                'name' => ! empty($name) ? $name : null,
-                'function_id' => $functionId,
-                'custom_function' => $customFunctionInput,
-                'agency' => $agencyName,
-                'designation' => $designationName,
-                'years_in_designation' => (int) $yearsInDesignation,
-                'location' => $location,
-                'no_of_exercises' => (int) $noOfExercises,
-            ]);
-
-            // 5. Create Submission
-            return FbSubmission::create([
-                'feedback_id' => $feedback->id,
-                'participant_id' => $participant->id,
-                'data' => $validatedData,
-            ]);
-        });
+        $submission = $persistenceService->persistSubmission(
+            $event,
+            $feedback,
+            $pData,
+            $answers
+        );
 
         return (new FbSubmissionResource($submission->load(['feedback', 'participant.function'])))
             ->response()

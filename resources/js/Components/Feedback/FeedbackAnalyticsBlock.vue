@@ -1,6 +1,8 @@
 <script setup>
 import FeedbackAnalyticsChart from './FeedbackAnalyticsChart.vue';
+import FormRichEditor from './FormRichEditor.vue';
 import { reportBlocks } from './feedbackAnalyticsLayout';
+import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
 
 defineOptions({
     name: 'FeedbackAnalyticsBlock',
@@ -138,8 +140,8 @@ function onBlockDragOver() {
     }
 }
 
-function onEdit(key, field, event) {
-    emit('edit-text', { key, field, value: event.target.value });
+function onEdit(key, field, value) {
+    emit('edit-text', { key, field, value });
 }
 </script>
 
@@ -171,7 +173,7 @@ function onEdit(key, field, event) {
                 type="button"
                 draggable="true"
                 class="cursor-grab rounded px-1 py-0.5 font-semibold active:cursor-grabbing"
-                :aria-label="`Drag ${block.item.title || 'Blank section'}`"
+                :aria-label="`Drag ${stripHtml(block.item.title) || 'Blank section'}`"
                 @dragstart.stop="emit('drag-block', { event: $event, key: block.key })"
                 @dragend="emit('update:dropTarget', null)"
                 @click.stop="emit('select', block.key)"
@@ -183,7 +185,7 @@ function onEdit(key, field, event) {
                     type="button"
                     :disabled="index === 0"
                     class="rounded px-1.5 py-0.5 disabled:opacity-30"
-                    :aria-label="`Move ${block.item.title || 'Blank section'} up`"
+                    :aria-label="`Move ${stripHtml(block.item.title) || 'Blank section'} up`"
                     @click.stop="emit('move', { key: block.key, direction: -1 })"
                 >
                     ↑
@@ -192,7 +194,7 @@ function onEdit(key, field, event) {
                     type="button"
                     :disabled="index === siblingCount - 1"
                     class="rounded px-1.5 py-0.5 disabled:opacity-30"
-                    :aria-label="`Move ${block.item.title || 'Blank section'} down`"
+                    :aria-label="`Move ${stripHtml(block.item.title) || 'Blank section'} down`"
                     @click.stop="emit('move', { key: block.key, direction: 1 })"
                 >
                     ↓
@@ -225,19 +227,20 @@ function onEdit(key, field, event) {
         >
             <div
                 v-if="block.item.show_heading !== false && (editable || block.item.title)"
-                class="flex items-center justify-between gap-2"
+                class="flex items-center justify-between gap-2 min-w-0"
             >
-                <input
-                    v-if="editable"
-                    :value="block.item.title"
-                    aria-label="Blank section title on canvas"
-                    maxlength="500"
-                    placeholder="Optional section heading…"
-                    class="canvas-input text-lg font-bold text-gray-900"
-                    @click.stop="emit('select', block.key)"
-                    @input="onEdit(block.key, 'title', $event)"
-                >
-                <h2 v-else-if="block.item.title" class="text-lg font-bold text-gray-900">{{ block.item.title }}</h2>
+                <div v-if="editable" class="w-full min-w-0" @click.stop="emit('select', block.key)">
+                    <FormRichEditor
+                        :model-value="block.item.title"
+                        placeholder="Optional section heading…"
+                        min-height="32px"
+                        :allow-tables="false"
+                        single-line
+                        input-class="text-lg font-bold text-gray-900"
+                        @update:model-value="onEdit(block.key, 'title', $event)"
+                    />
+                </div>
+                <h2 v-else-if="block.item.title" class="text-lg font-bold text-gray-900 form-rich-content" v-html="sanitizeHtml(block.item.title)" />
             </div>
 
             <div
@@ -285,39 +288,35 @@ function onEdit(key, field, event) {
         <!-- Text Section -->
         <section
             v-else
-            class="rounded-2xl bg-white flex-1 flex flex-col h-full"
+            class="rounded-2xl bg-white flex-1 flex flex-col h-full min-w-0"
             :class="depth > 0 ? 'border border-cream-400 p-5' : 'p-6'"
         >
             <template v-if="editable">
-                <input
-                    :value="block.item.title"
-                    aria-label="Section title on canvas"
-                    maxlength="500"
-                    class="canvas-input font-bold"
-                    :class="depth > 0 ? 'text-lg' : 'text-xl'"
-                    @click.stop="emit('select', block.key)"
-                    @input="onEdit(block.key, 'title', $event)"
-                >
-                <textarea
-                    :value="block.item.body"
-                    aria-label="Section text on canvas"
-                    maxlength="3000"
-                    rows="3"
-                    placeholder="Write your report notes here…"
-                    class="canvas-input mt-2 resize-y leading-7 text-gray-600"
-                    @click.stop="emit('select', block.key)"
-                    @input="onEdit(block.key, 'body', $event)"
-                />
+                <div class="min-w-0" @click.stop="emit('select', block.key)">
+                    <FormRichEditor
+                        :model-value="block.item.title"
+                        placeholder="Section title…"
+                        min-height="36px"
+                        :allow-tables="false"
+                        single-line
+                        :input-class="depth > 0 ? 'text-lg font-bold text-gray-900' : 'text-xl font-bold text-gray-900'"
+                        @update:model-value="onEdit(block.key, 'title', $event)"
+                    />
+                </div>
+                <div class="mt-2 min-w-0" @click.stop="emit('select', block.key)">
+                    <FormRichEditor
+                        :model-value="block.item.body"
+                        placeholder="Write your report notes here…"
+                        min-height="96px"
+                        input-class="leading-7 text-gray-600"
+                        @update:model-value="onEdit(block.key, 'body', $event)"
+                    />
+                </div>
             </template>
             <template v-else>
-                <h2 :class="depth > 0 ? 'text-lg font-bold' : 'text-xl font-bold'">{{ block.item.title }}</h2>
-                <p class="mt-2 whitespace-pre-line leading-7 text-gray-600">{{ block.item.body }}</p>
+                <h2 :class="[depth > 0 ? 'text-lg font-bold' : 'text-xl font-bold', 'form-rich-content']" v-html="sanitizeHtml(block.item.title)" />
+                <div class="mt-2 whitespace-pre-line leading-7 text-gray-600 form-rich-content" v-html="sanitizeHtml(block.item.body)" />
             </template>
         </section>
     </div>
 </template>
-
-<style scoped>
-.canvas-input { display: block; width: 100%; padding: 0; border: 0; background: transparent; border-radius: 0.25rem; }
-.canvas-input:focus { outline: 2px solid #a7f3d0; outline-offset: 4px; box-shadow: none; }
-</style>

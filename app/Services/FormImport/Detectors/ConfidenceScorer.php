@@ -50,6 +50,10 @@ class ConfidenceScorer
             if (preg_match('/\b(comments?|suggestions?|remarks?|feedback|recommendations?|explain|specify)\b/i', $particular)) {
                 $score += 0.15;
             }
+        } elseif ($type === 'photo') {
+            if (preg_match('/\b(upload|attach|photo|photograph|picture|image|snapshot)\b/i', $particular)) {
+                $score += 0.20;
+            }
         }
 
         // 5. Source Provenance Bonus

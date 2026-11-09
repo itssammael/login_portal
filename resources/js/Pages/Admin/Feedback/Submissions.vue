@@ -3,7 +3,9 @@ import { ref, computed, watch } from 'vue';
 import { Head, Link, router } from '@inertiajs/vue3';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import AdminNav from '@/Components/AdminNav.vue';
+import FeedbackExportModal from '@/Components/Feedback/FeedbackExportModal.vue';
 import { sanitizeHtml } from '@/Utils/htmlSanitizer';
+import { formatPhotoSize } from '@/Utils/feedbackFormData';
 
 const props = defineProps({
     submissions: {
@@ -41,6 +43,10 @@ const props = defineProps({
     compiledResponseMeta: {
         type: Object,
         default: null,
+    },
+    exportableFields: {
+        type: Object,
+        default: () => ({ metadata: [], questions: [] }),
     },
 });
 
@@ -88,6 +94,7 @@ const switchTab = (tab) => {
     if (tab === currentTab.value) return;
 
     closeDetailModal();
+    closeExportModal();
 
     router.get(route('admin.feedback.submissions'), {
         ...filterForm.value,
@@ -128,6 +135,26 @@ const resetFilters = () => {
     });
 };
 
+const exportableCount = computed(() => {
+    if (currentTab.value === 'compiled') {
+        return Number(props.compiledResponseMeta?.total_filtered_submissions ?? 0);
+    }
+
+    return Number(props.submissions?.total ?? 0);
+});
+
+const showExportModal = ref(false);
+const exportModalFormat = ref('csv');
+
+const openExportModal = (format = 'csv') => {
+    exportModalFormat.value = format === 'pdf' ? 'pdf' : 'csv';
+    showExportModal.value = true;
+};
+
+const closeExportModal = () => {
+    showExportModal.value = false;
+};
+
 // Response Detail Modal
 const showDetailModal = ref(false);
 const selectedSubmission = ref(null);
@@ -163,6 +190,28 @@ const getOptionDisplayLabel = (field, val) => {
     if (!field.options || !Array.isArray(field.options)) return val;
     const match = field.options.find(opt => opt.value === val);
     return match ? match.label : val;
+};
+
+const getPhotoAnswerMeta = (submission, fieldId) => {
+    const val = getFieldValue(submission, fieldId);
+    if (!val || typeof val !== 'object' || Array.isArray(val)) {
+        return null;
+    }
+    if (val.type !== 'photo' || !val.filename || typeof val.filename !== 'string') {
+        return null;
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(val.filename)) {
+        return null;
+    }
+
+    return {
+        url: route('admin.feedback.submissions.photo', [submission.id, fieldId, val.filename]),
+        displayName: (typeof val.original_name === 'string' && val.original_name.trim() !== '')
+            ? val.original_name
+            : val.filename,
+        sizeLabel: val.size ? formatPhotoSize(val.size) : null,
+        mimeType: typeof val.mime_type === 'string' ? val.mime_type : null,
+    };
 };
 </script>
 
@@ -338,7 +387,7 @@ const getOptionDisplayLabel = (field, val) => {
                                     v-model="filterForm.search"
                                     @keyup.enter="applyFilters"
                                     type="text"
-                                    placeholder="Name, Agency, Location..."
+                                    placeholder="Ref Code, Name, Agency..."
                                     class="flex-1 px-3 py-2 bg-[#fffef9] border border-cream-500 focus:border-forest-600 rounded-xl text-xs"
                                 />
                                 <button
@@ -373,6 +422,52 @@ const getOptionDisplayLabel = (field, val) => {
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                                 </svg>
                                 <span>Clear Filters</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Export Controls (shown whenever matching submissions exist) -->
+                    <div
+                        v-if="exportableCount > 0"
+                        class="mt-3.5 pt-3.5 border-t border-cream-500/40 flex flex-wrap items-center justify-between gap-3"
+                    >
+                        <div class="flex items-center gap-2 text-xs text-gray-700">
+                            <span class="inline-flex items-center justify-center size-6 rounded-lg bg-forest-900/10 text-forest-900 shrink-0">
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                                </svg>
+                            </span>
+                            <span>
+                                Export all
+                                <strong class="font-bold text-forest-900">{{ exportableCount }}</strong>
+                                matching {{ exportableCount === 1 ? 'submission' : 'submissions' }}
+                                <span class="text-gray-500">
+                                    ({{ currentTab === 'compiled' ? 'compiled event scope & responses' : 'across all pages matching current filters' }})
+                                </span>
+                            </span>
+                        </div>
+
+                        <div class="flex items-center flex-wrap gap-2">
+                            <button
+                                type="button"
+                                @click="openExportModal('csv')"
+                                class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#fffef9] hover:bg-cream-100 text-forest-900 border border-cream-500 rounded-xl text-xs font-bold shadow-2xs transition cursor-pointer"
+                            >
+                                <svg class="size-3.5 text-emerald-700" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 0 1-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0 1 12 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125M12 10.875v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125M13.125 12h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125M20.625 12c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5M12 14.625v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 14.625c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m0 1.5v-1.5m0 0c0-.621.504-1.125 1.125-1.125m0 0h7.5" />
+                                </svg>
+                                <span>Export CSV (Excel)</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                @click="openExportModal('pdf')"
+                                class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-forest-900 hover:bg-forest-950 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                            >
+                                <svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                                </svg>
+                                <span>Export PDF</span>
                             </button>
                         </div>
                     </div>
@@ -497,6 +592,22 @@ const getOptionDisplayLabel = (field, val) => {
                                         </div>
                                     </div>
 
+                                    <!-- Photo Upload Question Summary Card -->
+                                    <div v-else-if="q.is_photo" class="p-3 bg-cream-100/70 rounded-xl border border-cream-300 text-xs text-gray-600 space-y-1">
+                                        <div class="flex items-center justify-between gap-2">
+                                            <span class="font-semibold text-gray-800 flex items-center gap-1.5">
+                                                <span>📷</span>
+                                                <span>Photo Upload Responses</span>
+                                            </span>
+                                            <span class="px-2 py-0.5 rounded-full bg-forest-900 text-white font-mono text-[11px] font-bold">
+                                                {{ q.answered_count }} uploaded
+                                            </span>
+                                        </div>
+                                        <p class="text-[11px] text-gray-500">
+                                            Photo attachments are excluded from text and percentage charts. Open the Individual Responses tab to preview and inspect submitted images.
+                                        </p>
+                                    </div>
+
                                     <!-- Free-text / Qualitative Question Card -->
                                     <div v-else class="p-3 bg-cream-100/70 rounded-xl border border-cream-300 text-xs text-gray-600 space-y-1">
                                         <div class="font-semibold text-gray-800">Qualitative Text Response</div>
@@ -551,6 +662,9 @@ const getOptionDisplayLabel = (field, val) => {
                                             </span>
                                             <span v-else class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-300">
                                                 👤 Anonymous
+                                            </span>
+                                            <span v-if="s.reference_code" class="text-[10px] font-mono text-gray-500 block mt-0.5">
+                                                {{ s.reference_code }}
                                             </span>
                                         </td>
                                         <td class="px-5 py-3.5">
@@ -623,7 +737,7 @@ const getOptionDisplayLabel = (field, val) => {
                 <div class="flex items-center justify-between pb-4 border-b border-cream-500/40 shrink-0">
                     <div>
                         <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-lime-200 text-forest-900 border border-forest-500/20">
-                            Submission #{{ selectedSubmission.id }}
+                            {{ selectedSubmission.reference_code ? `Ref: ${selectedSubmission.reference_code}` : `Submission #${selectedSubmission.id}` }}
                         </span>
                         <h3 class="text-lg font-bold text-gray-900 mt-1">
                             {{ selectedSubmission.feedback?.event?.name || 'Feedback Submission Details' }}
@@ -695,9 +809,52 @@ const getOptionDisplayLabel = (field, val) => {
                                 <!-- Text Only Instructional Section -->
                                 <div v-if="field.type === 'text_only'" class="text-xs text-gray-700 bg-cream-100 p-3 rounded-xl border border-cream-400/40 form-rich-content overflow-x-auto" v-html="sanitizeHtml(field.description || 'Instructional text block (no response required).')"></div>
 
-                                <!-- Text Type -->
-                                <div v-else-if="field.type === 'text'" class="text-xs text-gray-800 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-wrap">
-                                    {{ getFieldValue(selectedSubmission, field.id) || 'No response provided.' }}
+                                <!-- Text / Textarea / Number / Date Type -->
+                                <div v-else-if="['text', 'textarea', 'number', 'date'].includes(field.type)" class="text-xs text-gray-800 bg-cream-100 p-3 rounded-xl border border-cream-400/40 whitespace-pre-wrap">
+                                    {{ (getFieldValue(selectedSubmission, field.id) !== null && getFieldValue(selectedSubmission, field.id) !== '') ? getFieldValue(selectedSubmission, field.id) : 'No response provided.' }}
+                                </div>
+
+                                <!-- Photo Upload Answer -->
+                                <div v-else-if="field.type === 'photo'">
+                                    <div
+                                        v-if="getPhotoAnswerMeta(selectedSubmission, field.id)"
+                                        class="p-3.5 bg-cream-100/70 rounded-xl border border-cream-400/60 space-y-3"
+                                    >
+                                        <a
+                                            :href="getPhotoAnswerMeta(selectedSubmission, field.id).url"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="inline-block rounded-xl overflow-hidden border border-cream-400 bg-white shadow-2xs hover:ring-2 hover:ring-forest-600 transition"
+                                        >
+                                            <img
+                                                :src="getPhotoAnswerMeta(selectedSubmission, field.id).url"
+                                                :alt="getPhotoAnswerMeta(selectedSubmission, field.id).displayName"
+                                                loading="lazy"
+                                                class="max-h-56 w-auto object-contain block"
+                                            />
+                                        </a>
+                                        <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                            <div class="min-w-0">
+                                                <span class="font-semibold text-gray-900 break-all">
+                                                    {{ getPhotoAnswerMeta(selectedSubmission, field.id).displayName }}
+                                                </span>
+                                                <span v-if="getPhotoAnswerMeta(selectedSubmission, field.id).sizeLabel" class="text-gray-500 ml-1.5 font-mono text-[11px]">
+                                                    ({{ getPhotoAnswerMeta(selectedSubmission, field.id).sizeLabel }})
+                                                </span>
+                                            </div>
+                                            <a
+                                                :href="getPhotoAnswerMeta(selectedSubmission, field.id).url"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="inline-flex items-center px-3 py-1.5 rounded-xl bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold transition shrink-0"
+                                            >
+                                                View Full Image ↗
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <div v-else class="text-xs text-gray-400 italic bg-cream-100/60 p-3 rounded-xl border border-cream-300">
+                                        No photo uploaded.
+                                    </div>
                                 </div>
 
                                 <!-- Radio or Select Type with Display Label -->
@@ -739,5 +896,16 @@ const getOptionDisplayLabel = (field, val) => {
                 </div>
             </div>
         </div>
+
+        <!-- Export Field Builder Modal -->
+        <FeedbackExportModal
+            :show="showExportModal"
+            :initial-format="exportModalFormat"
+            :exportable-count="exportableCount"
+            :exportable-fields="exportableFields"
+            :filters="filters"
+            :current-tab="currentTab"
+            @close="closeExportModal"
+        />
     </AppLayout>
 </template>

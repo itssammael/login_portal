@@ -3,7 +3,15 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { Head } from '@inertiajs/vue3';
 import axios from 'axios';
 import InputError from '@/Components/InputError.vue';
+import { useFormDraftCookie } from '@/Composables/useFormDraftCookie';
 import { sanitizeHtml, stripHtml } from '@/Utils/htmlSanitizer';
+import {
+    PHOTO_ACCEPT,
+    formatPhotoSize,
+    isFileValue,
+    validateClientPhotoFile,
+    buildFeedbackSubmissionPayload,
+} from '@/Utils/feedbackFormData';
 
 const props = defineProps({
     event: {
@@ -63,6 +71,29 @@ const isFormAvailable = computed(() => {
 
 // Dynamic form answers dictionary keyed by field.id
 const answers = ref({});
+const photoPreviewUrls = ref({});
+
+const revokePhotoPreviewUrl = (fieldId) => {
+    const existing = photoPreviewUrls.value[fieldId];
+    if (existing && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(existing);
+    }
+    if (Object.prototype.hasOwnProperty.call(photoPreviewUrls.value, fieldId)) {
+        const next = { ...photoPreviewUrls.value };
+        delete next[fieldId];
+        photoPreviewUrls.value = next;
+    }
+};
+
+const revokeAllPhotoPreviewUrls = () => {
+    Object.keys(photoPreviewUrls.value).forEach((fieldId) => {
+        const url = photoPreviewUrls.value[fieldId];
+        if (url && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+            URL.revokeObjectURL(url);
+        }
+    });
+    photoPreviewUrls.value = {};
+};
 
 // Participant metadata fields (optional for respondent identification)
 const participantData = ref({
@@ -75,33 +106,6 @@ const participantData = ref({
     location: '',
     no_of_exercises: '',
 });
-
-// Initialize answers dictionary from dynamic schema fields
-const initAnswers = () => {
-    const initial = {};
-    sortedFields.value.forEach((field) => {
-        if (['section', 'text_only'].includes(field.type)) {
-            return;
-        }
-        if (field.type === 'checkbox') {
-            initial[field.id] = [];
-        } else {
-            initial[field.id] = '';
-        }
-        if (field.allow_other) {
-            initial[`${field.id}_other`] = '';
-        }
-    });
-    answers.value = initial;
-};
-
-watch(
-    () => props.form?.schema?.fields,
-    () => {
-        initAnswers();
-    },
-    { immediate: true }
-);
 
 // --- Pagination & Multi-Page Sections Engine ---
 const currentPageIdx = ref(0);
@@ -139,6 +143,54 @@ const sectionPages = computed(() => {
     return pages;
 });
 
+const {
+    hasRestoredDraft,
+    lastSavedAt,
+    isOffline,
+    restoreDraft,
+    clearDraft,
+} = useFormDraftCookie(
+    () => `live_${props.apiKey}`,
+    {
+        answers,
+        participantData,
+        currentPageIdx,
+        pageHistory,
+    }
+);
+
+// Initialize answers dictionary from dynamic schema fields
+const initAnswers = () => {
+    const initial = {};
+    sortedFields.value.forEach((field) => {
+        if (['section', 'text_only'].includes(field.type)) {
+            return;
+        }
+        if (field.type === 'checkbox') {
+            initial[field.id] = [];
+        } else if (field.type === 'photo') {
+            initial[field.id] = null;
+        } else {
+            initial[field.id] = '';
+        }
+        if (field.allow_other) {
+            initial[`${field.id}_other`] = '';
+        }
+    });
+    answers.value = initial;
+};
+
+watch(
+    () => props.form?.schema?.fields,
+    () => {
+        initAnswers();
+        if (isFormAvailable.value) {
+            restoreDraft({ maxPages: sectionPages.value.length });
+        }
+    },
+    { immediate: true }
+);
+
 const isPaginated = computed(() => {
     return Boolean(props.form?.schema?.pagination?.enabled && sectionPages.value.length > 1);
 });
@@ -154,6 +206,13 @@ const isConditionsMet = (conditions) => {
         const op = cond.operator || 'equals';
         const targetVal = String(cond.value ?? '');
         const actual = answers.value[triggerId];
+
+        if (isFileValue(actual)) {
+            if (op === 'is_answered' || op === 'not_equals' || op === 'not_contains') {
+                continue;
+            }
+            return false;
+        }
 
         if (op === 'equals') {
             if (Array.isArray(actual)) {
@@ -180,9 +239,9 @@ const isConditionsMet = (conditions) => {
                 if (String(actual ?? '').toLowerCase().includes(targetVal.toLowerCase())) return false;
             }
         } else if (op === 'is_answered') {
-            if (actual === null || actual === '' || (Array.isArray(actual) && actual.length === 0)) return false;
+            if (actual === null || actual === undefined || actual === '' || (Array.isArray(actual) && actual.length === 0)) return false;
         } else if (op === 'is_not_answered') {
-            if (actual !== null && actual !== '' && (!Array.isArray(actual) || actual.length > 0)) return false;
+            if (actual !== null && actual !== undefined && actual !== '' && (!Array.isArray(actual) || actual.length > 0)) return false;
         }
     }
     return true;
@@ -201,7 +260,10 @@ const validateCurrentPage = () => {
         if (!isFieldConditionMet(field)) continue;
         if (field.required) {
             const val = answers.value[field.id];
-            if (val === null || val === undefined || val === '' || (Array.isArray(val) && val.length === 0)) {
+            const isMissing = field.type === 'photo'
+                ? !isFileValue(val)
+                : (val === null || val === undefined || val === '' || (Array.isArray(val) && val.length === 0));
+            if (isMissing) {
                 clientErrors.value[field.id] = `The '${stripHtml(field.particular)}' field is required.`;
                 hasError = true;
             }
@@ -428,22 +490,134 @@ const handleCheckboxToggle = (fieldId, optionValue) => {
     }
 };
 
+// Photo upload selection & removal handlers
+const triggerPhotoPicker = (fieldId) => {
+    const fileInputEl = document.getElementById(`photo_file_${fieldId}`);
+    fileInputEl?.click();
+};
+
+const clearFieldServerErrors = (fieldId) => {
+    const next = { ...serverErrors.value };
+    delete next[fieldId];
+    delete next[`answers.${fieldId}`];
+    delete next[`data.${fieldId}`];
+    serverErrors.value = next;
+};
+
+const clearPhotoSelection = (fieldId) => {
+    revokePhotoPreviewUrl(fieldId);
+    answers.value[fieldId] = null;
+    const nextClient = { ...clientErrors.value };
+    delete nextClient[fieldId];
+    clientErrors.value = nextClient;
+    clearFieldServerErrors(fieldId);
+    const fileInputEl = document.getElementById(`photo_file_${fieldId}`);
+    if (fileInputEl) {
+        fileInputEl.value = '';
+    }
+};
+
+const handlePhotoFileChange = (event, field) => {
+    const files = event.target?.files;
+    if (!files || files.length === 0) {
+        return;
+    }
+
+    const label = stripHtml(field.particular) || field.id;
+    if (files.length > 1) {
+        clientErrors.value = {
+            ...clientErrors.value,
+            [field.id]: `Please select only one photo for '${label}'.`,
+        };
+        event.target.value = '';
+        return;
+    }
+
+    const selected = files[0];
+    const validationError = validateClientPhotoFile(selected, label);
+    if (validationError) {
+        revokePhotoPreviewUrl(field.id);
+        answers.value[field.id] = null;
+        clearFieldServerErrors(field.id);
+        clientErrors.value = {
+            ...clientErrors.value,
+            [field.id]: validationError,
+        };
+        event.target.value = '';
+        return;
+    }
+
+    revokePhotoPreviewUrl(field.id);
+    answers.value[field.id] = selected;
+    if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        photoPreviewUrls.value = {
+            ...photoPreviewUrls.value,
+            [field.id]: URL.createObjectURL(selected),
+        };
+    }
+
+    const nextClient = { ...clientErrors.value };
+    delete nextClient[field.id];
+    clientErrors.value = nextClient;
+    clearFieldServerErrors(field.id);
+};
+
+const validateRequiredPhotosBeforeSubmit = () => {
+    const nextClient = { ...clientErrors.value };
+    let firstInvalidId = null;
+
+    const pagesToCheck = isPaginated.value
+        ? [...new Set(Array.isArray(pageHistory.value) ? pageHistory.value : [])]
+            .map((idx) => (Number.isInteger(idx) && idx >= 0 && idx < sectionPages.value.length ? sectionPages.value[idx] : null))
+            .filter(Boolean)
+        : sectionPages.value;
+
+    for (const page of pagesToCheck) {
+        if (page.section && !isSectionConditionMet(page.section)) {
+            continue;
+        }
+        for (const field of page.fields) {
+            if (field.type !== 'photo' || !isFieldConditionMet(field)) {
+                continue;
+            }
+            if (field.required && !isFileValue(answers.value[field.id])) {
+                nextClient[field.id] = `The '${stripHtml(field.particular)}' photo is required.`;
+                if (!firstInvalidId) {
+                    firstInvalidId = field.id;
+                }
+            }
+        }
+    }
+
+    clientErrors.value = nextClient;
+    if (firstInvalidId) {
+        goToErrorField(firstInvalidId);
+        return false;
+    }
+    return true;
+};
+
 // Live deployed form submission
 const submitForm = async () => {
+    if (!validateRequiredPhotosBeforeSubmit()) {
+        return;
+    }
+
     isSubmitting.value = true;
     serverErrors.value = {};
     showQuickErrorToast.value = false;
 
-    const payload = {
-        answers: { ...answers.value },
-        ...participantData.value,
-    };
+    const payload = buildFeedbackSubmissionPayload({
+        answers: answers.value,
+        participantData: participantData.value,
+    });
 
     try {
         const response = await axios.post(route('forms.live.submit', props.apiKey), payload);
         if (response.status === 201 || response.status === 200) {
+            clearDraft();
             submissionSuccess.value = true;
-            submittedRecord.value = response.data?.data || response.data || null;
+            submittedRecord.value = (response.data?.id || response.data?.reference_code) ? response.data : (response.data?.data || null);
             serverErrors.value = {};
             showQuickErrorToast.value = false;
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -463,6 +637,10 @@ const submitForm = async () => {
             quickErrorToastTimer = setTimeout(() => {
                 showQuickErrorToast.value = false;
             }, 15000);
+        } else if (!error.response) {
+            serverErrors.value = {
+                general: ['Network connection lost. Do not worry—your answers are saved in your browser cookies for 24 hours. Please submit again once your internet connection is restored.'],
+            };
         } else {
             serverErrors.value = {
                 general: [error.response?.data?.message || 'An unexpected error occurred while submitting feedback. Please try again.'],
@@ -473,7 +651,31 @@ const submitForm = async () => {
     }
 };
 
+const clearSavedProgress = () => {
+    revokeAllPhotoPreviewUrls();
+    clearDraft();
+    serverErrors.value = {};
+    clientErrors.value = {};
+    showQuickErrorToast.value = false;
+    highlightedFieldId.value = null;
+    currentPageIdx.value = 0;
+    pageHistory.value = [0];
+    initAnswers();
+    participantData.value = {
+        name: '',
+        agency: '',
+        designation: '',
+        function_id: '',
+        custom_function: '',
+        years_in_designation: '',
+        location: '',
+        no_of_exercises: '',
+    };
+};
+
 const resetForAnotherSubmission = () => {
+    revokeAllPhotoPreviewUrls();
+    clearDraft();
     submissionSuccess.value = false;
     submittedRecord.value = null;
     serverErrors.value = {};
@@ -512,6 +714,7 @@ const getOtherFieldError = (fieldId) => {
 };
 
 onBeforeUnmount(() => {
+    revokeAllPhotoPreviewUrls();
     if (highlightTimer) {
         clearTimeout(highlightTimer);
     }
@@ -572,8 +775,8 @@ onBeforeUnmount(() => {
                     </p>
                 </div>
 
-                <div v-if="submittedRecord?.id" class="inline-block px-4 py-2 bg-cream-100 rounded-xl border border-cream-400 text-xs font-mono text-gray-800 shadow-2xs">
-                    Submission Reference: #{{ submittedRecord.id }}
+                <div v-if="submittedRecord?.reference_code || submittedRecord?.id" class="inline-block px-4 py-2 bg-cream-100 rounded-xl border border-cream-400 text-xs font-mono text-gray-800 shadow-2xs">
+                    Submission Reference: {{ submittedRecord.reference_code || `#${submittedRecord.id}` }}
                 </div>
 
                 <div class="pt-4">
@@ -622,6 +825,30 @@ onBeforeUnmount(() => {
                         <span>Draft Preview Mode: This questionnaire is currently in Draft (Unpublished) mode. Public respondents cannot access or submit responses until it is published.</span>
                     </div>
                     <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-amber-200 text-amber-900 font-extrabold shrink-0">Draft</span>
+                </div>
+
+                <!-- Offline Connection Warning Banner -->
+                <div v-if="isOffline" class="p-4 bg-amber-50 border border-amber-300 text-amber-950 rounded-2xl text-xs font-medium flex items-center justify-between gap-3 shadow-xs">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="size-6 rounded-lg bg-amber-200 text-amber-900 flex items-center justify-center text-xs font-black shrink-0">📡</span>
+                        <span>You appear to be offline. Your form progress is automatically saved in cookies for 24 hours—you can continue filling it out and submit once reconnected.</span>
+                    </div>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-amber-200 text-amber-900 font-bold shrink-0">Offline Saved</span>
+                </div>
+
+                <!-- Restored Progress Notice Banner -->
+                <div v-if="hasRestoredDraft" class="p-3.5 bg-emerald-50/90 border border-emerald-300 text-emerald-950 rounded-2xl text-xs font-medium flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                    <div class="flex items-center space-x-2.5">
+                        <span class="size-6 rounded-lg bg-emerald-200 text-emerald-900 flex items-center justify-center text-xs font-black shrink-0">↺</span>
+                        <span>Your previous unsubmitted progress was restored (saved automatically for 24 hours).</span>
+                    </div>
+                    <button
+                        type="button"
+                        @click="clearSavedProgress"
+                        class="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-[11px] font-bold transition cursor-pointer shrink-0"
+                    >
+                        Clear saved progress
+                    </button>
                 </div>
 
                 <!-- General Error Alert -->
@@ -898,8 +1125,91 @@ onBeforeUnmount(() => {
                                     </div>
                                 </div>
 
+                                <!-- Photo Upload Input -->
+                                <div v-else-if="field.type === 'photo'" class="space-y-3">
+                                    <input
+                                        :id="`photo_file_${field.id}`"
+                                        type="file"
+                                        :accept="PHOTO_ACCEPT"
+                                        class="sr-only"
+                                        @change="handlePhotoFileChange($event, field)"
+                                    />
+
+                                    <div
+                                        v-if="isFileValue(answers[field.id])"
+                                        class="p-4 rounded-2xl bg-[#fffef9] border border-cream-500 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                                    >
+                                        <div class="flex items-center gap-3.5 min-w-0">
+                                            <img
+                                                v-if="photoPreviewUrls[field.id]"
+                                                :src="photoPreviewUrls[field.id]"
+                                                :alt="answers[field.id].name || 'Selected photo preview'"
+                                                class="size-16 rounded-xl object-cover border border-cream-400 bg-cream-100 shrink-0"
+                                            />
+                                            <div v-else class="size-16 rounded-xl bg-cream-100 border border-cream-400 flex items-center justify-center text-xl shrink-0">
+                                                📷
+                                            </div>
+                                            <div class="min-w-0">
+                                                <p class="text-xs font-bold text-gray-900 truncate">
+                                                    {{ answers[field.id].name }}
+                                                </p>
+                                                <p class="text-[11px] text-gray-500 mt-0.5">
+                                                    {{ formatPhotoSize(answers[field.id].size) }} • Ready to upload
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div class="flex items-center gap-2 shrink-0">
+                                            <button
+                                                :id="`input_${field.id}`"
+                                                type="button"
+                                                :aria-invalid="getFieldError(field.id) ? 'true' : 'false'"
+                                                :aria-describedby="getFieldError(field.id) ? `error_${field.id}` : `photo_hint_${field.id}`"
+                                                @click="triggerPhotoPicker(field.id)"
+                                                class="px-3 py-1.5 rounded-xl bg-cream-200 hover:bg-cream-300 text-gray-800 border border-cream-400 text-xs font-bold transition cursor-pointer"
+                                            >
+                                                Replace Photo
+                                            </button>
+                                            <button
+                                                type="button"
+                                                @click="clearPhotoSelection(field.id)"
+                                                class="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold transition cursor-pointer"
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        v-else
+                                        class="p-4 rounded-2xl border border-dashed border-cream-500 bg-[#fffef9] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                                    >
+                                        <div class="flex items-center gap-3">
+                                            <span class="size-10 rounded-xl bg-cream-100 border border-cream-400 flex items-center justify-center text-lg shrink-0">📷</span>
+                                            <div>
+                                                <p class="text-xs font-bold text-gray-800">Attach 1 photo</p>
+                                                <p :id="`photo_hint_${field.id}`" class="text-[11px] text-gray-500">
+                                                    Accepted formats: JPG, PNG, WebP • Maximum size: 5 MB
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <button
+                                            :id="`input_${field.id}`"
+                                            type="button"
+                                            :aria-required="field.required ? 'true' : 'false'"
+                                            :aria-invalid="getFieldError(field.id) ? 'true' : 'false'"
+                                            :aria-describedby="getFieldError(field.id) ? `error_${field.id}` : `photo_hint_${field.id}`"
+                                            @click="triggerPhotoPicker(field.id)"
+                                            class="px-4 py-2 rounded-xl bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold shadow-2xs transition cursor-pointer shrink-0"
+                                        >
+                                            Choose Photo
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <!-- Field Error Alert -->
-                                <div v-if="getFieldError(field.id)" class="text-xs text-red-600 font-medium flex items-center space-x-1">
+                                <div v-if="getFieldError(field.id)" :id="`error_${field.id}`" role="alert" class="text-xs text-red-600 font-medium flex items-center space-x-1">
                                     <svg class="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
                                     </svg>

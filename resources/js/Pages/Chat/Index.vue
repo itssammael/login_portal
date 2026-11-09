@@ -36,16 +36,41 @@ watch(() => props.conversations, (newVal) => {
     conversationsList.value = [...(newVal || [])];
 }, { deep: true });
 
+// Active conversation local reactive state
+const activeConversation = ref(props.activeConversation ? { ...props.activeConversation } : null);
+const activeMessages = ref([...(props.activeConversation?.messages || [])]);
+const hasMoreMessages = ref(!!props.activeConversation?.has_more);
+const isLoadingConversation = ref(false);
+const conversationLoadError = ref(null);
+let currentFetchConversationId = null;
+let currentFetchAbortController = null;
+
 watch(() => props.activeConversation, (active) => {
     if (active?.id) {
-        const currentConv = conversationsList.value.find(c => c.id === active.id);
-        if (currentConv) {
-            currentConv.unread_count = 0;
-            currentConv.has_unread_mentions = false;
-            currentConv.unread_mentions_count = 0;
+        if (!isLoadingConversation.value || currentFetchConversationId === active.id) {
+            activeConversation.value = { ...active };
+            activeMessages.value = [...(active.messages || [])];
+            hasMoreMessages.value = !!active.has_more;
+            isLoadingConversation.value = false;
+            conversationLoadError.value = null;
+
+            const currentConv = conversationsList.value.find(c => c.id === active.id);
+            if (currentConv) {
+                currentConv.unread_count = 0;
+                currentConv.has_unread_mentions = false;
+                currentConv.unread_mentions_count = 0;
+            }
+            updateConversationChannelSubscription(active.id);
+            messageForm.body = loadDraft(active.id);
         }
+    } else if (active === null && !currentFetchConversationId) {
+        activeConversation.value = null;
+        activeMessages.value = [];
+        hasMoreMessages.value = false;
+        isLoadingConversation.value = false;
+        conversationLoadError.value = null;
     }
-}, { immediate: true });
+});
 
 const unreadConversationsCount = computed(() => {
     return conversationsList.value.filter(c => (c.unread_count || 0) > 0 || c.has_unread_mentions).length;
@@ -80,8 +105,6 @@ const showEmojiPicker = ref(false);
 const activeMessageMenuId = ref(null);
 const activeConversationMenuId = ref(null);
 
-const activeMessages = ref([...(props.activeConversation?.messages || [])]);
-const hasMoreMessages = ref(!!props.activeConversation?.has_more);
 const isLoadingOlder = ref(false);
 const pendingMessages = ref([]);
 const hasNewMessagesBelow = ref(false);
@@ -159,10 +182,10 @@ const messageForm = useForm({
 
 // All messages combined
 const allMessages = computed(() => {
-    if (!props.activeConversation) return [];
+    if (!activeConversation.value) return [];
     const serverMsgs = activeMessages.value || [];
     const activePending = pendingMessages.value.filter(
-        p => p.conversation_id === props.activeConversation.id
+        p => p.conversation_id === activeConversation.value.id
     );
     if (activePending.length === 0) return serverMsgs;
     return [...serverMsgs, ...activePending];
@@ -170,7 +193,7 @@ const allMessages = computed(() => {
 
 // Filtered Shared Attachments
 const filteredSharedAttachments = computed(() => {
-    const list = props.activeConversation?.shared_attachments || [];
+    const list = activeConversation.value?.shared_attachments || [];
     if (sharedTab.value === 'media') {
         return list.filter(f => f.type === 'image');
     }
@@ -259,7 +282,7 @@ const scrollToMessage = (messageId) => {
 
 // Load older messages with cursor
 const loadOlderMessages = async () => {
-    if (isLoadingOlder.value || !hasMoreMessages.value || !props.activeConversation) return;
+    if (isLoadingOlder.value || !hasMoreMessages.value || !activeConversation.value) return;
 
     isLoadingOlder.value = true;
     const container = messagesContainer.value;
@@ -270,7 +293,7 @@ const loadOlderMessages = async () => {
     const beforeId = firstMsg ? firstMsg.id : null;
 
     try {
-        const response = await axios.get(route('chat.messages', props.activeConversation.id), {
+        const response = await axios.get(route('chat.messages', activeConversation.value.id), {
             params: { before_id: beforeId },
         });
 
@@ -342,7 +365,7 @@ const dragCounter = ref(0);
 const handleDragEnter = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!props.activeConversation) return;
+    if (!activeConversation.value) return;
     dragCounter.value++;
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
         isDragging.value = true;
@@ -352,7 +375,7 @@ const handleDragEnter = (e) => {
 const handleDragLeave = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!props.activeConversation) return;
+    if (!activeConversation.value) return;
     dragCounter.value--;
     if (dragCounter.value <= 0) {
         isDragging.value = false;
@@ -371,7 +394,7 @@ const handleDrop = (e) => {
     isDragging.value = false;
     dragCounter.value = 0;
 
-    if (!props.activeConversation) return;
+    if (!activeConversation.value) return;
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
@@ -412,8 +435,8 @@ const resizeComposer = () => {
 };
 
 watch(() => messageForm.body, (newVal) => {
-    if (props.activeConversation?.id && !editingMessage.value) {
-        saveDraft(props.activeConversation.id, newVal);
+    if (activeConversation.value?.id && !editingMessage.value) {
+        saveDraft(activeConversation.value.id, newVal);
     }
     nextTick(resizeComposer);
 });
@@ -426,14 +449,14 @@ const focusComposer = () => {
 
 // Emit real-time typing notification debounced
 const emitTyping = () => {
-    if (!props.activeConversation || editingMessage.value) return;
+    if (!activeConversation.value || editingMessage.value) return;
     if (typingDebounceTimeout) return;
 
     typingDebounceTimeout = setTimeout(() => {
         typingDebounceTimeout = null;
     }, 2500);
 
-    axios.post(route('chat.typing', props.activeConversation.id)).catch(() => {});
+    axios.post(route('chat.typing', activeConversation.value.id)).catch(() => {});
 };
 
 // Mention autocomplete state & logic
@@ -445,16 +468,16 @@ const selectedMentionIndex = ref(0);
 // Conversation members eligible to be mentioned (excluding current user and banned members)
 // Group chats include @everyone at the top of the autocomplete list; direct/system chats do not.
 const mentionableMembers = computed(() => {
-    if (!props.activeConversation) return [];
-    if (props.activeConversation.is_system || props.activeConversation.type === 'system') return [];
+    if (!activeConversation.value) return [];
+    if (activeConversation.value.is_system || activeConversation.value.type === 'system') return [];
 
-    const isGroup = props.activeConversation.type === 'group';
+    const isGroup = activeConversation.value.type === 'group';
 
     let members = [];
-    if (Array.isArray(props.activeConversation.participants) && props.activeConversation.participants.length > 0) {
-        members = props.activeConversation.participants.filter(p => p.id !== currentUser.value.id && !p.is_banned);
-    } else if (props.activeConversation.other_user && props.activeConversation.other_user.id !== currentUser.value.id && !props.activeConversation.other_user.is_banned) {
-        members = [props.activeConversation.other_user];
+    if (Array.isArray(activeConversation.value.participants) && activeConversation.value.participants.length > 0) {
+        members = activeConversation.value.participants.filter(p => p.id !== currentUser.value.id && !p.is_banned);
+    } else if (activeConversation.value.other_user && activeConversation.value.other_user.id !== currentUser.value.id && !activeConversation.value.other_user.is_banned) {
+        members = [activeConversation.value.other_user];
     }
 
     if (isGroup) {
@@ -490,12 +513,12 @@ const filteredMentionMembers = computed(() => {
 const parseMessageSegments = (text) => {
     if (!text) return [];
 
-    const isGroup = props.activeConversation?.type === 'group';
-    const participants = props.activeConversation?.participants || [];
+    const isGroup = activeConversation.value?.type === 'group';
+    const participants = activeConversation.value?.participants || [];
     const participantNames = [];
-    if (props.activeConversation?.other_user) {
-        if (props.activeConversation.other_user.name) participantNames.push(props.activeConversation.other_user.name);
-        if (props.activeConversation.other_user.username) participantNames.push(props.activeConversation.other_user.username);
+    if (activeConversation.value?.other_user) {
+        if (activeConversation.value.other_user.name) participantNames.push(activeConversation.value.other_user.name);
+        if (activeConversation.value.other_user.username) participantNames.push(activeConversation.value.other_user.username);
     }
     participants.forEach(p => {
         if (p.name) participantNames.push(p.name);
@@ -556,7 +579,7 @@ const parseMessageSegments = (text) => {
 // Inspect textarea cursor position to check if user is typing an @mention
 const checkMentionTrigger = () => {
     const el = composerTextarea.value;
-    if (!el || !props.activeConversation || props.activeConversation.is_system) {
+    if (!el || !activeConversation.value || activeConversation.value.is_system) {
         showMentionDropdown.value = false;
         return;
     }
@@ -746,13 +769,13 @@ const removePendingMessage = (pendingMsgId) => {
 
 // Send message (optimistic update)
 const sendMessage = () => {
-    if (!props.activeConversation) return;
+    if (!activeConversation.value || isLoadingConversation.value || conversationLoadError.value) return;
     if (!messageForm.body.trim() && !messageForm.attachment) return;
 
     const bodyText = messageForm.body;
     const fileObj = selectedFile.value;
     const previewUrl = selectedFilePreview.value;
-    const conversationId = props.activeConversation.id;
+    const conversationId = activeConversation.value.id;
     const replyMeta = replyingToMessage.value ? { ...replyingToMessage.value } : null;
 
     const tempId = 'pending-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
@@ -872,7 +895,7 @@ const startEditMessage = (message) => {
 const cancelEditMessage = () => {
     if (!editingMessage.value) return;
     editingMessage.value = null;
-    messageForm.body = loadDraft(props.activeConversation?.id);
+    messageForm.body = loadDraft(activeConversation.value?.id);
     nextTick(resizeComposer);
 };
 
@@ -889,7 +912,7 @@ const submitEditMessage = () => {
             preserveScroll: true,
             onSuccess: () => {
                 editingMessage.value = null;
-                messageForm.body = loadDraft(props.activeConversation?.id);
+                messageForm.body = loadDraft(activeConversation.value?.id);
                 showToast('Message updated');
                 nextTick(resizeComposer);
             },
@@ -908,8 +931,8 @@ const togglePinConversation = (conv) => {
         preserveScroll: true,
         onSuccess: () => {
             conv.is_pinned = !conv.is_pinned;
-            if (props.activeConversation?.id === conv.id) {
-                props.activeConversation.is_pinned = conv.is_pinned;
+            if (activeConversation.value?.id === conv.id) {
+                activeConversation.value.is_pinned = conv.is_pinned;
             }
             conversationsList.value.sort((a, b) => {
                 if (a.is_pinned !== b.is_pinned) return b.is_pinned ? 1 : -1;
@@ -927,8 +950,8 @@ const toggleMuteConversation = (conv) => {
         preserveScroll: true,
         onSuccess: () => {
             conv.is_muted = !conv.is_muted;
-            if (props.activeConversation?.id === conv.id) {
-                props.activeConversation.is_muted = conv.is_muted;
+            if (activeConversation.value?.id === conv.id) {
+                activeConversation.value.is_muted = conv.is_muted;
             }
             showToast(conv.is_muted ? 'Notifications muted' : 'Notifications unmuted');
         },
@@ -986,7 +1009,8 @@ const onChatSearchInput = () => {
     isSearchingChat.value = true;
     chatSearchTimeout = setTimeout(async () => {
         try {
-            const res = await axios.get(route('chat.search-messages', props.activeConversation.id), {
+            if (!activeConversation.value) return;
+            const res = await axios.get(route('chat.search-messages', activeConversation.value.id), {
                 params: { q },
             });
             chatSearchResults.value = res.data.results || [];
@@ -1175,7 +1199,7 @@ const confirmDeleteForMe = () => {
                 targetMsg.is_edited = false;
                 targetMsg.edited_at = null;
             }
-            const conv = conversationsList.value.find(c => c.id === props.activeConversation?.id);
+            const conv = conversationsList.value.find(c => c.id === activeConversation.value?.id);
             if (conv && conv.latest_message && conv.latest_message.id === msgId) {
                 conv.latest_message.body = 'User has deleted a message';
                 conv.latest_message.is_deleted_for_me = true;
@@ -1283,21 +1307,21 @@ const showDeleteGroupModal = ref(false);
 const isDeletingGroup = ref(false);
 
 const addableContacts = computed(() => {
-    if (!props.activeConversation?.participants) return contacts.value;
-    const participantIds = new Set(props.activeConversation.participants.map(p => p.id));
+    if (!activeConversation.value?.participants) return contacts.value;
+    const participantIds = new Set(activeConversation.value.participants.map(p => p.id));
     return contacts.value.filter(c => !participantIds.has(c.id));
 });
 
 const openRenameGroupModal = () => {
-    renameGroupTitle.value = props.activeConversation?.title || '';
+    renameGroupTitle.value = activeConversation.value?.title || '';
     showRenameGroupModal.value = true;
 };
 
 const confirmRenameGroup = () => {
-    if (!renameGroupTitle.value.trim() || !props.activeConversation) return;
+    if (!renameGroupTitle.value.trim() || !activeConversation.value) return;
     isRenamingGroup.value = true;
 
-    router.patch(route('chat.rename-group', props.activeConversation.id), {
+    router.patch(route('chat.rename-group', activeConversation.value.id), {
         title: renameGroupTitle.value.trim(),
     }, {
         preserveScroll: true,
@@ -1342,10 +1366,10 @@ const toggleAddMemberSelection = (user) => {
 };
 
 const confirmAddMembers = () => {
-    if (addMembersSelectedIds.value.length === 0 || !props.activeConversation) return;
+    if (addMembersSelectedIds.value.length === 0 || !activeConversation.value) return;
     isAddingMembers.value = true;
 
-    router.post(route('chat.add-members', props.activeConversation.id), {
+    router.post(route('chat.add-members', activeConversation.value.id), {
         user_ids: addMembersSelectedIds.value,
     }, {
         preserveScroll: true,
@@ -1369,10 +1393,10 @@ const promptRemoveMember = (participant) => {
 };
 
 const confirmRemoveMember = () => {
-    if (!memberToRemove.value || !props.activeConversation) return;
+    if (!memberToRemove.value || !activeConversation.value) return;
     isRemovingMember.value = true;
 
-    router.delete(route('chat.remove-member', [props.activeConversation.id, memberToRemove.value.id]), {
+    router.delete(route('chat.remove-member', [activeConversation.value.id, memberToRemove.value.id]), {
         preserveScroll: true,
         onSuccess: () => {
             showToast(`${memberToRemove.value.name} was removed from the group`);
@@ -1392,10 +1416,10 @@ const promptPromoteMember = (participant) => {
 };
 
 const confirmPromoteMember = () => {
-    if (!memberToPromote.value || !props.activeConversation) return;
+    if (!memberToPromote.value || !activeConversation.value) return;
     isPromotingMember.value = true;
 
-    router.post(route('chat.promote-member', [props.activeConversation.id, memberToPromote.value.id]), {}, {
+    router.post(route('chat.promote-member', [activeConversation.value.id, memberToPromote.value.id]), {}, {
         preserveScroll: true,
         onSuccess: () => {
             showToast(`${memberToPromote.value.name} was promoted to group admin`);
@@ -1415,12 +1439,13 @@ const promptDeleteGroup = () => {
 };
 
 const confirmDeleteGroup = () => {
-    if (!props.activeConversation) return;
+    if (!activeConversation.value) return;
     isDeletingGroup.value = true;
 
-    router.delete(route('chat.delete-group', props.activeConversation.id), {
+    router.delete(route('chat.delete-group', activeConversation.value.id), {
         onSuccess: () => {
             showDeleteGroupModal.value = false;
+            closeActiveConversation(true);
             showToast('Group deleted successfully');
         },
         onError: (err) => {
@@ -1441,7 +1466,7 @@ const setupEchoListeners = () => {
     window.Echo.private(`App.Models.User.${currentUser.value.id}`)
         .listen('.message.sent', handleUserChannelEvent);
 
-    updateConversationChannelSubscription(props.activeConversation?.id);
+    updateConversationChannelSubscription(activeConversation.value?.id);
 
     // Track connectivity if Reverb/Pusher is accessible
     const pusher = window.Echo.connector?.pusher;
@@ -1502,7 +1527,7 @@ const handleUserChannelEvent = (e) => {
                 conv.latest_message = e.data.conversation.latest_message;
                 conv.last_message_at = e.data.conversation.last_message_at;
             }
-            if (props.activeConversation?.id !== e.conversation_id && isFromOther) {
+            if (activeConversation.value?.id !== e.conversation_id && isFromOther) {
                 conv.unread_count = (conv.unread_count || 0) + 1;
                 const mentionedIds = e.data?.mentioned_user_ids || e.data?.message?.mentioned_user_ids || [];
                 if (Array.isArray(mentionedIds) && mentionedIds.includes(currentUser.value.id)) {
@@ -1514,7 +1539,7 @@ const handleUserChannelEvent = (e) => {
             reorderConversation(conv);
         } else if (e.data?.conversation) {
             const newConv = { ...e.data.conversation };
-            if (props.activeConversation?.id === e.conversation_id || !isFromOther) {
+            if (activeConversation.value?.id === e.conversation_id || !isFromOther) {
                 newConv.unread_count = 0;
                 newConv.has_unread_mentions = false;
                 newConv.unread_mentions_count = 0;
@@ -1536,7 +1561,7 @@ const handleUserChannelEvent = (e) => {
         if (conv && conv.latest_message?.id === e.data?.message_id && !conv.latest_message.is_deleted_for_me) {
             conv.latest_message.body = e.data?.body ?? conv.latest_message.body;
         }
-        if (conv && props.activeConversation?.id !== e.conversation_id) {
+        if (conv && activeConversation.value?.id !== e.conversation_id) {
             const mentionedIds = e.data?.mentioned_user_ids || [];
             const prevMentionedIds = e.data?.previous_mentioned_user_ids || [];
             if (Array.isArray(mentionedIds)) {
@@ -1569,21 +1594,21 @@ const handleUserChannelEvent = (e) => {
         }
     } else if (e.action === 'group_deleted') {
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
-        if (props.activeConversation?.id === e.conversation_id) {
+        if (activeConversation.value?.id === e.conversation_id) {
             showToast('This group chat was deleted');
-            router.visit(route('chat.index'));
+            closeActiveConversation(true);
         }
     } else if (e.action === 'member_removed' && e.data?.user_id === currentUser.value.id) {
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
-        if (props.activeConversation?.id === e.conversation_id) {
+        if (activeConversation.value?.id === e.conversation_id) {
             showToast('You were removed from this group');
-            router.visit(route('chat.index'));
+            closeActiveConversation(true);
         }
     }
 };
 
 const handleConversationChannelEvent = (e) => {
-    if (!props.activeConversation || props.activeConversation.id !== e.conversation_id) return;
+    if (!activeConversation.value || activeConversation.value.id !== e.conversation_id) return;
 
     if (e.action === 'created') {
         const msg = e.data?.message;
@@ -1613,7 +1638,7 @@ const handleConversationChannelEvent = (e) => {
                 newIncomingCount.value++;
             }
 
-            if (!isMe && props.activeConversation?.id === e.conversation_id && document.visibilityState === 'visible') {
+            if (!isMe && activeConversation.value?.id === e.conversation_id && document.visibilityState === 'visible') {
                 markCurrentConversationAsSeen(e.conversation_id);
             }
         }
@@ -1678,121 +1703,208 @@ const handleConversationChannelEvent = (e) => {
             }
         }
     } else if (e.action === 'group_renamed') {
-        if (props.activeConversation && props.activeConversation.id === e.conversation_id && e.data?.title) {
-            props.activeConversation.title = e.data.title;
+        if (activeConversation.value && activeConversation.value.id === e.conversation_id && e.data?.title) {
+            activeConversation.value.title = e.data.title;
         }
         const conv = conversationsList.value.find(c => c.id === e.conversation_id);
         if (conv && e.data?.title) {
             conv.title = e.data.title;
         }
     } else if (e.action === 'members_added') {
-        if (props.activeConversation && props.activeConversation.id === e.conversation_id && Array.isArray(e.data?.participants)) {
-            if (!props.activeConversation.participants) props.activeConversation.participants = [];
+        if (activeConversation.value && activeConversation.value.id === e.conversation_id && Array.isArray(e.data?.participants)) {
+            if (!activeConversation.value.participants) activeConversation.value.participants = [];
             e.data.participants.forEach(p => {
-                if (!props.activeConversation.participants.some(existing => existing.id === p.id)) {
-                    props.activeConversation.participants.push(p);
+                if (!activeConversation.value.participants.some(existing => existing.id === p.id)) {
+                    activeConversation.value.participants.push(p);
                 }
             });
         }
     } else if (e.action === 'member_removed') {
-        if (props.activeConversation && props.activeConversation.id === e.conversation_id) {
+        if (activeConversation.value && activeConversation.value.id === e.conversation_id) {
             if (e.data?.user_id === currentUser.value.id) {
                 showToast('You were removed from this group');
-                router.visit(route('chat.index'));
+                closeActiveConversation(true);
                 return;
             }
-            if (props.activeConversation.participants) {
-                props.activeConversation.participants = props.activeConversation.participants.filter(p => p.id !== e.data.user_id);
+            if (activeConversation.value.participants) {
+                activeConversation.value.participants = activeConversation.value.participants.filter(p => p.id !== e.data.user_id);
             }
         }
     } else if (e.action === 'member_promoted') {
-        if (props.activeConversation && props.activeConversation.id === e.conversation_id) {
-            if (props.activeConversation.participants) {
-                const p = props.activeConversation.participants.find(p => p.id === e.data.user_id);
+        if (activeConversation.value && activeConversation.value.id === e.conversation_id) {
+            if (activeConversation.value.participants) {
+                const p = activeConversation.value.participants.find(p => p.id === e.data.user_id);
                 if (p) {
                     p.role = 'admin';
                     p.is_admin = true;
                 }
             }
             if (e.data?.user_id === currentUser.value.id) {
-                props.activeConversation.is_admin = true;
+                activeConversation.value.is_admin = true;
                 showToast('You were promoted to group admin');
             }
         }
     } else if (e.action === 'group_deleted') {
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
-        if (props.activeConversation && props.activeConversation.id === e.conversation_id) {
+        if (activeConversation.value && activeConversation.value.id === e.conversation_id) {
             showToast('This group chat was deleted');
-            router.visit(route('chat.index'));
+            closeActiveConversation(true);
         }
     }
 };
 
-// Watch active conversation switches
-watch(() => props.activeConversation?.id, (newId, oldId) => {
-    if (newId !== oldId) {
-        activeMessages.value = [...(props.activeConversation?.messages || [])];
-        hasMoreMessages.value = !!props.activeConversation?.has_more;
-        hasNewMessagesBelow.value = false;
-        newIncomingCount.value = 0;
-        activeMessageMenuId.value = null;
-        activeConversationMenuId.value = null;
-        replyingToMessage.value = null;
-        cancelEditMessage();
-        clearSelectedFile();
-        clearChatSearch();
-        typingUsers.value = {};
-        updateConversationChannelSubscription(newId);
+// Select conversation immediately with local data and fetch messages asynchronously
+const selectConversation = async (conv, shouldPushState = true) => {
+    if (!conv) return;
 
-        // Restore draft for this conversation
-        messageForm.body = loadDraft(newId);
+    if (currentFetchAbortController) {
+        currentFetchAbortController.abort();
+    }
+    currentFetchAbortController = new AbortController();
 
-        if (newId && document.visibilityState === 'visible') {
-            markCurrentConversationAsSeen(newId);
+    const targetId = conv.id;
+    currentFetchConversationId = targetId;
+
+    if (shouldPushState) {
+        const targetUrl = route('chat.index', { conversation: targetId });
+        window.history.pushState(window.history.state, '', targetUrl);
+    }
+
+    // 1. Immediately select and render header/pane using locally available data
+    activeConversation.value = {
+        ...conv,
+        participants: conv.participants || (conv.other_user ? [conv.other_user] : []),
+        shared_attachments: conv.shared_attachments || [],
+    };
+
+    // 2. Immediately clear previous conversation messages and load error
+    activeMessages.value = [];
+    hasMoreMessages.value = false;
+    isLoadingConversation.value = true;
+    conversationLoadError.value = null;
+
+    // Reset interaction states
+    hasNewMessagesBelow.value = false;
+    newIncomingCount.value = 0;
+    activeMessageMenuId.value = null;
+    activeConversationMenuId.value = null;
+    replyingToMessage.value = null;
+    cancelEditMessage();
+    clearSelectedFile();
+    clearChatSearch();
+    typingUsers.value = {};
+
+    // Locally mark conversation as read in sidebar list
+    const sidebarConv = conversationsList.value.find(c => c.id === targetId);
+    if (sidebarConv) {
+        sidebarConv.unread_count = 0;
+        sidebarConv.has_unread_mentions = false;
+        sidebarConv.unread_mentions_count = 0;
+    }
+
+    // Subscribe to new conversation channel
+    updateConversationChannelSubscription(targetId);
+
+    // Load draft
+    messageForm.body = loadDraft(targetId);
+
+    // 3. Asynchronously fetch latest messages & full metadata
+    try {
+        const response = await axios.get(route('chat.messages', targetId), {
+            params: { include_meta: 1, mark_read: 1 },
+            signal: currentFetchAbortController.signal,
+        });
+
+        // Guard against stale response if user switched conversations
+        if (currentFetchConversationId !== targetId) {
+            return;
         }
 
-        scrollToBottom(false);
+        if (response.data.conversation) {
+            activeConversation.value = {
+                ...activeConversation.value,
+                ...response.data.conversation,
+            };
+        }
+        activeMessages.value = response.data.messages || [];
+        hasMoreMessages.value = !!response.data.has_more;
+        isLoadingConversation.value = false;
+        conversationLoadError.value = null;
+
         nextTick(() => {
+            scrollToBottom(false);
             resizeComposer();
             focusComposer();
         });
-    }
-});
-
-// Merge props.activeConversation.messages updates by ID
-watch(() => props.activeConversation?.messages, (newMsgs) => {
-    if (!newMsgs || !props.activeConversation) return;
-
-    const incomingMap = new Map(newMsgs.map(m => [m.id, m]));
-    const updated = activeMessages.value.map(existingMsg => {
-        if (incomingMap.has(existingMsg.id)) {
-            const incoming = incomingMap.get(existingMsg.id);
-            incomingMap.delete(existingMsg.id);
-            return { ...existingMsg, ...incoming };
+    } catch (err) {
+        if (axios.isCancel(err) || err.name === 'CanceledError' || err.name === 'AbortError') {
+            return;
         }
-        return existingMsg;
-    });
-
-    for (const msg of incomingMap.values()) {
-        if (!updated.some(m => m.id === msg.id)) {
-            updated.push(msg);
+        if (currentFetchConversationId !== targetId) {
+            return;
         }
-    }
 
-    activeMessages.value = updated;
-}, { deep: true });
+        isLoadingConversation.value = false;
+        conversationLoadError.value = err.response?.data?.message || 'Unable to load conversation messages. Please check your connection and try again.';
+    }
+};
+
+const fetchAndSelectConversationById = (convId, shouldPushState = false) => {
+    if (!convId) return;
+    const numericId = parseInt(convId, 10);
+    const existing = conversationsList.value.find(c => c.id === numericId || c.id === convId);
+    if (existing) {
+        selectConversation(existing, shouldPushState);
+    } else {
+        const stub = { id: numericId || convId, type: 'direct', title: 'Conversation' };
+        selectConversation(stub, shouldPushState);
+    }
+};
+
+const retryLoadActiveConversation = () => {
+    if (activeConversation.value) {
+        selectConversation(activeConversation.value, false);
+    }
+};
 
 // Close active conversation
-const closeActiveConversation = () => {
-    if (!props.activeConversation) return;
+const closeActiveConversation = (shouldPushState = true) => {
+    if (currentFetchAbortController) {
+        currentFetchAbortController.abort();
+    }
+    currentFetchConversationId = null;
 
     if (document.activeElement && typeof document.activeElement.blur === 'function') {
         document.activeElement.blur();
     }
 
-    router.visit(route('chat.index'), {
-        preserveScroll: true,
-    });
+    activeConversation.value = null;
+    activeMessages.value = [];
+    hasMoreMessages.value = false;
+    isLoadingConversation.value = false;
+    conversationLoadError.value = null;
+    cancelEditMessage();
+    clearSelectedFile();
+    clearChatSearch();
+    updateConversationChannelSubscription(null);
+
+    if (shouldPushState) {
+        window.history.pushState(window.history.state, '', route('chat.index'));
+    }
+};
+
+const handlePopState = () => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const convParam = params.get('conversation');
+    if (convParam) {
+        const targetId = parseInt(convParam, 10) || convParam;
+        if (!activeConversation.value || activeConversation.value.id !== targetId) {
+            fetchAndSelectConversationById(targetId, false);
+        }
+    } else if (activeConversation.value) {
+        closeActiveConversation(false);
+    }
 };
 
 // Close open menus and modals on Escape, or close active conversation
@@ -1847,8 +1959,8 @@ const handleGlobalKeydown = (e) => {
             return;
         }
 
-        if (props.activeConversation) {
-            closeActiveConversation();
+        if (activeConversation.value) {
+            closeActiveConversation(true);
             return;
         }
 
@@ -1861,8 +1973,8 @@ const handleGlobalKeydown = (e) => {
 const handleOnline = () => { isOnline.value = true; isReconnecting.value = false; };
 const handleOffline = () => { isOnline.value = false; isReconnecting.value = true; };
 const handleWindowFocus = () => {
-    if (props.activeConversation?.id && document.visibilityState === 'visible') {
-        markCurrentConversationAsSeen(props.activeConversation.id);
+    if (activeConversation.value?.id && document.visibilityState === 'visible') {
+        markCurrentConversationAsSeen(activeConversation.value.id);
     }
 };
 
@@ -1882,16 +1994,17 @@ const handleGlobalClick = (e) => {
 onMounted(() => {
     scrollToBottom(false);
     setupEchoListeners();
-    if (props.activeConversation?.id) {
-        messageForm.body = loadDraft(props.activeConversation.id);
+    if (activeConversation.value?.id) {
+        messageForm.body = loadDraft(activeConversation.value.id);
         if (document.visibilityState === 'visible') {
-            markCurrentConversationAsSeen(props.activeConversation.id);
+            markCurrentConversationAsSeen(activeConversation.value.id);
         }
     }
     nextTick(() => {
         resizeComposer();
         focusComposer();
     });
+    window.addEventListener('popstate', handlePopState);
     window.addEventListener('keydown', handleGlobalKeydown, true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
@@ -1901,12 +2014,16 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    window.removeEventListener('popstate', handlePopState);
     window.removeEventListener('keydown', handleGlobalKeydown, true);
     window.removeEventListener('online', handleOnline);
     window.removeEventListener('offline', handleOffline);
     window.removeEventListener('focus', handleWindowFocus);
     document.removeEventListener('visibilitychange', handleWindowFocus);
     document.removeEventListener('click', handleGlobalClick);
+    if (currentFetchAbortController) {
+        currentFetchAbortController.abort();
+    }
     if (window.Echo) {
         if (currentUser.value.id) {
             window.Echo.private(`App.Models.User.${currentUser.value.id}`)
@@ -2035,9 +2152,10 @@ onBeforeUnmount(() => {
                                     class="rounded-xl transition duration-150 group relative"
                                     :class="activeConversation?.id === conv.id ? 'bg-[#ede1b8] shadow-xs border border-cream-500/50' : 'hover:bg-cream-300/60'"
                                 >
-                                    <Link
+                                    <a
                                         :href="route('chat.index', { conversation: conv.id })"
-                                        class="flex items-center p-3"
+                                        @click.prevent="selectConversation(conv)"
+                                        class="flex items-center p-3 cursor-pointer"
                                     >
                                         <!-- Avatar & Presence Dot -->
                                         <div class="relative shrink-0 me-3">
@@ -2119,7 +2237,7 @@ onBeforeUnmount(() => {
                                                 </div>
                                             </div>
                                         </div>
-                                    </Link>
+                                    </a>
 
                                     <!-- Quick Conversation Hover / Options Menu -->
                                     <div
@@ -2217,15 +2335,16 @@ onBeforeUnmount(() => {
                             <div class="h-16 px-4 sm:px-6 border-b border-cream-500/40 flex items-center justify-between bg-cream-200/90 z-10 shrink-0">
                                 <div class="flex items-center space-x-3 truncate me-2">
                                     <!-- Mobile Back Button -->
-                                    <Link
-                                        :href="route('chat.index')"
-                                        class="md:hidden p-1.5 -ml-1 text-forest-900 hover:bg-cream-300 rounded-lg transition"
+                                    <button
+                                        type="button"
+                                        @click="closeActiveConversation(true)"
+                                        class="md:hidden p-1.5 -ml-1 text-forest-900 hover:bg-cream-300 rounded-lg transition cursor-pointer"
                                         aria-label="Back to conversations list"
                                     >
                                         <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
                                         </svg>
-                                    </Link>
+                                    </button>
 
                                     <!-- User Avatar & Status -->
                                     <div class="relative shrink-0">
@@ -2330,7 +2449,7 @@ onBeforeUnmount(() => {
                                     <!-- Close Conversation Button -->
                                     <button
                                         @click="closeActiveConversation"
-                                        class="p-2 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-xl transition cursor-pointer"
+                                        class="hidden md:inline-flex p-2 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-xl transition cursor-pointer"
                                         title="Close chat (Esc)"
                                         aria-label="Close currently opened conversation"
                                     >
@@ -2416,7 +2535,7 @@ onBeforeUnmount(() => {
                                         class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-cream-300"
                                     >
                                         <!-- Load Older Messages Button (Top of message history) -->
-                                        <div v-if="hasMoreMessages" class="flex justify-center pb-2 pt-1">
+                                        <div v-if="hasMoreMessages && !isLoadingConversation" class="flex justify-center pb-2 pt-1">
                                             <button
                                                 type="button"
                                                 @click="loadOlderMessages"
@@ -2435,7 +2554,57 @@ onBeforeUnmount(() => {
                                             </button>
                                         </div>
 
-                                        <template v-if="allMessages.length > 0">
+                                        <!-- Conversation Messages Loading Skeleton -->
+                                        <div v-if="isLoadingConversation" class="h-full flex flex-col justify-end p-2 sm:p-4 space-y-4 animate-pulse">
+                                            <!-- Skeleton Left -->
+                                            <div class="flex items-start space-x-2.5 max-w-sm">
+                                                <div class="size-8 rounded-full bg-cream-400/80 shrink-0"></div>
+                                                <div class="space-y-1.5 flex-1">
+                                                    <div class="h-2.5 w-20 bg-cream-400/80 rounded"></div>
+                                                    <div class="h-10 w-44 bg-cream-200/90 rounded-2xl border border-cream-400/50"></div>
+                                                </div>
+                                            </div>
+                                            <!-- Skeleton Right -->
+                                            <div class="flex items-start justify-end space-x-2.5">
+                                                <div class="space-y-1.5 flex flex-col items-end">
+                                                    <div class="h-12 w-52 bg-forest-800/15 rounded-2xl border border-forest-700/20"></div>
+                                                </div>
+                                            </div>
+                                            <!-- Skeleton Left -->
+                                            <div class="flex items-start space-x-2.5 max-w-md">
+                                                <div class="size-8 rounded-full bg-cream-400/80 shrink-0"></div>
+                                                <div class="space-y-1.5 flex-1">
+                                                    <div class="h-2.5 w-28 bg-cream-400/80 rounded"></div>
+                                                    <div class="h-16 w-60 bg-cream-200/90 rounded-2xl border border-cream-400/50"></div>
+                                                </div>
+                                            </div>
+                                            <!-- Skeleton Right -->
+                                            <div class="flex items-start justify-end space-x-2.5">
+                                                <div class="space-y-1.5 flex flex-col items-end">
+                                                    <div class="h-9 w-40 bg-forest-800/15 rounded-2xl border border-forest-700/20"></div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Conversation Load Error with Retry -->
+                                        <div v-else-if="conversationLoadError" class="h-full flex flex-col items-center justify-center text-center p-8 text-gray-600">
+                                            <div class="size-14 rounded-full bg-red-100/80 border border-red-300/60 flex items-center justify-center text-red-600 mb-3 shadow-xs">
+                                                <svg class="size-7" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                                                </svg>
+                                            </div>
+                                            <p class="text-sm font-semibold text-gray-800">Failed to load messages</p>
+                                            <p class="text-xs text-gray-500 mt-1 max-w-sm">{{ conversationLoadError }}</p>
+                                            <button
+                                                type="button"
+                                                @click="retryLoadActiveConversation"
+                                                class="mt-4 px-4 py-2 bg-forest-900 hover:bg-forest-950 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                                            >
+                                                Retry Loading
+                                            </button>
+                                        </div>
+
+                                        <template v-else-if="allMessages.length > 0">
                                             <div
                                                 v-for="message in allMessages"
                                                 :id="`message-${message.id}`"
@@ -2963,12 +3132,13 @@ onBeforeUnmount(() => {
 
                                             <!-- Pill Wrapper for attachment icon, emoji icon, and textarea -->
                                             <div class="flex-1 flex items-center bg-[#ebe2c8] border border-cream-500/50 rounded-full px-3 py-1 focus-within:ring-2 focus-within:ring-forest-600/30 focus-within:border-forest-600 transition">
-                                                <!-- Attachment Button (disabled during edit) -->
+                                                <!-- Attachment Button (disabled during edit or conversation load) -->
                                                 <button
                                                     v-if="!editingMessage"
                                                     type="button"
                                                     @click="$refs.fileInput.click()"
-                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0 cursor-pointer"
+                                                    :disabled="isLoadingConversation || !!conversationLoadError"
+                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                                     title="Attach file or photo"
                                                     aria-label="Attach file or photo"
                                                 >
@@ -2981,7 +3151,8 @@ onBeforeUnmount(() => {
                                                 <button
                                                     type="button"
                                                     @click="showEmojiPicker = !showEmojiPicker"
-                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0 cursor-pointer"
+                                                    :disabled="isLoadingConversation || !!conversationLoadError"
+                                                    class="p-1.5 text-forest-900 hover:text-forest-700 hover:bg-cream-400/40 rounded-full transition shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                                     title="Insert emoji"
                                                     aria-label="Insert emoji"
                                                 >
@@ -2999,8 +3170,9 @@ onBeforeUnmount(() => {
                                                     @keyup="onComposerKeyup"
                                                     @blur="onComposerBlur"
                                                     rows="1"
-                                                    :placeholder="editingMessage ? 'Edit your message...' : 'Type a message... (Enter to send, Shift+Enter for newline)'"
-                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden"
+                                                    :disabled="isLoadingConversation || !!conversationLoadError"
+                                                    :placeholder="isLoadingConversation ? 'Loading conversation messages...' : (conversationLoadError ? 'Could not load messages' : (editingMessage ? 'Edit your message...' : 'Type a message... (Enter to send, Shift+Enter for newline)'))"
+                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden disabled:opacity-50 disabled:cursor-not-allowed"
                                                     @keydown="onComposerKeydown"
                                                     aria-label="Type message content"
                                                 ></textarea>
@@ -3009,7 +3181,7 @@ onBeforeUnmount(() => {
                                             <!-- Send / Save Button -->
                                             <button
                                                 type="submit"
-                                                :disabled="messageForm.processing || (!messageForm.body.trim() && !messageForm.attachment)"
+                                                :disabled="isLoadingConversation || !!conversationLoadError || messageForm.processing || (!messageForm.body.trim() && !messageForm.attachment)"
                                                 class="size-10 bg-forest-900 hover:bg-forest-950 disabled:opacity-40 text-white rounded-full shadow-md flex items-center justify-center transition-all transform active:scale-95 shrink-0 cursor-pointer"
                                                 :title="editingMessage ? 'Save changes' : 'Send message'"
                                                 :aria-label="editingMessage ? 'Save changes' : 'Send message'"

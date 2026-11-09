@@ -4,6 +4,8 @@ namespace Tests\Unit;
 
 use App\Http\Requests\Admin\SaveFeedbackFormRequest;
 use App\Services\FeedbackSchemaValidator;
+use App\Services\FormImport\Detectors\ConfidenceScorer;
+use App\Services\FormImport\Detectors\FieldTypeDetector;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
@@ -169,5 +171,67 @@ class FeedbackSchemaValidatorTest extends TestCase
                 $errors['schema.fields.question_one.options'][0]
             );
         }
+    }
+
+    public function test_photo_field_schema_normalizes_and_rejects_malformed_definitions(): void
+    {
+        $validator = new FeedbackSchemaValidator;
+
+        $normalized = $validator->validateSchema([
+            'fields' => [
+                [
+                    'id' => 'site_photo',
+                    'particular' => 'Upload Site Photo',
+                    'type' => 'photo',
+                    'weight' => 1,
+                    'required' => true,
+                ],
+            ],
+        ]);
+
+        $this->assertSame('photo', $normalized['fields'][0]['type']);
+        $this->assertTrue($normalized['fields'][0]['required']);
+        $this->assertSame([], $normalized['fields'][0]['options']);
+        $this->assertSame('static', $normalized['fields'][0]['option_source']);
+        $this->assertFalse($normalized['fields'][0]['allow_other']);
+        $this->assertFalse($normalized['fields'][0]['allow_custom_value']);
+        $this->assertNull($normalized['fields'][0]['min']);
+        $this->assertNull($normalized['fields'][0]['max']);
+
+        try {
+            $validator->validateSchema([
+                'fields' => [
+                    [
+                        'id' => 'bad_photo',
+                        'particular' => 'Malformed Photo Field',
+                        'type' => 'photo',
+                        'options' => [
+                            ['value' => 'a', 'label' => 'Option A'],
+                        ],
+                    ],
+                ],
+            ]);
+            $this->fail('Expected ValidationException for photo options was not thrown.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('schema.fields.0.options', $e->errors());
+        }
+    }
+
+    public function test_field_type_detector_identifies_photo_upload_questions(): void
+    {
+        $detector = new FieldTypeDetector;
+        $scorer = new ConfidenceScorer;
+
+        $prompt = '1. Please upload a photo of the emergency command post?';
+        $detectedType = $detector->detectType($prompt, []);
+
+        $this->assertSame('photo', $detectedType);
+
+        $scored = $scorer->score([
+            'particular' => $prompt,
+            'type' => $detectedType,
+            'options' => [],
+        ]);
+        $this->assertGreaterThanOrEqual(0.8, $scored['score']);
     }
 }

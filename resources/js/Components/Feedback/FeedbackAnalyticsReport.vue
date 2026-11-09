@@ -1,7 +1,9 @@
 <script setup>
 import { computed, ref } from 'vue';
 import FeedbackAnalyticsBlock from './FeedbackAnalyticsBlock.vue';
+import FormRichEditor from './FormRichEditor.vue';
 import { reportBlocks } from './feedbackAnalyticsLayout';
+import { sanitizeHtml } from '@/Utils/htmlSanitizer';
 
 const props = defineProps({
     report: Object,
@@ -23,8 +25,8 @@ function drop(event, key, parentId = null) {
     emit('drop-block', { event, beforeKey: key, parentId });
 }
 
-function edit(key, field, event) {
-    emit('edit-text', { key, field, value: event.target.value });
+function edit(key, field, value) {
+    emit('edit-text', { key, field, value });
 }
 </script>
 
@@ -36,26 +38,26 @@ function edit(key, field, event) {
             @click="editable && emit('select', 'page')"
         >
             <p class="text-xs font-bold uppercase tracking-widest text-forest-700">{{ eventTitle }}</p>
-            <input
+            <FormRichEditor
                 v-if="editable"
-                :value="report.title"
-                aria-label="Report title on canvas"
-                maxlength="500"
-                class="canvas-input text-3xl font-black tracking-tight"
-                @input="edit('page', 'title', $event)"
-            >
-            <h1 v-else class="text-3xl font-black tracking-tight text-gray-950 sm:text-4xl">{{ report.title }}</h1>
-            <textarea
-                v-if="editable"
-                :value="report.description"
-                aria-label="Report description on canvas"
-                placeholder="Add a report description…"
-                maxlength="2000"
-                rows="2"
-                class="canvas-input resize-y leading-7 text-gray-600"
-                @input="edit('page', 'description', $event)"
+                :model-value="report.title"
+                placeholder="Report title…"
+                min-height="44px"
+                :allow-tables="false"
+                single-line
+                input-class="text-3xl font-black tracking-tight text-gray-950"
+                @update:model-value="edit('page', 'title', $event)"
             />
-            <p v-else-if="report.description" class="max-w-3xl whitespace-pre-line leading-7 text-gray-600">{{ report.description }}</p>
+            <h1 v-else class="text-3xl font-black tracking-tight text-gray-950 sm:text-4xl form-rich-content" v-html="sanitizeHtml(report.title)" />
+            <FormRichEditor
+                v-if="editable"
+                :model-value="report.description"
+                placeholder="Add a report description…"
+                min-height="60px"
+                input-class="leading-7 text-gray-600"
+                @update:model-value="edit('page', 'description', $event)"
+            />
+            <div v-else-if="report.description" class="max-w-3xl whitespace-pre-line leading-7 text-gray-600 form-rich-content" v-html="sanitizeHtml(report.description)" />
             <div class="flex flex-wrap gap-4 text-sm text-gray-500">
                 <span>Period: {{ report.period_start || 'Beginning' }} — {{ report.period_end || 'Present' }}</span>
                 <span v-if="report.show_submission_count && data?.submission_count != null">{{ data.submission_count }} submissions</span>
@@ -105,25 +107,19 @@ function edit(key, field, event) {
         </div>
 
         <footer class="flex flex-col gap-2 border-t border-cream-500 pt-5 text-xs leading-5 text-gray-500">
-            <textarea
-                v-if="editable"
-                :value="report.footer"
-                aria-label="Report footer on canvas"
-                maxlength="1000"
-                rows="2"
-                placeholder="Add a footer…"
-                class="canvas-input resize-y text-xs"
-                @input="edit('page', 'footer', $event)"
-                @focus="emit('select', 'page')"
-            />
-            <p v-else-if="report.footer" class="whitespace-pre-line">{{ report.footer }}</p>
+            <div v-if="editable" @click="emit('select', 'page')">
+                <FormRichEditor
+                    :model-value="report.footer"
+                    placeholder="Add a footer…"
+                    min-height="48px"
+                    input-class="text-xs leading-5 text-gray-500"
+                    @update:model-value="edit('page', 'footer', $event)"
+                    @focus="emit('select', 'page')"
+                />
+            </div>
+            <div v-else-if="report.footer" class="whitespace-pre-line form-rich-content" v-html="sanitizeHtml(report.footer)" />
             <p>Last data refresh: {{ data?.refreshed_at ? new Date(data.refreshed_at).toLocaleString() : 'Pending' }} · Refreshes every {{ report.refresh_seconds / 60 }} minutes.</p>
             <p>Small groups are withheld. Percentages use answered responses; multiple-choice totals may exceed 100%. Standard deviation uses the population formula.</p>
         </footer>
     </article>
 </template>
-
-<style scoped>
-.canvas-input { display: block; width: 100%; padding: 0; border: 0; background: transparent; border-radius: 0.25rem; }
-.canvas-input:focus { outline: 2px solid #a7f3d0; outline-offset: 4px; box-shadow: none; }
-</style>

@@ -293,6 +293,7 @@ class LiveFeedbackFormTest extends TestCase
         $response->assertCreated();
         $response->assertJsonStructure([
             'id',
+            'reference_code',
             'event_id',
             'feedback_id',
             'participant' => [
@@ -317,6 +318,9 @@ class LiveFeedbackFormTest extends TestCase
         ]);
 
         $submission = FbSubmission::latest()->first();
+        $this->assertNotNull($submission->reference_code);
+        $this->assertStringStartsWith('RSP-', $submission->reference_code);
+        $response->assertJsonPath('reference_code', $submission->reference_code);
         $this->assertSame('high', $submission->data['satisfaction']);
         $this->assertSame('Organized and on time.', $submission->data['comments']);
         $this->assertArrayNotHasKey('turnstile_token', $submission->data);
@@ -683,5 +687,35 @@ class LiveFeedbackFormTest extends TestCase
             'message' => 'This feedback form is currently in draft mode and is not accepting responses.',
         ]);
         $this->assertSame(0, FbSubmission::count());
+    }
+
+    public function test_feedback_forms_persist_unsubmitted_progress_in_24hr_cookies_and_clear_on_submit(): void
+    {
+        $composablePath = resource_path('js/Composables/useFormDraftCookie.js');
+        $liveFormPath = resource_path('js/Pages/Feedback/Live.vue');
+        $embedFormPath = resource_path('js/Pages/Feedback/Embed.vue');
+
+        $this->assertFileExists($composablePath);
+
+        $composableContent = file_get_contents($composablePath);
+        $liveContent = file_get_contents($liveFormPath);
+        $embedContent = file_get_contents($embedFormPath);
+
+        // Verify 24-hour (86400 seconds) cookie expiration and immediate cleanup mechanics
+        $this->assertStringContainsString('const COOKIE_MAX_AGE_SECONDS = 86400', $composableContent);
+        $this->assertStringContainsString('Max-Age=${maxAgeSeconds}', $composableContent);
+        $this->assertStringContainsString('Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT', $composableContent);
+
+        // Verify Live.vue integrates useFormDraftCookie, restores draft, and clears cookie on submit
+        $this->assertStringContainsString('useFormDraftCookie', $liveContent);
+        $this->assertStringContainsString('restoreDraft(', $liveContent);
+        $this->assertStringContainsString('clearDraft()', $liveContent);
+        $this->assertStringContainsString('clearSavedProgress', $liveContent);
+
+        // Verify Embed.vue integrates useFormDraftCookie, restores draft, and clears cookie on submit
+        $this->assertStringContainsString('useFormDraftCookie', $embedContent);
+        $this->assertStringContainsString('restoreDraft(', $embedContent);
+        $this->assertStringContainsString('clearDraft()', $embedContent);
+        $this->assertStringContainsString('clearSavedProgress', $embedContent);
     }
 }

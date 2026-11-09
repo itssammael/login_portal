@@ -1,8 +1,10 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue';
 import { usePage } from '@inertiajs/vue3';
 import FeedbackAnalyticsReport from './FeedbackAnalyticsReport.vue';
+import FormRichEditor from './FormRichEditor.vue';
 import { isDescendantOf, moveBlock, reorderBlock, reportBlocks } from './feedbackAnalyticsLayout';
+import { stripHtml } from '@/Utils/htmlSanitizer';
 
 const aspectW = 8.333333333;
 const aspectH = 11.111111111;
@@ -12,6 +14,8 @@ const emit = defineEmits(['close', 'publication']);
 
 const reports = ref([]);
 const questions = ref([]);
+const allQuestions = ref([]);
+const formData = ref(null);
 const selectedId = ref(null);
 const publicReportId = ref(null);
 const publication = ref({ has_published_report: false, public_url: null });
@@ -230,7 +234,7 @@ function createCustomChart(parentId = null) {
             firstQuestion
                 ? {
                     id: crypto.randomUUID(),
-                    label: firstQuestion.particular,
+                    label: stripHtml(firstQuestion.particular),
                     source: 'question',
                     question: firstQuestion.id,
                     operation: 'average',
@@ -257,7 +261,7 @@ function addCustomChartRow(chartItem, source = 'question') {
     const actualSource = source === 'question' && firstQuestion ? 'question' : 'manual';
     chartItem.rows.push({
         id: crypto.randomUUID(),
-        label: actualSource === 'question' ? firstQuestion.particular : `Row ${chartItem.rows.length + 1}`,
+        label: actualSource === 'question' ? stripHtml(firstQuestion.particular) : `Row ${chartItem.rows.length + 1}`,
         source: actualSource,
         question: actualSource === 'question' ? firstQuestion.id : null,
         operation: 'average',
@@ -273,7 +277,7 @@ function removeCustomChartRow(chartItem, index) {
 function onCustomRowQuestionChange(row) {
     const q = questions.value.find((item) => item.id === row.question);
     if (q && (!row.label || row.label.startsWith('Row '))) {
-        row.label = q.particular;
+        row.label = stripHtml(q.particular);
     }
 }
 
@@ -437,21 +441,36 @@ function removeSelected() {
     selectedKey.value = 'page';
 }
 
+provide('analyticsFormData', computed(() => ({
+    questions: formData.value?.question_list || allQuestions.value,
+    summaries: formData.value?.questions || {},
+    submissionCount: formData.value?.submission_count ?? 0,
+})));
+
 async function load() {
     const result = await request('publication');
     reports.value = result.reports;
-    questions.value = result.questions.filter((field) => (!field.option_source || field.option_source === 'static') && !field.allow_custom_value);
+    allQuestions.value = result.questions || [];
+    questions.value = (result.questions || []).filter(
+        (field) => ['radio', 'select', 'checkbox', 'number'].includes(field.type)
+            && (!field.option_source || field.option_source === 'static')
+            && !field.allow_custom_value,
+    );
+    formData.value = result.form_data || null;
     publication.value = result.publication;
     publicReportId.value = result.selected_report_id;
     emit('publication', result.publication);
 }
 
 async function refreshPreview() {
-    if (!config.value?.charts.length) {
+    if (!config.value?.charts.length && !config.value?.sections?.length) {
         preview.value = { charts: {}, submission_count: null, refreshed_at: null };
         return;
     }
     preview.value = await request('preview', 'POST', { configuration: config.value });
+    if (preview.value?.form_data) {
+        formData.value = preview.value.form_data;
+    }
 }
 
 async function save() {
@@ -582,7 +601,7 @@ onBeforeUnmount(() => {
                     >
                         <option :value="null">New report</option>
                         <option v-for="report in reports" :key="report.id" :value="report.id">
-                            {{ report.configuration?.title || 'Untitled report' }} ({{ report.status }})
+                            {{ stripHtml(report.configuration?.title) || 'Untitled report' }} ({{ report.status }})
                         </option>
                     </select>
                 </label>
@@ -619,7 +638,7 @@ onBeforeUnmount(() => {
             <div v-if="selectedKey !== 'page'" class="flex items-center gap-1.5 text-xs text-gray-500">
                 <span class="size-2 rounded-full bg-emerald-500"></span>
                 <span class="font-medium">
-                    Selected: {{ selectedBlock ? (selectedBlock.kind === 'chart' ? selectedBlock.item.title : (selectedBlock.kind === 'blank' ? (selectedBlock.item.title || 'Blank section') : 'Section notes')) : 'Page' }}
+                    Selected: {{ selectedBlock ? (selectedBlock.kind === 'chart' ? stripHtml(selectedBlock.item.title) : (selectedBlock.kind === 'blank' ? (stripHtml(selectedBlock.item.title) || 'Blank section') : 'Section notes')) : 'Page' }}
                 </span>
                 <button type="button" class="text-xs font-bold text-forest-800 underline hover:text-forest-950 ml-1 cursor-pointer" @click="handleBlockSelect('page')">
                     Edit Page Settings
@@ -752,7 +771,7 @@ onBeforeUnmount(() => {
                                         >
                                             <span class="font-bold text-forest-800">{{ question.type === 'number' ? '◎' : '▥' }}</span>
                                             <span class="min-w-0 truncate">
-                                                <b class="truncate">{{ question.particular }}</b>
+                                                <b class="truncate">{{ stripHtml(question.particular) }}</b>
                                                 <small class="truncate">{{ question.type === 'number' ? 'Numeric KPI' : 'Chart / table' }}</small>
                                             </span>
                                         </button>
@@ -796,7 +815,7 @@ onBeforeUnmount(() => {
                                         {{ selectedBlock ? `${selectedBlock.kind === 'chart' ? (selectedBlock.item.kind === 'custom' ? 'Custom Graph' : 'Chart') : (selectedBlock.kind === 'blank' ? 'Blank Section' : 'Section')} Settings` : 'Page Settings' }}
                                     </h3>
                                     <p class="text-[10px] text-gray-500 truncate">
-                                        {{ selectedBlock ? (selectedBlock.kind === 'chart' ? selectedBlock.item.title : (selectedBlock.kind === 'blank' ? 'Grid & border design' : 'Section text')) : 'Title, layout, refresh' }}
+                                        {{ selectedBlock ? (selectedBlock.kind === 'chart' ? stripHtml(selectedBlock.item.title) : (selectedBlock.kind === 'blank' ? 'Grid & border design' : 'Section text')) : 'Title, layout, refresh' }}
                                     </p>
                                 </div>
                             </div>
@@ -826,14 +845,26 @@ onBeforeUnmount(() => {
 
                             <!-- Page Settings Form -->
                             <div v-if="!selectedBlock" class="space-y-3">
-                                <label class="field">
+                                <div class="field">
                                     <span>Report title</span>
-                                    <input v-model="config.title" maxlength="500" class="text-xs" />
-                                </label>
-                                <label class="field">
+                                    <FormRichEditor
+                                        v-model="config.title"
+                                        placeholder="Report title…"
+                                        min-height="32px"
+                                        :allow-tables="false"
+                                        single-line
+                                        input-class="text-xs font-semibold text-gray-900"
+                                    />
+                                </div>
+                                <div class="field">
                                     <span>Description</span>
-                                    <textarea v-model="config.description" maxlength="2000" rows="2" class="text-xs" />
-                                </label>
+                                    <FormRichEditor
+                                        v-model="config.description"
+                                        placeholder="Add a report description…"
+                                        min-height="60px"
+                                        input-class="text-xs text-gray-700"
+                                    />
+                                </div>
                                 <label class="field">
                                     <span>Grid layout</span>
                                     <div class="rounded-lg border border-cream-400 bg-cream-50/70 px-2.5 py-1.5 text-xs text-gray-700 flex items-center justify-between">
@@ -862,18 +893,30 @@ onBeforeUnmount(() => {
                                     <input v-model="config.show_submission_count" type="checkbox" class="mt-0.5 rounded border-gray-300 text-forest-700 focus:ring-forest-600">
                                     <span>Show response count</span>
                                 </label>
-                                <label class="field">
+                                <div class="field">
                                     <span>Footer</span>
-                                    <textarea v-model="config.footer" maxlength="1000" rows="2" class="text-xs" />
-                                </label>
+                                    <FormRichEditor
+                                        v-model="config.footer"
+                                        placeholder="Add a footer…"
+                                        min-height="52px"
+                                        input-class="text-xs text-gray-700"
+                                    />
+                                </div>
                             </div>
 
                             <!-- Chart & Custom Graph Settings Form -->
                             <div v-else-if="selectedBlock.kind === 'chart'" class="space-y-3">
-                                <label class="field">
+                                <div class="field">
                                     <span>Chart title</span>
-                                    <input v-model="selectedBlock.item.title" maxlength="500" class="text-xs" />
-                                </label>
+                                    <FormRichEditor
+                                        v-model="selectedBlock.item.title"
+                                        placeholder="Chart title…"
+                                        min-height="32px"
+                                        :allow-tables="false"
+                                        single-line
+                                        input-class="text-xs font-semibold text-gray-900"
+                                    />
+                                </div>
                                 <label v-if="blankSections.length" class="field">
                                     <span>Parent container</span>
                                     <select
@@ -883,7 +926,7 @@ onBeforeUnmount(() => {
                                     >
                                         <option :value="null">Main Canvas (Root)</option>
                                         <option v-for="sec in blankSections" :key="sec.id" :value="sec.id">
-                                            {{ sec.title || 'Blank Section' }}
+                                            {{ stripHtml(sec.title) || 'Blank Section' }}
                                         </option>
                                     </select>
                                 </label>
@@ -943,7 +986,7 @@ onBeforeUnmount(() => {
                                                 <span>Question (e.g. Ratings)</span>
                                                 <select v-model="row.question" class="text-xs" @change="onCustomRowQuestionChange(row)">
                                                     <option v-for="question in questions" :key="question.id" :value="question.id">
-                                                        {{ question.particular }}
+                                                        {{ stripHtml(question.particular) }}
                                                     </option>
                                                 </select>
                                             </label>
@@ -972,7 +1015,7 @@ onBeforeUnmount(() => {
                                     <label class="field">
                                         <span>Question</span>
                                         <select v-model="selectedBlock.item.question" class="text-xs" @change="selectedBlock.item.aggregation = aggregates(selectedBlock.item.question)[0]">
-                                            <option v-for="question in questions" :key="question.id" :value="question.id">{{ question.particular }}</option>
+                                            <option v-for="question in questions" :key="question.id" :value="question.id">{{ stripHtml(question.particular) }}</option>
                                         </select>
                                     </label>
                                 </template>
@@ -1021,10 +1064,15 @@ onBeforeUnmount(() => {
                                     <label class="flex items-center gap-1.5"><input v-model="selectedBlock.item.legend" type="checkbox" class="rounded border-gray-300 text-forest-700 focus:ring-forest-600">Legend</label>
                                     <label class="flex items-center gap-1.5"><input v-model="selectedBlock.item.labels" type="checkbox" class="rounded border-gray-300 text-forest-700 focus:ring-forest-600">Labels</label>
                                 </div>
-                                <label class="field">
+                                <div class="field">
                                     <span>Annotation</span>
-                                    <textarea v-model="selectedBlock.item.annotation" maxlength="1000" rows="2" class="text-xs" />
-                                </label>
+                                    <FormRichEditor
+                                        v-model="selectedBlock.item.annotation"
+                                        placeholder="Add chart notes or annotation…"
+                                        min-height="60px"
+                                        input-class="text-xs text-gray-700"
+                                    />
+                                </div>
                                 <button
                                     type="button"
                                     class="mt-2 w-full rounded-xl border border-red-300 bg-red-50/50 hover:bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 transition cursor-pointer"
@@ -1050,9 +1098,16 @@ onBeforeUnmount(() => {
                                             <span>Hide</span>
                                         </label>
                                     </div>
-                                    <label v-if="selectedBlock.item.show_heading !== false" class="field">
-                                        <input v-model="selectedBlock.item.title" maxlength="500" placeholder="Optional heading…" class="text-xs" />
-                                    </label>
+                                    <div v-if="selectedBlock.item.show_heading !== false" class="field">
+                                        <FormRichEditor
+                                            v-model="selectedBlock.item.title"
+                                            placeholder="Optional heading…"
+                                            min-height="32px"
+                                            :allow-tables="false"
+                                            single-line
+                                            input-class="text-xs font-semibold text-gray-900"
+                                        />
+                                    </div>
                                 </div>
                                 <label v-if="blankSections.filter((s) => !isDescendantOf(config, s.id, selectedBlock.item.id)).length" class="field">
                                     <span>Parent container</span>
@@ -1067,7 +1122,7 @@ onBeforeUnmount(() => {
                                             :key="sec.id"
                                             :value="sec.id"
                                         >
-                                            {{ sec.title || 'Blank Section' }}
+                                            {{ stripHtml(sec.title) || 'Blank Section' }}
                                         </option>
                                     </select>
                                 </label>
@@ -1202,10 +1257,17 @@ onBeforeUnmount(() => {
 
                             <!-- Text Section Settings Form -->
                             <div v-else class="space-y-3">
-                                <label class="field">
+                                <div class="field">
                                     <span>Section title</span>
-                                    <input v-model="selectedBlock.item.title" maxlength="500" class="text-xs" />
-                                </label>
+                                    <FormRichEditor
+                                        v-model="selectedBlock.item.title"
+                                        placeholder="Section title…"
+                                        min-height="32px"
+                                        :allow-tables="false"
+                                        single-line
+                                        input-class="text-xs font-semibold text-gray-900"
+                                    />
+                                </div>
                                 <label v-if="blankSections.length" class="field">
                                     <span>Parent container</span>
                                     <select
@@ -1215,14 +1277,19 @@ onBeforeUnmount(() => {
                                     >
                                         <option :value="null">Main Canvas (Root)</option>
                                         <option v-for="sec in blankSections" :key="sec.id" :value="sec.id">
-                                            {{ sec.title || 'Blank Section' }}
+                                            {{ stripHtml(sec.title) || 'Blank Section' }}
                                         </option>
                                     </select>
                                 </label>
-                                <label class="field">
+                                <div class="field">
                                     <span>Text</span>
-                                    <textarea v-model="selectedBlock.item.body" maxlength="3000" rows="4" class="text-xs" />
-                                </label>
+                                    <FormRichEditor
+                                        v-model="selectedBlock.item.body"
+                                        placeholder="Write your report notes here…"
+                                        min-height="84px"
+                                        input-class="text-xs text-gray-700"
+                                    />
+                                </div>
                                 <label class="field">
                                     <span>Width</span>
                                     <select

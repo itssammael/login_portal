@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneThrough;
+use Illuminate\Support\Str;
 
 class FbSubmission extends Model
 {
@@ -24,6 +25,7 @@ class FbSubmission extends Model
      * @var array<int, string>
      */
     protected $fillable = [
+        'reference_code',
         'feedback_id',
         'participant_id',
         'embed_id',
@@ -40,6 +42,27 @@ class FbSubmission extends Model
     protected $casts = [
         'data' => 'array',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(function (FbSubmission $submission): void {
+            if (! array_key_exists('reference_code', $submission->getAttributes()) || $submission->reference_code === '') {
+                $submission->reference_code = self::generateUniqueReferenceCode();
+            }
+        });
+    }
+
+    /**
+     * Generate a unique response reference code for a form submission.
+     */
+    public static function generateUniqueReferenceCode(): string
+    {
+        do {
+            $code = 'RSP-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
+        } while (static::query()->where('reference_code', $code)->exists());
+
+        return $code;
+    }
 
     /**
      * Get the feedback template associated with the submission.

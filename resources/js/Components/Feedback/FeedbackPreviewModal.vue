@@ -39,6 +39,12 @@ const isVisible = (field) => {
 
     return field.conditions.every((condition) => {
         const value = answers.value[condition.field_id];
+        if (condition.operator === 'is_answered') {
+            return value !== null && value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0);
+        }
+        if (condition.operator === 'is_not_answered') {
+            return value === null || value === undefined || value === '' || (Array.isArray(value) && value.length === 0);
+        }
         const expected = String(condition.value ?? '');
         const values = Array.isArray(value) ? value.map(String) : [String(value ?? '')];
 
@@ -50,11 +56,12 @@ const displayedPages = computed(() => (paginated.value ? [pages.value[pageIndex.
 const viewportClass = computed(() => ({ desktop: 'w-full', tablet: 'max-w-[768px]', mobile: 'max-w-[420px]' })[device.value]);
 
 const sampleValue = (field) => {
-    if (state.value === 'blank') return field.type === 'checkbox' ? [] : '';
+    if (state.value === 'blank') return field.type === 'checkbox' ? [] : (field.type === 'photo' ? null : '');
     if (field.type === 'checkbox') return field.options?.slice(0, 2).map((option) => option.value) || [];
     if (['radio', 'select'].includes(field.type)) return field.options?.[0]?.value || '';
     if (field.type === 'number') return 4;
     if (field.type === 'date') return '2026-01-15';
+    if (field.type === 'photo') return 'sample-activity-photo.jpg (1.2 MB)';
     if (field.id?.includes('email')) return 'respondent@example.com';
     return `Sample ${field.particular || 'response'}`;
 };
@@ -122,6 +129,16 @@ watch([fields, state], resetAnswers, { immediate: true });
                                             <select v-else-if="field.type === 'select'" v-model="answers[field.id]" class="w-full rounded-xl border-gray-300 text-sm focus:border-forest-600 focus:ring-forest-600"><option value="">Select an option</option><option v-for="option in field.options || []" :key="option.value" :value="option.value">{{ option.label || option.value }}</option></select>
                                             <div v-else-if="field.type === 'radio'" class="space-y-2"><label v-for="option in field.options || []" :key="option.value" class="flex items-center gap-2 text-sm text-gray-700"><input v-model="answers[field.id]" type="radio" :name="field.id" :value="option.value" class="border-gray-300 text-forest-700 focus:ring-forest-600">{{ option.label || option.value }}</label></div>
                                             <div v-else-if="field.type === 'checkbox'" class="space-y-2"><label v-for="option in field.options || []" :key="option.value" class="flex items-center gap-2 text-sm text-gray-700"><input v-model="answers[field.id]" type="checkbox" :value="option.value" class="rounded border-gray-300 text-forest-700 focus:ring-forest-600">{{ option.label || option.value }}</label></div>
+                                            <div v-else-if="field.type === 'photo'" class="rounded-xl border border-dashed border-cream-500 bg-cream-100/70 p-4 text-xs text-gray-700 flex items-center justify-between gap-3">
+                                                <div class="flex items-center gap-2.5">
+                                                    <span class="size-8 rounded-lg bg-white border border-cream-400 flex items-center justify-center text-base">📷</span>
+                                                    <div>
+                                                        <div class="font-bold text-gray-900">{{ answers[field.id] || 'Choose one photo (JPG, PNG, WebP)' }}</div>
+                                                        <div class="text-[11px] text-gray-500">Single image upload • Maximum 5 MB</div>
+                                                    </div>
+                                                </div>
+                                                <span class="px-2.5 py-1 rounded-lg bg-white border border-cream-400 font-semibold text-gray-600">Browse...</span>
+                                            </div>
                                         </template>
                                     </div>
                                 </section>

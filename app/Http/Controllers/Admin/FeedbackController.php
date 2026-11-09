@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\FilterFeedbackSubmissionsRequest;
 use App\Http\Requests\Admin\ImportFeedbackFormRequest;
 use App\Http\Requests\Admin\SaveFeedbackFormRequest;
 use App\Http\Requests\Admin\StoreFbEventRequest;
@@ -17,14 +18,19 @@ use App\Models\FbFunction;
 use App\Models\FbSubmission;
 use App\Models\Feedback;
 use App\Services\FeedbackSchemaValidator;
+use App\Services\FeedbackSubmissionExportService;
+use App\Services\FeedbackSubmissionPersistenceService;
 use App\Services\FormImport\FormImportService;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response as HttpResponse;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class FeedbackController extends Controller
 {
@@ -76,204 +82,31 @@ class FeedbackController extends Controller
     /**
      * Display the Feedback Submissions listing and response review page.
      */
-    public function submissions(Request $request): Response
-    {
-        $tabParam = $request->query('tab');
-        if (in_array($tabParam, ['compiled', 'individual'], true)) {
-            $activeTab = $tabParam;
-        } else {
-            $activeTab = $request->filled('event_id') ? 'compiled' : 'individual';
-        }
-
-        $baseQuery = FbSubmission::query();
-
-        if ($request->filled('event_id')) {
-            $eventId = (int) $request->input('event_id');
-            $baseQuery->whereHas('feedback', fn ($q) => $q->where('event_id', $eventId));
-        }
-
-        if ($request->filled('function_id')) {
-            $functionId = (int) $request->input('function_id');
-            $baseQuery->whereHas('participant', fn ($q) => $q->where('function_id', $functionId));
-        }
-
-        if ($request->filled('agency')) {
-            $agency = (string) $request->input('agency');
-            $baseQuery->whereHas('participant', fn ($q) => $q->where('agency', $agency));
-        }
-
-        if ($request->filled('designation')) {
-            $designation = (string) $request->input('designation');
-            $baseQuery->whereHas('participant', fn ($q) => $q->where('designation', $designation));
-        }
+    public function submissions(
+        FilterFeedbackSubmissionsRequest $request,
+        FeedbackSubmissionExportService $exportService
+    ): Response {
+        $filters = $request->normalizedFilters();
+        $activeTab = $filters['tab'];
+        $filteredQuery = $exportService->buildFilteredQuery($filters);
 
         $submissions = null;
 
         if ($activeTab === 'individual') {
-            $tableQuery = (clone $baseQuery)
-                ->with([
-                    'feedback.event' => fn ($q) => $q->withTrashed(),
-                    'participant.function',
-                ]);
-
-            if ($request->filled('search')) {
-                $search = (string) $request->input('search');
-                $tableQuery->whereHas('participant', function ($q) use ($search): void {
-                    $q->where('name', 'like', "%{$search}%")
-                        ->orWhere('agency', 'like', "%{$search}%")
-                        ->orWhere('designation', 'like', "%{$search}%")
-                        ->orWhere('location', 'like', "%{$search}%");
-                });
-            }
-
-            $submissions = $tableQuery->latest()->paginate(15)->withQueryString();
+            $tableQuery = $exportService->withSubmissionRelations(clone $filteredQuery);
+            $submissions = $tableQuery->paginate(15)->withQueryString();
         }
 
         $compiledResponses = null;
         $compiledResponseMeta = null;
 
-        if ($activeTab === 'compiled' && $request->filled('event_id')) {
-            $eventId = (int) $request->input('event_id');
-            $event = FbEvent::withTrashed()->find($eventId);
-            $feedback = Feedback::where('event_id', $eventId)->first();
-
-            $totalFilteredSubmissions = (clone $baseQuery)->count();
-
-            if ($event && $feedback && is_array($feedback->schema)) {
-                $validator = app(FeedbackSchemaValidator::class);
-                $resolvedSchema = $validator->resolveSchemaForEvent($feedback->schema, $event);
-                $fields = $resolvedSchema['fields'] ?? [];
-
-                // Retrieve all submission data for aggregation across entire filtered dataset
-                $allSubmissionsData = (clone $baseQuery)->pluck('data');
-
-                $compiledQuestions = [];
-
-                foreach ($fields as $field) {
-                    $type = $field['type'] ?? 'text';
-                    if (in_array($type, ['section', 'text_only'], true)) {
-                        continue;
-                    }
-
-                    $fieldId = (string) ($field['id'] ?? '');
-                    $particular = (string) ($field['particular'] ?? $fieldId);
-                    $rawOptions = $field['options'] ?? [];
-
-                    $isChoice = in_array($type, ['radio', 'select', 'checkbox'], true);
-                    $isCheckbox = $type === 'checkbox';
-
-                    if ($isChoice) {
-                        // Options map initialized with 0 count
-                        $optionsMap = [];
-                        foreach ($rawOptions as $opt) {
-                            $val = (string) ($opt['value'] ?? '');
-                            $lbl = (string) ($opt['label'] ?? $val);
-                            $optionsMap[$val] = [
-                                'value' => $val,
-                                'label' => $lbl,
-                                'count' => 0,
-                                'percentage' => 0.0,
-                            ];
-                        }
-
-                        $answeredCount = 0;
-
-                        foreach ($allSubmissionsData as $submissionData) {
-                            if (! is_array($submissionData) || ! array_key_exists($fieldId, $submissionData)) {
-                                continue;
-                            }
-
-                            $val = $submissionData[$fieldId];
-
-                            if ($isCheckbox) {
-                                if (is_array($val) && count($val) > 0) {
-                                    $answeredCount++;
-                                    foreach ($val as $selectedOpt) {
-                                        $strVal = (string) $selectedOpt;
-                                        if (! isset($optionsMap[$strVal])) {
-                                            $optionsMap[$strVal] = [
-                                                'value' => $strVal,
-                                                'label' => $strVal,
-                                                'count' => 0,
-                                                'percentage' => 0.0,
-                                            ];
-                                        }
-                                        $optionsMap[$strVal]['count']++;
-                                    }
-                                }
-                            } else {
-                                if ($val !== null && $val !== '') {
-                                    $answeredCount++;
-                                    $strVal = (string) $val;
-                                    if (! isset($optionsMap[$strVal])) {
-                                        $optionsMap[$strVal] = [
-                                            'value' => $strVal,
-                                            'label' => $strVal,
-                                            'count' => 0,
-                                            'percentage' => 0.0,
-                                        ];
-                                    }
-                                    $optionsMap[$strVal]['count']++;
-                                }
-                            }
-                        }
-
-                        // Calculate percentages
-                        $optionsList = array_values($optionsMap);
-                        foreach ($optionsList as &$optItem) {
-                            $optItem['percentage'] = $answeredCount > 0
-                                ? round(($optItem['count'] / $answeredCount) * 100, 1)
-                                : 0.0;
-                        }
-                        unset($optItem);
-
-                        $compiledQuestions[] = [
-                            'id' => $fieldId,
-                            'particular' => $particular,
-                            'type' => $type,
-                            'is_choice' => true,
-                            'is_multiselect' => $isCheckbox,
-                            'total_submissions' => $totalFilteredSubmissions,
-                            'answered_count' => $answeredCount,
-                            'unanswered_count' => max(0, $totalFilteredSubmissions - $answeredCount),
-                            'options' => $optionsList,
-                        ];
-                    } else {
-                        // Free-text, date, or number questions
-                        $answeredCount = 0;
-                        foreach ($allSubmissionsData as $submissionData) {
-                            if (is_array($submissionData) && array_key_exists($fieldId, $submissionData)) {
-                                $val = $submissionData[$fieldId];
-                                if ($val !== null && $val !== '' && (! is_array($val) || count($val) > 0)) {
-                                    $answeredCount++;
-                                }
-                            }
-                        }
-
-                        $compiledQuestions[] = [
-                            'id' => $fieldId,
-                            'particular' => $particular,
-                            'type' => $type,
-                            'is_choice' => false,
-                            'is_multiselect' => false,
-                            'total_submissions' => $totalFilteredSubmissions,
-                            'answered_count' => $answeredCount,
-                            'unanswered_count' => max(0, $totalFilteredSubmissions - $answeredCount),
-                            'options' => [],
-                        ];
-                    }
-                }
-
-                $compiledResponses = $compiledQuestions;
-            }
-
-            $compiledResponseMeta = [
-                'event_id' => $event?->id ?? $eventId,
-                'event_name' => $event?->name ?? 'Unknown Event',
-                'total_filtered_submissions' => $totalFilteredSubmissions,
-                'has_schema' => ! empty($feedback?->schema),
-            ];
+        if ($activeTab === 'compiled' && $filters['event_id'] !== null) {
+            $compiled = $exportService->buildCompiledAnalytics($filters['event_id'], clone $filteredQuery);
+            $compiledResponses = $compiled['compiled_responses'];
+            $compiledResponseMeta = $compiled['meta'];
         }
+
+        $exportableFields = $exportService->getAvailableExportFields($filters, clone $filteredQuery);
 
         $filterEvents = FbEvent::withTrashed()->orderBy('name')->get(['id', 'name', 'deleted_at']);
         $filterFunctions = FbFunction::orderBy('function')->get(['id', 'function']);
@@ -293,6 +126,98 @@ class FeedbackController extends Controller
             ),
             'compiledResponses' => $compiledResponses,
             'compiledResponseMeta' => $compiledResponseMeta,
+            'exportableFields' => $exportableFields,
+        ]);
+    }
+
+    /**
+     * Export all feedback submissions matching the active filter parameters as CSV or PDF.
+     */
+    public function exportSubmissions(
+        FilterFeedbackSubmissionsRequest $request,
+        string $format,
+        FeedbackSubmissionExportService $exportService
+    ): StreamedResponse|HttpResponse {
+        $filters = $request->normalizedFilters();
+        $selectedTokens = $request->selectedFieldTokens();
+
+        if ($format === 'pdf') {
+            return $exportService->downloadPdf($filters, $selectedTokens);
+        }
+
+        return $exportService->streamCsv($filters, $selectedTokens);
+    }
+
+    /**
+     * Serve an uploaded submission photo to an authorized administrator.
+     */
+    public function submissionPhoto(
+        Request $request,
+        FbSubmission $submission,
+        string $field,
+        string $filename
+    ): StreamedResponse {
+        abort_unless($request->user()?->canAccessAdmin(), 403);
+
+        $submission->loadMissing('feedback');
+        $feedback = $submission->feedback;
+        if (! $feedback || ! is_array($feedback->schema)) {
+            abort(403);
+        }
+
+        $schemaFields = $feedback->schema['fields'] ?? [];
+        $matchedField = collect($schemaFields)->first(
+            fn ($item): bool => is_array($item) && (string) ($item['id'] ?? '') === $field && ($item['type'] ?? null) === 'photo'
+        );
+
+        if (! $matchedField) {
+            abort(403);
+        }
+
+        $submissionData = $submission->data;
+        $photoData = is_array($submissionData) ? ($submissionData[$field] ?? null) : null;
+
+        if (! is_array($photoData) || ($photoData['type'] ?? null) !== 'photo') {
+            abort(403);
+        }
+
+        $disk = (string) ($photoData['disk'] ?? '');
+        $storedPath = (string) ($photoData['path'] ?? '');
+        $storedFilename = (string) ($photoData['filename'] ?? basename($storedPath));
+        $safeField = preg_replace('/[^a-zA-Z0-9_-]/', '', $field) ?: '';
+
+        $expectedPrefix = FeedbackSubmissionPersistenceService::STORAGE_BASE_DIR
+            ."/{$submission->feedback_id}/{$submission->id}/{$safeField}/";
+
+        if (
+            $disk !== FeedbackSubmissionPersistenceService::STORAGE_DISK ||
+            $storedPath === '' ||
+            str_contains($storedPath, '..') ||
+            ! str_starts_with($storedPath, $expectedPrefix) ||
+            basename($storedPath) !== $filename ||
+            $storedFilename !== $filename ||
+            $storedPath !== $expectedPrefix.$filename
+        ) {
+            abort(403);
+        }
+
+        if (! Storage::disk($disk)->exists($storedPath)) {
+            abort(404);
+        }
+
+        $detectedMime = strtolower((string) Storage::disk($disk)->mimeType($storedPath));
+        if (! in_array($detectedMime, FeedbackSchemaValidator::PHOTO_ALLOWED_MIMES, true)) {
+            abort(403);
+        }
+
+        $rawOriginalName = (string) ($photoData['original_name'] ?? $filename);
+        $safeInlineName = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($rawOriginalName)) ?: $filename;
+
+        return Storage::disk($disk)->response($storedPath, $safeInlineName, [
+            'Content-Type' => $detectedMime,
+            'Content-Disposition' => 'inline; filename="'.$safeInlineName.'"',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store, max-age=0',
         ]);
     }
 

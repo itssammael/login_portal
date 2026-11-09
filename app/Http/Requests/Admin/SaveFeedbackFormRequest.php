@@ -4,6 +4,7 @@ namespace App\Http\Requests\Admin;
 
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
 
 class SaveFeedbackFormRequest extends FormRequest
 {
@@ -34,10 +35,11 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.pagination.show_section_numbers' => ['nullable', 'boolean'],
             'schema.fields' => ['required', 'array', 'list', 'min:1'],
             'schema.fields.*.id' => ['required', 'string', 'max:100'],
-            'schema.fields.*.particular' => ['required', 'string', 'max:65535'],
-            'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,date,radio,select,checkbox,section,text_only'],
+            'schema.fields.*.particular' => ['required', 'string', 'max:5000'],
+            'schema.fields.*.type' => ['required', 'string', 'in:text,textarea,number,date,radio,select,checkbox,photo,section,text_only'],
             'schema.fields.*.weight' => ['required', 'integer', 'min:0'],
             'schema.fields.*.required' => ['nullable', 'boolean'],
+            'schema.fields.*.multiple' => ['nullable', 'boolean'],
             'schema.fields.*.allow_other' => ['nullable', 'boolean'],
             'schema.fields.*.allow_custom_value' => ['nullable', 'boolean'],
             'schema.fields.*.placeholder' => ['nullable', 'string', 'max:2000'],
@@ -111,5 +113,74 @@ class SaveFeedbackFormRequest extends FormRequest
             'schema.fields.*.weight' => 'question order',
             'schema.fields.*.options' => 'question options',
         ];
+    }
+
+    /**
+     * Configure the validator instance with photo-question structural checks.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator): void {
+            $fields = $this->input('schema.fields');
+            if (!is_array($fields)) {
+                return;
+            }
+
+            foreach ($fields as $index => $field) {
+                if (!is_array($field)) {
+                    continue;
+                }
+
+                $position = is_numeric($index) ? ((int) $index + 1) : 1;
+                $particular = trim(strip_tags((string) ($field['particular'] ?? '')));
+
+                if (isset($field['particular']) && $particular === '') {
+                    $validator->errors()->add(
+                        "schema.fields.{$index}.particular",
+                        "Question #{$position} prompt/title is required."
+                    );
+                }
+
+                if (($field['type'] ?? null) !== 'photo') {
+                    continue;
+                }
+
+                if (!empty($field['options'])) {
+                    $validator->errors()->add(
+                        "schema.fields.{$index}.options",
+                        "Question #{$position}: Photo upload questions cannot define choice options."
+                    );
+                }
+
+                $optionSource = $field['option_source'] ?? 'static';
+                if ($optionSource !== null && $optionSource !== '' && $optionSource !== 'static') {
+                    $validator->errors()->add(
+                        "schema.fields.{$index}.option_source",
+                        "Question #{$position}: Photo upload questions cannot use a dynamic option source."
+                    );
+                }
+
+                if (!empty($field['allow_other']) || !empty($field['allow_custom_value'])) {
+                    $validator->errors()->add(
+                        "schema.fields.{$index}.allow_other",
+                        "Question #{$position}: Photo upload questions do not support custom/other option inputs."
+                    );
+                }
+
+                if (!empty($field['multiple'])) {
+                    $validator->errors()->add(
+                        "schema.fields.{$index}.multiple",
+                        "Question #{$position}: Photo upload questions accept only one photo per answer."
+                    );
+                }
+
+                if (($field['min'] ?? null) !== null || ($field['max'] ?? null) !== null) {
+                    $validator->errors()->add(
+                        "schema.fields.{$index}.min",
+                        "Question #{$position}: Photo upload questions cannot define numeric scale bounds."
+                    );
+                }
+            }
+        });
     }
 }

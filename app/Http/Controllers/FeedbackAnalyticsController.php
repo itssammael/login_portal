@@ -22,7 +22,8 @@ class FeedbackAnalyticsController extends Controller
             'reports' => $feedback->analyticsReports()->latest('id')->get(['id', 'configuration', 'status', 'published_at']),
             'publication' => $analytics->publication($feedback),
             'selected_report_id' => $feedback->published_analytics_report_id,
-            'questions' => collect($analytics->questions($feedback))->values(),
+            'questions' => collect($analytics->questionsWithSections($feedback))->values(),
+            'form_data' => $analytics->questionDataSummary($feedback),
         ]);
     }
 
@@ -52,7 +53,10 @@ class FeedbackAnalyticsController extends Controller
         $configuration = $request->validated('configuration');
         $analytics->validate($feedback, $configuration);
 
-        return response()->json($analytics->aggregate($feedback, $configuration, true));
+        return response()->json(array_merge(
+            $analytics->aggregate($feedback, $configuration, true),
+            ['form_data' => $analytics->questionDataSummary($feedback, $configuration['period_start'] ?? null, $configuration['period_end'] ?? null)]
+        ));
     }
 
     public function publish(Request $request, Feedback $feedback, FeedbackAnalyticsReport $report, FeedbackAnalyticsService $analytics): JsonResponse

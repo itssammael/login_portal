@@ -893,6 +893,8 @@ const generateSampleAnswers = (fields = []) => {
             } else {
                 sample[id] = [];
             }
+        } else if (field.type === 'photo') {
+            sample[id] = 'sample-photo.jpg (1.2 MB)';
         } else if (field.type === 'text_only') {
             return;
         } else {
@@ -917,6 +919,8 @@ const resetPreviewAnswers = (state = 'completed') => {
         previewFields.value.forEach((f) => {
             if (f.type === 'checkbox') {
                 blank[f.id] = [];
+            } else if (f.type === 'photo') {
+                blank[f.id] = null;
             } else {
                 blank[f.id] = '';
             }
@@ -3177,6 +3181,24 @@ const closeSamplePreviewModal = () => {
                                             />
                                         </div>
                                     </div>
+
+                                    <!-- Photo Upload Preview -->
+                                    <div v-else-if="field.type === 'photo'" class="p-4 rounded-xl border border-dashed border-cream-500 bg-[#fffef9] flex items-center justify-between gap-3">
+                                        <div class="flex items-center space-x-3 text-xs">
+                                            <span class="size-9 rounded-xl bg-cream-100 border border-cream-400 flex items-center justify-center text-base shrink-0">📷</span>
+                                            <div>
+                                                <div class="font-bold text-gray-900">
+                                                    {{ previewAnswers[field.id] || 'Select a photo to attach' }}
+                                                </div>
+                                                <div class="text-[11px] text-gray-500">
+                                                    JPG, PNG, or WebP • 1 photo max • Up to 5 MB
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <span class="px-3 py-1.5 rounded-lg bg-cream-100 border border-cream-400 text-xs font-semibold text-gray-700 shrink-0">
+                                            Choose Photo
+                                        </span>
+                                    </div>
                                 </div>
                             </template>
                         </div>
@@ -3442,6 +3464,14 @@ const closeSamplePreviewModal = () => {
                                                         class="w-full px-2.5 py-1.5 bg-white border border-amber-400 rounded text-xs"
                                                     />
                                                 </div>
+                                            </div>
+
+                                            <div v-else-if="field.type === 'photo'" class="p-3 rounded-lg border border-dashed border-cream-500 bg-[#fffef9] flex items-center justify-between gap-2 text-xs">
+                                                <div class="flex items-center space-x-2">
+                                                    <span>📷</span>
+                                                    <span class="font-medium text-gray-700">{{ previewAnswers[field.id] || 'JPG, PNG, WebP (max 5 MB)' }}</span>
+                                                </div>
+                                                <span class="px-2 py-1 rounded bg-cream-100 border border-cream-400 text-[11px] font-semibold text-gray-700">Browse</span>
                                             </div>
                                         </div>
                                     </template>
