@@ -104,8 +104,17 @@ const fileValidationError = ref('');
 const showEmojiPicker = ref(false);
 const activeMessageMenuId = ref(null);
 const messageMenuPlacement = ref('top');
+const messageMenuHorizontalPlacement = ref('right');
 const messageMenuMaxHeight = ref(null);
+const messageMenuShiftX = ref(0);
 const activeConversationMenuId = ref(null);
+
+watch(activeMessageMenuId, (newId) => {
+    if (newId === null) {
+        messageMenuMaxHeight.value = null;
+        messageMenuShiftX.value = 0;
+    }
+});
 
 const isLoadingOlder = ref(false);
 const pendingMessages = ref([]);
@@ -888,8 +897,10 @@ const toggleMessageMenu = (message, event = null) => {
     }
 
     const MENU_ESTIMATED_HEIGHT = 220;
+    const MENU_WIDTH = 176;
+    const HORIZONTAL_PADDING = 8;
 
-    // Determine placement based on available vertical space in the scroll container
+    // Determine placement based on available vertical and horizontal space in the scroll container
     if (event && event.currentTarget && messagesContainer.value) {
         const containerRect = messagesContainer.value.getBoundingClientRect();
         const messageEl = event.currentTarget.closest?.(`#message-${message.id}`) || document.getElementById(`message-${message.id}`);
@@ -920,8 +931,41 @@ const toggleMessageMenu = (message, event = null) => {
         } else {
             messageMenuMaxHeight.value = null;
         }
+
+        // Horizontal placement to prevent overflow on mobile/narrow viewports
+        const spaceToLeft = targetRect.right - containerRect.left;
+        const spaceToRight = containerRect.right - targetRect.left;
+
+        let horizontalPlacement = 'right';
+        if (spaceToRight >= MENU_WIDTH && spaceToLeft < MENU_WIDTH) {
+            horizontalPlacement = 'left';
+        } else if (spaceToLeft >= MENU_WIDTH && spaceToRight < MENU_WIDTH) {
+            horizontalPlacement = 'right';
+        } else if (message.is_sender) {
+            horizontalPlacement = spaceToLeft >= MENU_WIDTH ? 'right' : 'left';
+        } else {
+            horizontalPlacement = spaceToRight >= MENU_WIDTH ? 'left' : 'right';
+        }
+        messageMenuHorizontalPlacement.value = horizontalPlacement;
+
+        let shiftX = 0;
+        if (horizontalPlacement === 'left') {
+            const menuRight = targetRect.left + MENU_WIDTH;
+            const maxRight = containerRect.right - HORIZONTAL_PADDING;
+            if (menuRight > maxRight) {
+                shiftX = maxRight - menuRight;
+            }
+        } else {
+            const menuLeft = targetRect.right - MENU_WIDTH;
+            const minLeft = containerRect.left + HORIZONTAL_PADDING;
+            if (menuLeft < minLeft) {
+                shiftX = minLeft - menuLeft;
+            }
+        }
+        messageMenuShiftX.value = Math.round(shiftX);
     } else if (event && event.clientY) {
         const viewportHeight = window.innerHeight || 600;
+        const viewportWidth = window.innerWidth || 360;
         const spaceAbove = event.clientY;
         const spaceBelow = viewportHeight - event.clientY;
 
@@ -942,9 +986,24 @@ const toggleMessageMenu = (message, event = null) => {
         } else {
             messageMenuMaxHeight.value = null;
         }
+
+        const spaceToLeft = event.clientX;
+        const spaceToRight = viewportWidth - event.clientX;
+        if (spaceToRight >= MENU_WIDTH && spaceToLeft < MENU_WIDTH) {
+            messageMenuHorizontalPlacement.value = 'left';
+        } else if (spaceToLeft >= MENU_WIDTH && spaceToRight < MENU_WIDTH) {
+            messageMenuHorizontalPlacement.value = 'right';
+        } else if (message.is_sender) {
+            messageMenuHorizontalPlacement.value = spaceToLeft >= MENU_WIDTH ? 'right' : 'left';
+        } else {
+            messageMenuHorizontalPlacement.value = spaceToRight >= MENU_WIDTH ? 'left' : 'right';
+        }
+        messageMenuShiftX.value = 0;
     } else {
         messageMenuPlacement.value = 'top';
+        messageMenuHorizontalPlacement.value = message.is_sender ? 'right' : 'left';
         messageMenuMaxHeight.value = null;
+        messageMenuShiftX.value = 0;
     }
 
     activeMessageMenuId.value = message.id;
@@ -2727,9 +2786,15 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Sender -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute right-0 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
-                                                            :class="messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7'"
-                                                            :style="messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            :class="[
+                                                                messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
+                                                                messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'
+                                                            ]"
+                                                            :style="{
+                                                                ...(messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}),
+                                                                ...(messageMenuShiftX ? { transform: `translateX(${messageMenuShiftX}px)` } : {})
+                                                            }"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
@@ -2916,9 +2981,15 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Receiver -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute left-0 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
-                                                            :class="messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7'"
-                                                            :style="messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            :class="[
+                                                                messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
+                                                                messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'
+                                                            ]"
+                                                            :style="{
+                                                                ...(messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}),
+                                                                ...(messageMenuShiftX ? { transform: `translateX(${messageMenuShiftX}px)` } : {})
+                                                            }"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
