@@ -103,6 +103,8 @@ const selectedFilePreview = ref(null);
 const fileValidationError = ref('');
 const showEmojiPicker = ref(false);
 const activeMessageMenuId = ref(null);
+const messageMenuPlacement = ref('top');
+const messageMenuMaxHeight = ref(null);
 const activeConversationMenuId = ref(null);
 
 const isLoadingOlder = ref(false);
@@ -241,6 +243,10 @@ const isNearBottom = () => {
 };
 
 const onMessagesScroll = () => {
+    if (activeMessageMenuId.value !== null) {
+        activeMessageMenuId.value = null;
+        messageMenuMaxHeight.value = null;
+    }
     if (isNearBottom()) {
         hasNewMessagesBelow.value = false;
         newIncomingCount.value = 0;
@@ -867,7 +873,7 @@ const canEditMessage = (message) => {
         isWithin15Minutes(message.raw_created_at || message.created_at);
 };
 
-const toggleMessageMenu = (message) => {
+const toggleMessageMenu = (message, event = null) => {
     if (!message || message.is_deleted || message.is_deleted_for_me || message.status === 'sending' || message.status === 'failed') {
         return;
     }
@@ -875,12 +881,79 @@ const toggleMessageMenu = (message) => {
     if (selection && selection.toString().trim().length > 0) {
         return;
     }
-    activeMessageMenuId.value = activeMessageMenuId.value === message.id ? null : message.id;
+    if (activeMessageMenuId.value === message.id) {
+        activeMessageMenuId.value = null;
+        messageMenuMaxHeight.value = null;
+        return;
+    }
+
+    const MENU_ESTIMATED_HEIGHT = 220;
+
+    // Determine placement based on available vertical space in the scroll container
+    if (event && event.currentTarget && messagesContainer.value) {
+        const containerRect = messagesContainer.value.getBoundingClientRect();
+        const messageEl = event.currentTarget.closest?.(`#message-${message.id}`) || document.getElementById(`message-${message.id}`);
+        const optionButton = (event.currentTarget.tagName === 'BUTTON' ? event.currentTarget : null)
+            || messageEl?.querySelector('button[aria-label="Message options"]')
+            || messageEl?.querySelector('[data-message-menu] button');
+        const anchorEl = optionButton || event.currentTarget;
+        const targetRect = anchorEl.getBoundingClientRect();
+        const spaceAbove = targetRect.top - containerRect.top;
+        const spaceBelow = containerRect.bottom - targetRect.bottom;
+
+        if (spaceBelow >= MENU_ESTIMATED_HEIGHT && spaceAbove < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'bottom';
+        } else if (spaceAbove >= MENU_ESTIMATED_HEIGHT && spaceBelow < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'top';
+        } else {
+            messageMenuPlacement.value = spaceBelow >= spaceAbove ? 'bottom' : 'top';
+        }
+
+        const chosenSpace = messageMenuPlacement.value === 'bottom' ? spaceBelow : spaceAbove;
+        if (chosenSpace < MENU_ESTIMATED_HEIGHT) {
+            const positioningOffset = messageMenuPlacement.value === 'bottom'
+                ? Math.max(0, 32 - targetRect.height)
+                : Math.max(0, 28 - targetRect.height);
+            const padding = 8;
+            const availableHeight = Math.max(0, Math.floor(chosenSpace - positioningOffset - padding));
+            messageMenuMaxHeight.value = `${availableHeight}px`;
+        } else {
+            messageMenuMaxHeight.value = null;
+        }
+    } else if (event && event.clientY) {
+        const viewportHeight = window.innerHeight || 600;
+        const spaceAbove = event.clientY;
+        const spaceBelow = viewportHeight - event.clientY;
+
+        if (spaceBelow >= MENU_ESTIMATED_HEIGHT && spaceAbove < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'bottom';
+        } else if (spaceAbove >= MENU_ESTIMATED_HEIGHT && spaceBelow < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'top';
+        } else {
+            messageMenuPlacement.value = spaceBelow >= spaceAbove ? 'bottom' : 'top';
+        }
+
+        const chosenSpace = messageMenuPlacement.value === 'bottom' ? spaceBelow : spaceAbove;
+        if (chosenSpace < MENU_ESTIMATED_HEIGHT) {
+            const positioningOffset = messageMenuPlacement.value === 'bottom' ? 4 : 0;
+            const padding = 8;
+            const availableHeight = Math.max(0, Math.floor(chosenSpace - positioningOffset - padding));
+            messageMenuMaxHeight.value = `${availableHeight}px`;
+        } else {
+            messageMenuMaxHeight.value = null;
+        }
+    } else {
+        messageMenuPlacement.value = 'top';
+        messageMenuMaxHeight.value = null;
+    }
+
+    activeMessageMenuId.value = message.id;
 };
 
 const startEditMessage = (message) => {
     cancelReply();
     activeMessageMenuId.value = null;
+    messageMenuMaxHeight.value = null;
     editingMessage.value = {
         id: message.id,
         originalBody: message.body,
@@ -1935,6 +2008,7 @@ const handleGlobalKeydown = (e) => {
         }
         if (activeMessageMenuId.value !== null || activeConversationMenuId.value !== null) {
             activeMessageMenuId.value = null;
+            messageMenuMaxHeight.value = null;
             activeConversationMenuId.value = null;
             return;
         }
@@ -1982,6 +2056,7 @@ const handleGlobalClick = (e) => {
     if (activeMessageMenuId.value !== null) {
         if (!e.target.closest('[data-message-menu]')) {
             activeMessageMenuId.value = null;
+            messageMenuMaxHeight.value = null;
         }
     }
     if (activeConversationMenuId.value !== null) {
@@ -2058,10 +2133,10 @@ onBeforeUnmount(() => {
             <span>{{ toastMessage }}</span>
         </div>
 
-        <div class="flex-1 flex flex-col min-h-0 p-2 sm:p-3 bg-cream-300">
-            <div class="max-w-8xl w-full mx-auto flex-1 flex flex-col min-h-0">
+        <div class="flex-1 flex flex-col min-h-0 min-w-0 p-2 sm:p-3 bg-cream-300">
+            <div class="max-w-8xl w-full mx-auto flex-1 flex flex-col min-h-0 min-w-0">
                 <!-- Messenger Container -->
-                <div class="bg-cream-200 rounded-2xl shadow-sm border border-cream-500/60 overflow-hidden flex flex-1 min-h-0">
+                <div class="bg-cream-200 rounded-2xl shadow-sm border border-cream-500/60 overflow-hidden flex flex-1 min-h-0 min-w-0">
                     
                     <!-- Left Sidebar (Conversations List) -->
                     <div 
@@ -2150,7 +2225,10 @@ onBeforeUnmount(() => {
                                     v-for="conv in filteredConversations"
                                     :key="conv.id"
                                     class="rounded-xl transition duration-150 group relative"
-                                    :class="activeConversation?.id === conv.id ? 'bg-[#ede1b8] shadow-xs border border-cream-500/50' : 'hover:bg-cream-300/60'"
+                                    :class="[
+                                        activeConversation?.id === conv.id ? 'bg-[#ede1b8] shadow-xs border border-cream-500/50' : 'hover:bg-cream-300/60',
+                                        activeConversationMenuId === conv.id ? 'z-30' : 'z-0'
+                                    ]"
                                 >
                                     <a
                                         :href="route('chat.index', { conversation: conv.id })"
@@ -2309,7 +2387,7 @@ onBeforeUnmount(() => {
 
                     <!-- Right Chat Area -->
                     <div 
-                        class="flex-1 flex flex-col bg-cream-300 min-h-0 h-full relative"
+                        class="flex-1 flex flex-col bg-cream-300 min-h-0 min-w-0 h-full relative overflow-hidden"
                         :class="{'flex': activeConversation, 'hidden md:flex': !activeConversation}"
                         @dragenter="handleDragEnter"
                         @dragover="handleDragOver"
@@ -2333,7 +2411,7 @@ onBeforeUnmount(() => {
                         <template v-if="activeConversation">
                             <!-- Active Chat Header -->
                             <div class="h-16 px-4 sm:px-6 border-b border-cream-500/40 flex items-center justify-between bg-cream-200/90 z-10 shrink-0">
-                                <div class="flex items-center space-x-3 truncate me-2">
+                                <div class="flex items-center space-x-3 truncate me-2 min-w-0 flex-1">
                                     <!-- Mobile Back Button -->
                                     <button
                                         type="button"
@@ -2377,9 +2455,9 @@ onBeforeUnmount(() => {
                                         ></span>
                                     </div>
 
-                                    <div class="truncate">
-                                        <h3 class="font-bold text-gray-900 text-sm md:text-base leading-tight truncate flex items-center space-x-1.5">
-                                            <span>{{ (activeConversation.is_system || activeConversation.type === 'system') ? 'System Notifications' : activeConversation.title }}</span>
+                                    <div class="truncate min-w-0 flex-1">
+                                        <h3 class="font-bold text-gray-900 text-sm md:text-base leading-tight truncate flex items-center space-x-1.5 min-w-0">
+                                            <span class="truncate">{{ (activeConversation.is_system || activeConversation.type === 'system') ? 'System Notifications' : activeConversation.title }}</span>
                                             <span v-if="activeConversation.is_pinned" class="text-xs" title="Pinned">📌</span>
                                             <span v-if="activeConversation.is_muted" class="text-xs" title="Muted">🔕</span>
                                         </h3>
@@ -2515,7 +2593,7 @@ onBeforeUnmount(() => {
                                                 <span class="font-bold text-gray-800">{{ res.sender_name }}</span>
                                                 <span>{{ res.created_at_relative }}</span>
                                             </div>
-                                            <p class="text-xs text-gray-900 line-clamp-2">{{ res.body }}</p>
+                                            <p class="text-xs text-gray-900 line-clamp-2 break-words [overflow-wrap:anywhere]">{{ res.body }}</p>
                                         </button>
                                     </template>
                                     <div v-else class="p-4 text-center text-xs text-gray-500">
@@ -2525,14 +2603,14 @@ onBeforeUnmount(() => {
                             </div>
 
                             <!-- Horizontal flex layout for Messages + Info Drawer -->
-                            <div class="flex-1 flex flex-row min-h-0 overflow-hidden relative">
+                            <div class="flex-1 flex flex-row min-h-0 min-w-0 overflow-hidden relative">
                                 <!-- Messages & Input Column -->
-                                <div class="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+                                <div class="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden relative">
                                     <!-- Messages Scroll Container -->
                                     <div 
                                         ref="messagesContainer"
                                         @scroll="onMessagesScroll"
-                                        class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-cream-300"
+                                        class="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-4 bg-cream-300 min-w-0"
                                     >
                                         <!-- Load Older Messages Button (Top of message history) -->
                                         <div v-if="hasMoreMessages && !isLoadingConversation" class="flex justify-center pb-2 pt-1">
@@ -2609,32 +2687,34 @@ onBeforeUnmount(() => {
                                                 v-for="message in allMessages"
                                                 :id="`message-${message.id}`"
                                                 :key="message.id"
-                                                class="flex flex-col transition-colors duration-500 rounded-xl p-1"
+                                                class="w-full max-w-full min-w-0 flex flex-col transition-colors duration-500 rounded-xl p-1"
                                                 :class="[
                                                     message.is_sender ? 'items-end' : 'items-start',
-                                                    highlightedMessageId === message.id ? 'bg-golden-300/60 ring-2 ring-golden-500' : ''
+                                                    highlightedMessageId === message.id ? 'bg-golden-300/60 ring-2 ring-golden-500' : '',
+                                                    activeMessageMenuId === message.id ? 'relative z-30' : 'relative z-0'
                                                 ]"
                                             >
                                                 <!-- Sender Name in group/chat if not sender -->
                                                 <span 
                                                     v-if="!message.is_sender"
-                                                    class="text-[11px] font-semibold text-gray-700 mb-1 block pl-2"
+                                                    class="text-[11px] font-semibold text-gray-700 mb-1 block pl-2 max-w-full truncate"
                                                 >
                                                     {{ message.sender.name }}
                                                 </span>
 
                                                 <!-- Message Bubble Row -->
-                                                <div class="group flex items-center space-x-2 max-w-[92%] sm:max-w-[85%] md:max-w-[75%]">
+                                                <div class="group flex items-center space-x-2 max-w-[92%] sm:max-w-[85%] md:max-w-[75%] min-w-0">
                                                     
                                                     <!-- Actions Menu Toggle (Left of sender's bubble) -->
                                                     <div
                                                         v-if="message.is_sender && !message.is_deleted && !message.is_deleted_for_me && message.status !== 'sending' && message.status !== 'failed'"
-                                                        class="relative shrink-0 z-10"
+                                                        class="relative shrink-0"
+                                                        :class="activeMessageMenuId === message.id ? 'z-40' : 'z-10'"
                                                         data-message-menu
                                                     >
                                                         <button
                                                             type="button"
-                                                            @click.stop="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
+                                                            @click.stop="toggleMessageMenu(message, $event)"
                                                             class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition"
                                                             :class="activeMessageMenuId === message.id ? 'bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
@@ -2647,7 +2727,9 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Sender -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute right-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-30 text-xs"
+                                                            class="absolute right-0 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            :class="messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7'"
+                                                            :style="messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
@@ -2715,20 +2797,20 @@ onBeforeUnmount(() => {
                                                         <div
                                                             v-if="message.reply_to && !message.is_deleted_for_me"
                                                             @click="scrollToMessage(message.reply_to.id)"
-                                                            class="mb-1 px-3 py-1.5 rounded-lg text-xs border border-cream-500/40 bg-cream-100/90 hover:bg-cream-200/90 transition cursor-pointer max-w-full shadow-2xs break-words"
+                                                            class="mb-1 px-3 py-1.5 rounded-lg text-xs border border-cream-500/40 bg-cream-100/90 hover:bg-cream-200/90 transition cursor-pointer max-w-full shadow-2xs break-words [overflow-wrap:anywhere] [word-break:break-word] min-w-0"
                                                             :class="message.is_sender ? 'border-r-4 border-r-golden-600' : 'border-l-4 border-l-forest-600'"
                                                         >
                                                             <div class="font-bold text-[10px] text-forest-900 truncate">
                                                                 {{ message.reply_to.sender_name }}
                                                             </div>
-                                                            <div class="text-gray-700 italic text-[11px] break-words whitespace-normal line-clamp-3">
+                                                            <div class="text-gray-700 italic text-[11px] break-words [overflow-wrap:anywhere] [word-break:break-word] whitespace-normal line-clamp-3">
                                                                 {{ message.reply_to.body || 'Attachment' }}
                                                             </div>
                                                         </div>
 
                                                         <!-- Message Bubble -->
                                                         <div
-                                                            class="px-4 py-2.5 shadow-xs text-sm break-words relative transition"
+                                                            class="px-4 py-2.5 shadow-xs text-sm break-words [overflow-wrap:anywhere] [word-break:break-word] max-w-full min-w-0 relative transition"
                                                             :class="[
                                                                 message.is_sender
                                                                     ? 'bg-golden-500 text-gray-950 font-medium rounded-2xl rounded-tr-xs border border-golden-600/30'
@@ -2738,7 +2820,7 @@ onBeforeUnmount(() => {
                                                                 message.status === 'failed' ? 'border-red-400 bg-amber-100' : ''
                                                             ]"
                                                             data-message-menu
-                                                            @click.stop="toggleMessageMenu(message)"
+                                                            @click.stop="toggleMessageMenu(message, $event)"
                                                         >
                                                             <!-- Image Attachment with Inline Lightbox trigger -->
                                                             <div v-if="!message.is_deleted_for_me && message.attachment_url && message.type === 'image'" class="mb-2 overflow-hidden rounded-xl">
@@ -2757,28 +2839,28 @@ onBeforeUnmount(() => {
                                                             </div>
 
                                                             <!-- Document / File Attachment -->
-                                                            <div v-else-if="!message.is_deleted_for_me && (message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1">
+                                                            <div v-else-if="!message.is_deleted_for_me && (message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1 max-w-full min-w-0">
                                                                 <a
                                                                     :href="message.attachment_url || '#'"
                                                                     :target="message.attachment_url ? '_blank' : '_self'"
                                                                     :download="!!message.attachment_url"
                                                                     @click.stop
-                                                                    class="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold shadow-xs"
+                                                                    class="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold shadow-xs max-w-full min-w-0"
                                                                     :class="message.is_sender ? 'bg-golden-600/20 text-gray-950 hover:bg-golden-600/30' : 'bg-golden-500/80 text-gray-950 hover:bg-golden-500'"
                                                                 >
                                                                     <svg class="size-4 shrink-0 text-gray-800" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                                         <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                                                                     </svg>
-                                                                    <span class="truncate">{{ message.attachment_name || 'Download file' }}</span>
+                                                                    <span class="truncate min-w-0">{{ message.attachment_name || 'Download file' }}</span>
                                                                 </a>
                                                             </div>
 
                                                             <!-- Message Body -->
-                                                            <p v-if="message.body" class="whitespace-pre-wrap leading-relaxed">
+                                                            <p v-if="message.body" class="whitespace-pre-wrap leading-relaxed break-words [overflow-wrap:anywhere] [word-break:break-word]">
                                                                 <template v-for="(seg, sIdx) in parseMessageSegments(message.body)" :key="sIdx">
                                                                     <span
                                                                         v-if="seg.type === 'mention'"
-                                                                        class="inline-block px-1.5 py-0.2 mx-0.5 rounded font-bold transition-colors"
+                                                                        class="inline-block px-1.5 py-0.2 mx-0.5 rounded font-bold transition-colors break-words [overflow-wrap:anywhere] [word-break:break-word]"
                                                                         :class="[
                                                                             seg.isEveryone
                                                                                 ? 'bg-amber-500/25 text-amber-950 border border-amber-600/30 ring-1 ring-amber-500/20'
@@ -2815,12 +2897,13 @@ onBeforeUnmount(() => {
                                                     <!-- Actions Menu Toggle (Right of receiver's bubble) -->
                                                     <div
                                                         v-if="!message.is_sender && !message.is_deleted && !message.is_deleted_for_me"
-                                                        class="relative shrink-0 z-10"
+                                                        class="relative shrink-0"
+                                                        :class="activeMessageMenuId === message.id ? 'z-40' : 'z-10'"
                                                         data-message-menu
                                                     >
                                                         <button
                                                             type="button"
-                                                            @click.stop="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
+                                                            @click.stop="toggleMessageMenu(message, $event)"
                                                             class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
                                                             :class="activeMessageMenuId === message.id ? 'opacity-100 bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
@@ -2833,7 +2916,9 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Receiver -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute left-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-30 text-xs"
+                                                            class="absolute left-0 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            :class="messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7'"
+                                                            :style="messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
@@ -2987,12 +3072,12 @@ onBeforeUnmount(() => {
                                         <span>System Notifications are read-only and cannot be replied to.</span>
                                     </div>
 
-                                    <div v-else class="p-3 sm:p-4 border-t border-cream-500/40 bg-cream-300 relative">
+                                    <div v-else class="w-full max-w-full min-w-0 p-3 sm:p-4 border-t border-cream-500/40 bg-cream-300 relative">
                                         <!-- Replying-to Preview Bar -->
-                                        <div v-if="replyingToMessage" class="mb-2 p-2 bg-cream-100 rounded-xl border border-cream-500/60 flex items-center justify-between text-xs animate-fadeIn gap-2">
+                                        <div v-if="replyingToMessage" class="mb-2 p-2 bg-cream-100 rounded-xl border border-cream-500/60 flex items-center justify-between text-xs animate-fadeIn gap-2 min-w-0 max-w-full">
                                             <div class="flex items-start space-x-2 min-w-0 flex-1">
                                                 <span class="text-forest-800 font-bold shrink-0">Replying to {{ replyingToMessage.sender_name }}:</span>
-                                                <span class="text-gray-600 italic break-words line-clamp-2">{{ replyingToMessage.body }}</span>
+                                                <span class="text-gray-600 italic break-words [overflow-wrap:anywhere] [word-break:break-word] line-clamp-2 min-w-0">{{ replyingToMessage.body }}</span>
                                             </div>
                                             <button type="button" @click="cancelReply" class="text-gray-400 hover:text-gray-700 p-1 cursor-pointer shrink-0" aria-label="Cancel reply">
                                                 <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -3119,7 +3204,7 @@ onBeforeUnmount(() => {
                                         </div>
 
                                         <!-- Input Controls Form -->
-                                        <form @submit.prevent="editingMessage ? submitEditMessage() : sendMessage()" class="flex items-center space-x-2 sm:space-x-3">
+                                        <form @submit.prevent="editingMessage ? submitEditMessage() : sendMessage()" class="flex items-center space-x-2 sm:space-x-3 w-full max-w-full min-w-0">
                                             <!-- Hidden File Input -->
                                             <input
                                                 ref="fileInput"
@@ -3131,7 +3216,7 @@ onBeforeUnmount(() => {
                                             />
 
                                             <!-- Pill Wrapper for attachment icon, emoji icon, and textarea -->
-                                            <div class="flex-1 flex items-center bg-[#ebe2c8] border border-cream-500/50 rounded-full px-3 py-1 focus-within:ring-2 focus-within:ring-forest-600/30 focus-within:border-forest-600 transition">
+                                            <div class="flex-1 flex items-center bg-[#ebe2c8] border border-cream-500/50 rounded-full px-3 py-1 focus-within:ring-2 focus-within:ring-forest-600/30 focus-within:border-forest-600 transition min-w-0">
                                                 <!-- Attachment Button (disabled during edit or conversation load) -->
                                                 <button
                                                     v-if="!editingMessage"
@@ -3172,7 +3257,7 @@ onBeforeUnmount(() => {
                                                     rows="1"
                                                     :disabled="isLoadingConversation || !!conversationLoadError"
                                                     :placeholder="isLoadingConversation ? 'Loading conversation messages...' : (conversationLoadError ? 'Could not load messages' : (editingMessage ? 'Edit your message...' : 'Type a message... (Enter to send, Shift+Enter for newline)'))"
-                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden disabled:opacity-50 disabled:cursor-not-allowed min-w-0"
                                                     @keydown="onComposerKeydown"
                                                     aria-label="Type message content"
                                                 ></textarea>
