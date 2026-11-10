@@ -45,6 +45,99 @@ const conversationLoadError = ref(null);
 let currentFetchConversationId = null;
 let currentFetchAbortController = null;
 
+// In-memory message cache (session-only, unpersisted, keyed by `${userId}:${conversationId}`)
+const messageCache = new Map();
+const MAX_CACHED_MESSAGES = 20;
+
+const getCacheKey = (convId) => {
+    const userId = currentUser.value?.id;
+    return (userId && convId) ? `${userId}:${convId}` : null;
+};
+
+const hasCachedConversation = (convId) => {
+    const key = getCacheKey(convId);
+    return key ? messageCache.has(key) : false;
+};
+
+const getCachedMessages = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return null;
+    const entry = messageCache.get(key);
+    const msgs = Array.isArray(entry) ? entry : entry?.messages;
+    return (msgs || []).map(m => ({ ...m }));
+};
+
+const getCachedHasMore = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return false;
+    const entry = messageCache.get(key);
+    return !!entry?.hasMore;
+};
+
+const setCachedMessages = (convId, messages, hasMore = false) => {
+    const key = getCacheKey(convId);
+    if (!key || !Array.isArray(messages)) return;
+    const newest = messages.slice(-MAX_CACHED_MESSAGES).map(m => ({ ...m }));
+    messageCache.set(key, { messages: newest, hasMore: !!hasMore });
+};
+
+const addMessageToCache = (convId, message) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return;
+    const entry = messageCache.get(key);
+    const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    if (!currentList.some(m => m.id === message.id)) {
+        const updated = [...currentList, { ...message }].slice(-MAX_CACHED_MESSAGES);
+        messageCache.set(key, { messages: updated, hasMore: !!entry?.hasMore });
+    }
+};
+
+const updateMessageInCache = (convId, messageId, patchFn) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return;
+    const entry = messageCache.get(key);
+    const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    const target = currentList.find(m => m.id === messageId);
+    if (target) {
+        patchFn(target);
+    }
+};
+
+const markReadInCache = (convId, readAt) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return;
+    const entry = messageCache.get(key);
+    const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    currentList.forEach(m => {
+        if (m.is_sender) {
+            const msgTime = new Date(m.raw_created_at || m.created_at).getTime();
+            if (!isNaN(msgTime) && msgTime <= readAt) {
+                m.is_seen = true;
+                m.status = 2;
+            }
+        }
+    });
+};
+
+const deleteCachedConversation = (convId) => {
+    const key = getCacheKey(convId);
+    if (key) {
+        messageCache.delete(key);
+    }
+};
+
+// Seed initial active conversation into in-memory cache
+if (props.activeConversation?.id) {
+    setCachedMessages(props.activeConversation.id, props.activeConversation.messages || [], !!props.activeConversation.has_more);
+}
+
+// Clear cache if authenticated user ID changes
+watch(() => currentUser.value?.id, (newUserId, oldUserId) => {
+    if (newUserId !== oldUserId) {
+        messageCache.clear();
+    }
+});
+
 watch(() => props.activeConversation, (active) => {
     if (active?.id) {
         if (!isLoadingConversation.value || currentFetchConversationId === active.id) {
@@ -53,6 +146,8 @@ watch(() => props.activeConversation, (active) => {
             hasMoreMessages.value = !!active.has_more;
             isLoadingConversation.value = false;
             conversationLoadError.value = null;
+
+            setCachedMessages(active.id, active.messages || [], !!active.has_more);
 
             const currentConv = conversationsList.value.find(c => c.id === active.id);
             if (currentConv) {
@@ -104,7 +199,7 @@ const fileValidationError = ref('');
 const showEmojiPicker = ref(false);
 const activeMessageMenuId = ref(null);
 const messageMenuPlacement = ref('top');
-const messageMenuHorizontalPlacement = ref('right');
+const messageMenuHorizontalPlacement = ref('left');
 const messageMenuMaxHeight = ref(null);
 const messageMenuShiftX = ref(0);
 const activeConversationMenuId = ref(null);
@@ -315,6 +410,8 @@ const loadOlderMessages = async () => {
         if (response.data && Array.isArray(response.data.messages)) {
             activeMessages.value = [...response.data.messages, ...activeMessages.value];
             hasMoreMessages.value = !!response.data.has_more;
+
+            setCachedMessages(activeConversation.value.id, activeMessages.value, !!response.data.has_more);
 
             await nextTick();
             if (container) {
@@ -893,6 +990,7 @@ const toggleMessageMenu = (message, event = null) => {
     if (activeMessageMenuId.value === message.id) {
         activeMessageMenuId.value = null;
         messageMenuMaxHeight.value = null;
+        messageMenuShiftX.value = 0;
         return;
     }
 
@@ -900,17 +998,34 @@ const toggleMessageMenu = (message, event = null) => {
     const MENU_WIDTH = 176;
     const HORIZONTAL_PADDING = 8;
 
-    // Determine placement based on available vertical and horizontal space in the scroll container
-    if (event && event.currentTarget && messagesContainer.value) {
-        const containerRect = messagesContainer.value.getBoundingClientRect();
-        const messageEl = event.currentTarget.closest?.(`#message-${message.id}`) || document.getElementById(`message-${message.id}`);
-        const optionButton = (event.currentTarget.tagName === 'BUTTON' ? event.currentTarget : null)
-            || messageEl?.querySelector('button[aria-label="Message options"]')
-            || messageEl?.querySelector('[data-message-menu] button');
-        const anchorEl = optionButton || event.currentTarget;
+    // Locate the toggle button or message row element
+    const messageEl = (event?.currentTarget?.closest ? event.currentTarget.closest(`#message-${message.id}`) : null)
+        || document.getElementById(`message-${message.id}`);
+    const optionButton = (event?.currentTarget?.tagName === 'BUTTON' ? event.currentTarget : null)
+        || messageEl?.querySelector('button[aria-label="Message options"]')
+        || messageEl?.querySelector('[data-message-menu] button');
+    const anchorEl = optionButton || messageEl?.querySelector('[data-message-menu]') || event?.currentTarget;
+
+    const containerRect = messagesContainer.value
+        ? messagesContainer.value.getBoundingClientRect()
+        : {
+            top: 0,
+            left: 0,
+            right: window.innerWidth || 360,
+            bottom: window.innerHeight || 600,
+            width: window.innerWidth || 360,
+            height: window.innerHeight || 600,
+        };
+
+    const minLeft = Math.max(0, containerRect.left) + HORIZONTAL_PADDING;
+    const maxRight = Math.min(window.innerWidth || containerRect.right, containerRect.right) - HORIZONTAL_PADDING;
+    const minTop = Math.max(0, containerRect.top);
+    const maxBottom = Math.min(window.innerHeight || containerRect.bottom, containerRect.bottom);
+
+    if (anchorEl) {
         const targetRect = anchorEl.getBoundingClientRect();
-        const spaceAbove = targetRect.top - containerRect.top;
-        const spaceBelow = containerRect.bottom - targetRect.bottom;
+        const spaceAbove = targetRect.top - minTop;
+        const spaceBelow = maxBottom - targetRect.bottom;
 
         if (spaceBelow >= MENU_ESTIMATED_HEIGHT && spaceAbove < MENU_ESTIMATED_HEIGHT) {
             messageMenuPlacement.value = 'bottom';
@@ -932,42 +1047,46 @@ const toggleMessageMenu = (message, event = null) => {
             messageMenuMaxHeight.value = null;
         }
 
-        // Horizontal placement to prevent overflow on mobile/narrow viewports
-        const spaceToLeft = targetRect.right - containerRect.left;
-        const spaceToRight = containerRect.right - targetRect.left;
+        // Horizontal placement: compare available room on right vs left
+        const spaceToLeft = targetRect.right - minLeft;
+        const spaceToRight = maxRight - targetRect.left;
 
-        let horizontalPlacement = 'right';
+        let horizontalPlacement = 'left';
         if (spaceToRight >= MENU_WIDTH && spaceToLeft < MENU_WIDTH) {
             horizontalPlacement = 'left';
         } else if (spaceToLeft >= MENU_WIDTH && spaceToRight < MENU_WIDTH) {
             horizontalPlacement = 'right';
-        } else if (message.is_sender) {
-            horizontalPlacement = spaceToLeft >= MENU_WIDTH ? 'right' : 'left';
         } else {
-            horizontalPlacement = spaceToRight >= MENU_WIDTH ? 'left' : 'right';
+            // Pick side with greater space
+            horizontalPlacement = spaceToRight >= spaceToLeft ? 'left' : 'right';
         }
         messageMenuHorizontalPlacement.value = horizontalPlacement;
 
+        // Shift calculation to guarantee menu stays within bounds
         let shiftX = 0;
         if (horizontalPlacement === 'left') {
             const menuRight = targetRect.left + MENU_WIDTH;
-            const maxRight = containerRect.right - HORIZONTAL_PADDING;
             if (menuRight > maxRight) {
                 shiftX = maxRight - menuRight;
             }
+            if (targetRect.left + shiftX < minLeft) {
+                shiftX = minLeft - targetRect.left;
+            }
         } else {
             const menuLeft = targetRect.right - MENU_WIDTH;
-            const minLeft = containerRect.left + HORIZONTAL_PADDING;
             if (menuLeft < minLeft) {
                 shiftX = minLeft - menuLeft;
+            }
+            if (targetRect.right + shiftX > maxRight) {
+                shiftX = maxRight - targetRect.right;
             }
         }
         messageMenuShiftX.value = Math.round(shiftX);
     } else if (event && event.clientY) {
-        const viewportHeight = window.innerHeight || 600;
-        const viewportWidth = window.innerWidth || 360;
-        const spaceAbove = event.clientY;
-        const spaceBelow = viewportHeight - event.clientY;
+        const clientX = event.clientX || 0;
+        const clientY = event.clientY || 0;
+        const spaceAbove = clientY - minTop;
+        const spaceBelow = maxBottom - clientY;
 
         if (spaceBelow >= MENU_ESTIMATED_HEIGHT && spaceAbove < MENU_ESTIMATED_HEIGHT) {
             messageMenuPlacement.value = 'bottom';
@@ -979,29 +1098,31 @@ const toggleMessageMenu = (message, event = null) => {
 
         const chosenSpace = messageMenuPlacement.value === 'bottom' ? spaceBelow : spaceAbove;
         if (chosenSpace < MENU_ESTIMATED_HEIGHT) {
-            const positioningOffset = messageMenuPlacement.value === 'bottom' ? 4 : 0;
-            const padding = 8;
-            const availableHeight = Math.max(0, Math.floor(chosenSpace - positioningOffset - padding));
+            const availableHeight = Math.max(0, Math.floor(chosenSpace - 12));
             messageMenuMaxHeight.value = `${availableHeight}px`;
         } else {
             messageMenuMaxHeight.value = null;
         }
 
-        const spaceToLeft = event.clientX;
-        const spaceToRight = viewportWidth - event.clientX;
-        if (spaceToRight >= MENU_WIDTH && spaceToLeft < MENU_WIDTH) {
-            messageMenuHorizontalPlacement.value = 'left';
-        } else if (spaceToLeft >= MENU_WIDTH && spaceToRight < MENU_WIDTH) {
-            messageMenuHorizontalPlacement.value = 'right';
-        } else if (message.is_sender) {
-            messageMenuHorizontalPlacement.value = spaceToLeft >= MENU_WIDTH ? 'right' : 'left';
+        const spaceToLeft = clientX - minLeft;
+        const spaceToRight = maxRight - clientX;
+        const horizontalPlacement = spaceToRight >= spaceToLeft ? 'left' : 'right';
+        messageMenuHorizontalPlacement.value = horizontalPlacement;
+
+        let shiftX = 0;
+        if (horizontalPlacement === 'left') {
+            const menuRight = clientX + MENU_WIDTH;
+            if (menuRight > maxRight) shiftX = maxRight - menuRight;
+            if (clientX + shiftX < minLeft) shiftX = minLeft - clientX;
         } else {
-            messageMenuHorizontalPlacement.value = spaceToRight >= MENU_WIDTH ? 'left' : 'right';
+            const menuLeft = clientX - MENU_WIDTH;
+            if (menuLeft < minLeft) shiftX = minLeft - menuLeft;
+            if (clientX + shiftX > maxRight) shiftX = maxRight - clientX;
         }
-        messageMenuShiftX.value = 0;
+        messageMenuShiftX.value = Math.round(shiftX);
     } else {
         messageMenuPlacement.value = 'top';
-        messageMenuHorizontalPlacement.value = message.is_sender ? 'right' : 'left';
+        messageMenuHorizontalPlacement.value = message.is_sender ? 'left' : 'right';
         messageMenuMaxHeight.value = null;
         messageMenuShiftX.value = 0;
     }
@@ -1283,8 +1404,19 @@ const confirmDeleteMessage = () => {
         closeDeleteModal();
         return;
     }
-    router.delete(route('chat.delete-message', deletingMessageId.value), {
+    const targetMsgId = deletingMessageId.value;
+    router.delete(route('chat.delete-message', targetMsgId), {
         preserveScroll: true,
+        onSuccess: () => {
+            if (activeConversation.value?.id) {
+                updateMessageInCache(activeConversation.value.id, targetMsgId, (m) => {
+                    m.is_deleted = true;
+                    m.body = 'This message was deleted';
+                    m.attachment_url = null;
+                    m.attachment_name = null;
+                });
+            }
+        },
         onFinish: () => closeDeleteModal(),
     });
 };
@@ -1330,6 +1462,21 @@ const confirmDeleteForMe = () => {
                 targetMsg.mentioned_user_ids = [];
                 targetMsg.is_edited = false;
                 targetMsg.edited_at = null;
+            }
+            if (activeConversation.value?.id) {
+                updateMessageInCache(activeConversation.value.id, msgId, (m) => {
+                    m.body = 'User has deleted a message';
+                    m.is_deleted_for_me = true;
+                    m.attachment_url = null;
+                    m.attachment_name = null;
+                    m.attachment_type = null;
+                    m.reply_to = null;
+                    m.reply_to_id = null;
+                    m.reactions = [];
+                    m.mentioned_user_ids = [];
+                    m.is_edited = false;
+                    m.edited_at = null;
+                });
             }
             const conv = conversationsList.value.find(c => c.id === activeConversation.value?.id);
             if (conv && conv.latest_message && conv.latest_message.id === msgId) {
@@ -1684,6 +1831,11 @@ const handleUserChannelEvent = (e) => {
             }
             reorderConversation(newConv);
         }
+
+        if (activeConversation.value?.id !== e.conversation_id && e.data?.message && hasCachedConversation(e.conversation_id)) {
+            const isMe = (e.data.message.sender_id === currentUser.value.id);
+            addMessageToCache(e.conversation_id, { ...e.data.message, is_sender: isMe });
+        }
     } else if (e.action === 'group_created') {
         if (e.data?.conversation && !conversationsList.value.some(c => c.id === e.data.conversation.id)) {
             reorderConversation(e.data.conversation);
@@ -1692,6 +1844,16 @@ const handleUserChannelEvent = (e) => {
         const conv = conversationsList.value.find(c => c.id === e.conversation_id);
         if (conv && conv.latest_message?.id === e.data?.message_id && !conv.latest_message.is_deleted_for_me) {
             conv.latest_message.body = e.data?.body ?? conv.latest_message.body;
+        }
+        if (hasCachedConversation(e.conversation_id)) {
+            updateMessageInCache(e.conversation_id, e.data?.message_id, (m) => {
+                m.body = e.data?.body ?? m.body;
+                m.is_edited = true;
+                m.edited_at = e.data?.edited_at_relative ?? 'just now';
+                if (e.data?.mentioned_user_ids) {
+                    m.mentioned_user_ids = e.data.mentioned_user_ids;
+                }
+            });
         }
         if (conv && activeConversation.value?.id !== e.conversation_id) {
             const mentionedIds = e.data?.mentioned_user_ids || [];
@@ -1714,6 +1876,14 @@ const handleUserChannelEvent = (e) => {
             conv.latest_message.body = 'This message was deleted';
             conv.latest_message.is_deleted = true;
         }
+        if (hasCachedConversation(e.conversation_id)) {
+            updateMessageInCache(e.conversation_id, e.data?.message_id, (m) => {
+                m.is_deleted = true;
+                m.body = 'This message was deleted';
+                m.attachment_url = null;
+                m.attachment_name = null;
+            });
+        }
     } else if (e.action === 'group_renamed') {
         const conv = conversationsList.value.find(c => c.id === e.conversation_id);
         if (conv && e.data?.title) {
@@ -1725,6 +1895,7 @@ const handleUserChannelEvent = (e) => {
             reorderConversation(e.data.conversation);
         }
     } else if (e.action === 'group_deleted') {
+        deleteCachedConversation(e.conversation_id);
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
         if (activeConversation.value?.id === e.conversation_id) {
             showToast('This group chat was deleted');
@@ -1763,6 +1934,8 @@ const handleConversationChannelEvent = (e) => {
                 is_sender: isMe,
             });
 
+            addMessageToCache(e.conversation_id, { ...msg, is_sender: isMe });
+
             if (isMe || isNearBottom()) {
                 scrollToBottom(true);
             } else {
@@ -1785,6 +1958,14 @@ const handleConversationChannelEvent = (e) => {
                 targetMsg.mentioned_user_ids = e.data.mentioned_user_ids;
             }
         }
+        updateMessageInCache(e.conversation_id, messageId, (m) => {
+            m.body = e.data?.body ?? m.body;
+            m.is_edited = true;
+            m.edited_at = e.data?.edited_at_relative ?? 'just now';
+            if (e.data?.mentioned_user_ids) {
+                m.mentioned_user_ids = e.data.mentioned_user_ids;
+            }
+        });
     } else if (e.action === 'typing') {
         const userId = e.data?.user_id;
         const userName = e.data?.user_name;
@@ -1811,17 +1992,22 @@ const handleConversationChannelEvent = (e) => {
                 }
             }
         });
+        markReadInCache(e.conversation_id, readAt);
     } else if (e.action === 'reaction_toggled') {
         const messageId = e.data?.message_id;
         const reactions = e.data?.reactions;
         if (messageId && Array.isArray(reactions)) {
+            const formattedReactions = reactions.map(r => ({
+                ...r,
+                reacted_by_me: r.user_ids ? r.user_ids.includes(currentUser.value.id) : false,
+            }));
             const targetMsg = activeMessages.value.find(m => m.id === messageId);
             if (targetMsg && !targetMsg.is_deleted_for_me) {
-                targetMsg.reactions = reactions.map(r => ({
-                    ...r,
-                    reacted_by_me: r.user_ids ? r.user_ids.includes(currentUser.value.id) : false,
-                }));
+                targetMsg.reactions = formattedReactions;
             }
+            updateMessageInCache(e.conversation_id, messageId, (m) => {
+                m.reactions = formattedReactions;
+            });
         }
     } else if (e.action === 'deleted') {
         const messageId = e.data?.message_id;
@@ -1833,6 +2019,12 @@ const handleConversationChannelEvent = (e) => {
                 targetMsg.attachment_url = null;
                 targetMsg.attachment_name = null;
             }
+            updateMessageInCache(e.conversation_id, messageId, (m) => {
+                m.is_deleted = true;
+                m.body = 'This message was deleted';
+                m.attachment_url = null;
+                m.attachment_name = null;
+            });
         }
     } else if (e.action === 'group_renamed') {
         if (activeConversation.value && activeConversation.value.id === e.conversation_id && e.data?.title) {
@@ -1877,6 +2069,7 @@ const handleConversationChannelEvent = (e) => {
             }
         }
     } else if (e.action === 'group_deleted') {
+        deleteCachedConversation(e.conversation_id);
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
         if (activeConversation.value && activeConversation.value.id === e.conversation_id) {
             showToast('This group chat was deleted');
@@ -1909,10 +2102,22 @@ const selectConversation = async (conv, shouldPushState = true) => {
         shared_attachments: conv.shared_attachments || [],
     };
 
-    // 2. Immediately clear previous conversation messages and load error
-    activeMessages.value = [];
-    hasMoreMessages.value = false;
-    isLoadingConversation.value = true;
+    // 2. Check if conversation has cached messages in memory
+    if (hasCachedConversation(targetId)) {
+        activeMessages.value = getCachedMessages(targetId) || [];
+        hasMoreMessages.value = getCachedHasMore(targetId);
+        isLoadingConversation.value = false;
+        nextTick(() => {
+            scrollToBottom(false);
+            resizeComposer();
+            focusComposer();
+        });
+    } else {
+        // Clear previous conversation messages and show loading skeleton
+        activeMessages.value = [];
+        hasMoreMessages.value = false;
+        isLoadingConversation.value = true;
+    }
     conversationLoadError.value = null;
 
     // Reset interaction states
@@ -1958,13 +2163,70 @@ const selectConversation = async (conv, shouldPushState = true) => {
                 ...response.data.conversation,
             };
         }
-        activeMessages.value = response.data.messages || [];
+
+        const serverMessages = response.data.messages || [];
+        const currentMessages = activeMessages.value || [];
+
+        // Reconcile refreshed messages by ID:
+        // Server response is authoritative within its returned ID range.
+        // Absent current messages are kept only if older than oldest server ID
+        // or newer than newest server ID; absent messages inside range are discarded.
+        const reconciledMap = new Map();
+        serverMessages.forEach(m => {
+            reconciledMap.set(m.id, { ...m });
+        });
+
+        if (serverMessages.length > 0) {
+            const serverNumericIds = serverMessages
+                .map(m => m.id)
+                .filter(id => typeof id === 'number');
+
+            const minServerId = serverNumericIds.length > 0 ? Math.min(...serverNumericIds) : null;
+            const maxServerId = serverNumericIds.length > 0 ? Math.max(...serverNumericIds) : null;
+
+            currentMessages.forEach(m => {
+                if (reconciledMap.has(m.id)) {
+                    return;
+                }
+
+                const isNumeric = typeof m.id === 'number';
+                const isOlder = isNumeric && minServerId !== null && m.id < minServerId;
+                const isNewer = (!isNumeric) || (maxServerId !== null && m.id > maxServerId);
+
+                if (isOlder || isNewer) {
+                    reconciledMap.set(m.id, { ...m });
+                }
+            });
+        } else {
+            // When server returns no messages, do not retain stale cached entries by default
+            currentMessages.forEach(m => {
+                if (typeof m.id !== 'number' && !reconciledMap.has(m.id)) {
+                    reconciledMap.set(m.id, { ...m });
+                }
+            });
+        }
+
+        const reconciled = Array.from(reconciledMap.values()).sort((a, b) => {
+            if (typeof a.id === 'number' && typeof b.id === 'number') {
+                return a.id - b.id;
+            }
+            const timeA = new Date(a.raw_created_at || a.created_at).getTime();
+            const timeB = new Date(b.raw_created_at || b.created_at).getTime();
+            return timeA - timeB;
+        });
+
+        activeMessages.value = reconciled;
         hasMoreMessages.value = !!response.data.has_more;
         isLoadingConversation.value = false;
         conversationLoadError.value = null;
 
+        // Keep cache updated with newest 20 messages
+        setCachedMessages(targetId, reconciled, !!response.data.has_more);
+
         nextTick(() => {
-            scrollToBottom(false);
+            if (isNearBottom()) {
+                scrollToBottom(false);
+            }
             resizeComposer();
             focusComposer();
         });
@@ -1977,7 +2239,11 @@ const selectConversation = async (conv, shouldPushState = true) => {
         }
 
         isLoadingConversation.value = false;
-        conversationLoadError.value = err.response?.data?.message || 'Unable to load conversation messages. Please check your connection and try again.';
+        if (activeMessages.value.length === 0) {
+            conversationLoadError.value = err.response?.data?.message || 'Unable to load conversation messages. Please check your connection and try again.';
+        } else {
+            showToast('Unable to refresh messages. Check your connection.');
+        }
     }
 };
 
@@ -2884,7 +3150,6 @@ onBeforeUnmount(() => {
                                                                 message.status === 'sending' ? 'opacity-90' : '',
                                                                 message.status === 'failed' ? 'border-red-400 bg-amber-100' : ''
                                                             ]"
-                                                            data-message-menu
                                                             @click.stop="toggleMessageMenu(message, $event)"
                                                         >
                                                             <!-- Image Attachment with Inline Lightbox trigger -->
