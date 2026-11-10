@@ -81,15 +81,64 @@ const getCachedLastMessageAt = (convId) => {
     return entry?.lastMessageAt || null;
 };
 
-const setCachedMessages = (convId, messages, hasMore = false, lastMessageAt = null) => {
+const extractConversationMetadata = (conv) => {
+    if (!conv || typeof conv !== 'object') return null;
+    return {
+        id: conv.id,
+        type: conv.type,
+        title: conv.title,
+        is_system: conv.is_system,
+        is_pinned: conv.is_pinned,
+        is_muted: conv.is_muted,
+        notification_preference: conv.notification_preference,
+        is_admin: conv.is_admin,
+        last_message_at: conv.last_message_at,
+        last_message_at_relative: conv.last_message_at_relative,
+        created_at: conv.created_at,
+        other_user: conv.other_user ? { ...conv.other_user } : null,
+        participants: Array.isArray(conv.participants) ? conv.participants.map(p => ({ ...p })) : [],
+        shared_attachments: Array.isArray(conv.shared_attachments) ? conv.shared_attachments.map(a => ({ ...a })) : [],
+        total_messages: conv.total_messages ?? null,
+    };
+};
+
+const getCachedMetadata = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return null;
+    const entry = messageCache.get(key);
+    return entry?.metadata ? { ...entry.metadata } : null;
+};
+
+const getCachedNeedsReconciliation = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return false;
+    const entry = messageCache.get(key);
+    return Boolean(entry?.needsReconciliation);
+};
+
+const markAllCacheNeedsReconciliation = () => {
+    messageCache.forEach((entry) => {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+            entry.needsReconciliation = true;
+        }
+    });
+};
+
+const setCachedMessages = (convId, messages, hasMore = false, lastMessageAt = null, metadata = null) => {
     const key = getCacheKey(convId);
     if (!key || !Array.isArray(messages)) return;
     const newest = messages.slice(-MAX_CACHED_MESSAGES).map(m => ({ ...m }));
     const existingLastMessageAt = getCachedLastMessageAt(convId);
+    const existingMetadata = getCachedMetadata(convId);
+    const effectiveHasMore = Boolean(hasMore || messages.length > MAX_CACHED_MESSAGES);
+    const resolvedMetadata = metadata ? extractConversationMetadata(metadata) : existingMetadata;
+
     messageCache.set(key, {
         messages: newest,
-        hasMore: !!hasMore,
+        hasMore: effectiveHasMore,
         lastMessageAt: lastMessageAt ?? existingLastMessageAt ?? null,
+        metadata: resolvedMetadata,
+        needsReconciliation: false,
     });
 };
 
@@ -155,7 +204,8 @@ if (props.activeConversation?.id) {
         props.activeConversation.id,
         props.activeConversation.messages || [],
         !!props.activeConversation.has_more,
-        props.activeConversation.last_message_at || null
+        props.activeConversation.last_message_at || null,
+        props.activeConversation
     );
 }
 
@@ -179,7 +229,8 @@ watch(() => props.activeConversation, (active) => {
                 active.id,
                 active.messages || [],
                 !!active.has_more,
-                active.last_message_at || null
+                active.last_message_at || null,
+                active
             );
 
             const currentConv = conversationsList.value.find(c => c.id === active.id);
@@ -444,7 +495,7 @@ const loadOlderMessages = async () => {
             activeMessages.value = [...response.data.messages, ...activeMessages.value];
             hasMoreMessages.value = !!response.data.has_more;
 
-            setCachedMessages(activeConversation.value.id, activeMessages.value, !!response.data.has_more);
+            setCachedMessages(activeConversation.value.id, activeMessages.value, !!response.data.has_more, null, activeConversation.value);
 
             await nextTick();
             if (container) {
@@ -1806,6 +1857,12 @@ const setupEchoListeners = () => {
             if (states.current === 'connecting' || states.current === 'unavailable') {
                 isReconnecting.value = true;
             } else if (states.current === 'connected') {
+                if (isReconnecting.value) {
+                    markAllCacheNeedsReconciliation();
+                    if (activeConversation.value?.id) {
+                        selectConversation(activeConversation.value, false);
+                    }
+                }
                 isReconnecting.value = false;
             }
         });
@@ -2167,12 +2224,16 @@ const selectConversation = async (conv, shouldPushState = true) => {
     // 2. Check if conversation has cached messages in memory
     const hasCache = hasCachedConversation(targetId);
     const cachedLastMessageAt = hasCache ? getCachedLastMessageAt(targetId) : null;
+    const cachedMetadata = hasCache ? getCachedMetadata(targetId) : null;
+    const isNeedsReconciliation = hasCache && getCachedNeedsReconciliation(targetId);
     const sidebarConv = conversationsList.value.find(c => c.id === targetId);
     const currentLastMessageAt = conv.last_message_at || sidebarConv?.last_message_at || null;
     const cachedTime = cachedLastMessageAt ? new Date(cachedLastMessageAt).getTime() : NaN;
     const currentTime = currentLastMessageAt ? new Date(currentLastMessageAt).getTime() : NaN;
     const isCacheUpToDate = Boolean(
         hasCache &&
+        cachedMetadata &&
+        !isNeedsReconciliation &&
         cachedLastMessageAt &&
         currentLastMessageAt &&
         !isNaN(cachedTime) &&
@@ -2183,6 +2244,12 @@ const selectConversation = async (conv, shouldPushState = true) => {
     if (hasCache) {
         activeMessages.value = getCachedMessages(targetId) || [];
         hasMoreMessages.value = getCachedHasMore(targetId);
+        if (cachedMetadata) {
+            activeConversation.value = {
+                ...activeConversation.value,
+                ...cachedMetadata,
+            };
+        }
         isLoadingConversation.value = false;
         nextTick(() => {
             scrollToBottom(false);
@@ -2222,8 +2289,14 @@ const selectConversation = async (conv, shouldPushState = true) => {
     messageForm.body = loadDraft(targetId);
 
     // If cached messages exist and timestamps match, skip fetching messages list!
-    // Preserve mark-as-read behavior using the existing lightweight mark-read mechanism.
+    // Restore full conversation metadata and preserve mark-as-read behavior.
     if (isCacheUpToDate) {
+        if (cachedMetadata) {
+            activeConversation.value = {
+                ...activeConversation.value,
+                ...cachedMetadata,
+            };
+        }
         markCurrentConversationAsSeen(targetId);
         return;
     }
@@ -2303,10 +2376,11 @@ const selectConversation = async (conv, shouldPushState = true) => {
         isLoadingConversation.value = false;
         conversationLoadError.value = null;
 
+        const freshMetadata = response.data.conversation || activeConversation.value;
         const freshLastMessageAt = response.data.conversation?.last_message_at || currentLastMessageAt;
 
-        // Keep cache updated with newest 20 messages and fresh timestamp
-        setCachedMessages(targetId, reconciled, !!response.data.has_more, freshLastMessageAt);
+        // Keep cache updated with newest 20 messages, fresh timestamp, and metadata
+        setCachedMessages(targetId, reconciled, !!response.data.has_more, freshLastMessageAt, freshMetadata);
 
         nextTick(() => {
             if (isNearBottom()) {
@@ -2454,8 +2528,20 @@ const handleGlobalKeydown = (e) => {
     }
 };
 
-const handleOnline = () => { isOnline.value = true; isReconnecting.value = false; };
-const handleOffline = () => { isOnline.value = false; isReconnecting.value = true; };
+const handleOnline = () => {
+    isOnline.value = true;
+    if (isReconnecting.value) {
+        markAllCacheNeedsReconciliation();
+        if (activeConversation.value?.id) {
+            selectConversation(activeConversation.value, false);
+        }
+    }
+    isReconnecting.value = false;
+};
+const handleOffline = () => {
+    isOnline.value = false;
+    isReconnecting.value = true;
+};
 const handleWindowFocus = () => {
     if (activeConversation.value?.id && document.visibilityState === 'visible') {
         markCurrentConversationAsSeen(activeConversation.value.id);

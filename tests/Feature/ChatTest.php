@@ -2560,4 +2560,36 @@ class ChatTest extends TestCase
         $this->assertArrayHasKey('last_message_at_relative', $data['conversation']);
         $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $data['conversation']['last_message_at']);
     }
+
+    public function test_messages_endpoint_metadata_includes_deleted_latest_message_timestamp(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $conversation = Conversation::create([
+            'type' => 'direct',
+            'last_message_at' => now()->subDay(),
+        ]);
+
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        $deletedLatestMessage = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user2->id,
+            'body' => 'Deleted message',
+            'type' => 'text',
+            'is_deleted' => true,
+            'created_at' => now()->subMinute(),
+        ]);
+
+        $response = $this->actingAs($user1)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+            'include_meta' => 1,
+        ]));
+
+        $response->assertOk();
+        $data = $response->json();
+        $this->assertEquals($deletedLatestMessage->created_at->toISOString(), $data['conversation']['last_message_at']);
+    }
 }

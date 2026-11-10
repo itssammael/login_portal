@@ -642,7 +642,6 @@ class ChatController extends Controller
         if ($latestMessage === null && func_num_args() < 3) {
             $latestMessage = $conversation->messages()
                 ->visibleToUser($currentUser->id)
-                ->where('is_deleted', false)
                 ->latest('id')
                 ->first();
         }
