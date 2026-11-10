@@ -9,19 +9,22 @@ use App\Models\SecurityHealingLog;
 use App\Models\SecurityThreatLog;
 use App\Models\SecurityWhitelistedIp;
 use App\Models\SystemRule;
+use App\Services\Security\MalwareAndAnomalyScannerService;
 use App\Services\Security\SecuritySelfHealingService;
 use Carbon\Carbon;
 use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class SecurityController extends Controller
 {
     public function __construct(
-        protected SecuritySelfHealingService $selfHealingService
+        protected SecuritySelfHealingService $selfHealingService,
+        protected MalwareAndAnomalyScannerService $anomalyScannerService
     ) {}
 
     /**
@@ -164,7 +167,7 @@ class SecurityController extends Controller
             ->take(8)
             ->get();
 
-        // 10. Current Diagnostic Audit
+        // 10. Current Diagnostic Audit & Deep Anomaly Scan
         $diagnosticAudit = $this->selfHealingService->runAuditAndHeal(false);
 
         return Inertia::render('Admin/Security/Index', [
@@ -187,6 +190,7 @@ class SecurityController extends Controller
             'whitelistedIps' => $whitelistedIps,
             'recentHealingLogs' => $recentHealingLogs,
             'diagnosticFindings' => $diagnosticAudit['findings'],
+            'anomalyScan' => $diagnosticAudit['anomaly_scan'] ?? $this->anomalyScannerService->scanAndFix(false),
             'filters' => $request->only(['search', 'threat_type', 'severity', 'resolved']),
         ]);
     }
@@ -374,6 +378,88 @@ class SecurityController extends Controller
         $message = $actionCount > 0
             ? "Self-healing executed successfully: {$actionCount} security remediation(s) applied."
             : 'Security audit complete: System configuration is already optimal and hardened.';
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Run a deep non-destructive scan for malicious JS, iframes, redirects, SEO spam, and system anomalies.
+     */
+    public function scanAnomalies(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'category' => ['nullable', 'string', Rule::in(array_keys(MalwareAndAnomalyScannerService::SCAN_CATEGORIES))],
+        ]);
+
+        $scanResult = $this->anomalyScannerService->scanAndFix(false, $validated['category'] ?? null);
+        $totalIssues = $scanResult['total_issues'];
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'security_scan_anomalies',
+            'target_type' => 'system',
+            'target_id' => null,
+            'details' => [
+                'category' => $validated['category'] ?? 'all',
+                'total_issues_detected' => $totalIssues,
+            ],
+        ]);
+
+        $message = $totalIssues > 0
+            ? "Deep security scan complete: {$totalIssues} anomaly(ies) detected across system surfaces. Review and click 'Scan & Fix' to remediate."
+            : 'Deep security scan complete: 0 anomalies found. All JavaScript, iFrames, redirects, SEO content, and storage files are clean.';
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Scan and automatically fix malicious JS, iframes, redirects, blackhat SEO spam, and other anomalies.
+     */
+    public function scanAndFixAnomalies(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'category' => ['nullable', 'string', Rule::in(array_keys(MalwareAndAnomalyScannerService::SCAN_CATEGORIES))],
+            'finding_id' => ['nullable', 'string', 'max:64'],
+        ]);
+
+        $category = $validated['category'] ?? null;
+        $findingId = $validated['finding_id'] ?? null;
+
+        $result = $this->anomalyScannerService->scanAndFix(true, $category, $findingId);
+        $fixedCount = $result['fixed_count'];
+
+        // Also resolve matching unresolved threat logs when fixing a category or all
+        $threatTypesToResolve = $category
+            ? [$category]
+            : array_keys(MalwareAndAnomalyScannerService::SCAN_CATEGORIES);
+
+        $resolvedLogsCount = SecurityThreatLog::whereIn('threat_type', $threatTypesToResolve)
+            ->where('is_resolved', false)
+            ->update(['is_resolved' => true]);
+
+        AuditLog::create([
+            'admin_id' => $request->user()->id,
+            'action' => 'security_scan_and_fix_anomalies',
+            'target_type' => 'system',
+            'target_id' => null,
+            'details' => [
+                'category' => $category ?? 'all',
+                'finding_id' => $findingId,
+                'fixed_count' => $fixedCount,
+                'resolved_threat_logs' => $resolvedLogsCount,
+                'healed_actions' => $result['healed_actions'],
+            ],
+        ]);
+
+        if ($fixedCount > 0 || $resolvedLogsCount > 0) {
+            $categoryLabel = $category
+                ? (MalwareAndAnomalyScannerService::SCAN_CATEGORIES[$category]['title'] ?? $category)
+                : 'all security categories';
+
+            $message = "Scan & Fix completed for {$categoryLabel}: {$fixedCount} anomaly(ies) sanitized and {$resolvedLogsCount} threat incident(s) resolved.";
+        } else {
+            $message = 'Scan & Fix completed: System is clean — no malicious JS, iFrames, redirects, SEO spam, or file anomalies required remediation.';
+        }
 
         return back()->with('success', $message);
     }

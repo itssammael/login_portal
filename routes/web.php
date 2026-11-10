@@ -212,6 +212,8 @@ Route::middleware([
             Route::post('/whitelist-ip/{whitelistedIp}/toggle', [SecurityController::class, 'toggleWhitelistIp'])->name('toggle-whitelist-ip');
             Route::post('/resolve/{threatLog}', [SecurityController::class, 'resolveThreat'])->name('resolve');
             Route::post('/self-heal', [SecurityController::class, 'runAuditAndHeal'])->name('self-heal');
+            Route::post('/scan', [SecurityController::class, 'scanAnomalies'])->name('scan');
+            Route::post('/scan-and-fix', [SecurityController::class, 'scanAndFixAnomalies'])->name('scan-and-fix');
             Route::post('/toggle-auto-defense', [SecurityController::class, 'toggleAutoDefense'])->name('toggle-auto-defense');
             Route::post('/clear-old-logs', [SecurityController::class, 'clearOldLogs'])->name('clear-old-logs');
         });

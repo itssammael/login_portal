@@ -53,6 +53,16 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
+    anomalyScan: {
+        type: Object,
+        default: () => ({
+            total_issues: 0,
+            fixed_count: 0,
+            scanned_at: null,
+            categories: {},
+            findings: [],
+        }),
+    },
     filters: {
         type: Object,
         default: () => ({}),
@@ -214,6 +224,47 @@ const triggerSelfHealing = () => {
     });
 };
 
+const isScanningAnomalies = ref(false);
+const isFixingAnomalies = ref(false);
+const selectedScanCategory = ref('all');
+
+const scanCategoriesList = computed(() => {
+    const cats = props.anomalyScan?.categories || {};
+    return Object.values(cats);
+});
+
+const filteredScanFindings = computed(() => {
+    const list = props.anomalyScan?.findings || [];
+    if (selectedScanCategory.value === 'all') {
+        return list;
+    }
+    return list.filter((item) => item.category === selectedScanCategory.value);
+});
+
+const triggerAnomalyScan = (category = null) => {
+    isScanningAnomalies.value = true;
+    router.post(route('admin.security.scan'), category ? { category } : {}, {
+        preserveScroll: true,
+        onFinish: () => {
+            isScanningAnomalies.value = false;
+        },
+    });
+};
+
+const triggerScanAndFix = (category = null, findingId = null) => {
+    isFixingAnomalies.value = true;
+    const payload = {};
+    if (category) payload.category = category;
+    if (findingId) payload.finding_id = findingId;
+
+    router.post(route('admin.security.scan-and-fix'), payload, {
+        preserveScroll: true,
+        onFinish: () => {
+            isFixingAnomalies.value = false;
+        },
+    });
+};
+
 const toggleAutoDefense = () => {
     router.post(route('admin.security.toggle-auto-defense'), {}, {
         preserveScroll: true,
@@ -245,6 +296,11 @@ const formatThreatType = (type) => {
         'suspicious_auth': 'Suspicious Auth',
         'php_runtime_exploit_probe': 'PHP Runtime / PHP2Shell Exploit Probe',
         'php_cgi_argument_injection': 'PHP CGI / Windows Argument Injection',
+        'malicious_js': 'Malicious JavaScript Injection',
+        'malicious_iframe': 'Malicious iFrame / Frame Injection',
+        'suspicious_redirect': 'Suspicious / Open Redirection',
+        'blackhat_seo_spam': 'Blackhat SEO Spam & Link Injection',
+        'system_anomaly': 'System & File Integrity Anomaly',
     };
     return types[type] || type.replace('_', ' ');
 };
@@ -760,6 +816,186 @@ const formatThreatType = (type) => {
                     </div>
                 </div>
 
+                <!-- Deep Malware, Injection & Anomaly Scanner (Scan & Fix) -->
+                <div class="bg-[#fffef9] p-6 rounded-3xl border border-cream-400/80 shadow-xs">
+                    <div class="flex flex-col lg:flex-row lg:items-center justify-between pb-4 border-b border-cream-300 gap-4">
+                        <div class="flex items-start space-x-3">
+                            <div class="size-10 rounded-2xl bg-forest-900 text-emerald-300 flex items-center justify-center shrink-0 font-bold mt-0.5 shadow-xs">
+                                <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607zM10.5 7.5v6m3-3h-6" />
+                                </svg>
+                            </div>
+                            <div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <h3 class="text-sm font-bold text-gray-950 uppercase tracking-wider">Deep Malware, Injection & Anomaly Scanner (Scan & Fix)</h3>
+                                    <span
+                                        class="px-2.5 py-0.5 text-[10px] font-bold uppercase rounded-full border"
+                                        :class="(anomalyScan?.total_issues || 0) > 0
+                                            ? 'bg-red-100 text-red-800 border-red-300'
+                                            : 'bg-emerald-100 text-emerald-800 border-emerald-300'"
+                                    >
+                                        {{ (anomalyScan?.total_issues || 0) > 0 ? `${anomalyScan.total_issues} Active Issue(s)` : 'All Surfaces Clean' }}
+                                    </span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-0.5">
+                                    Deep inspection and automated sanitization for malicious JavaScript, hidden iFrames, suspicious redirections, blackhat SEO spam, and storage/system anomalies.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                                type="button"
+                                @click="triggerAnomalyScan()"
+                                :disabled="isScanningAnomalies || isFixingAnomalies"
+                                class="px-3.5 py-2 bg-cream-200 hover:bg-cream-300 text-forest-950 border border-cream-400 rounded-xl text-xs font-semibold shadow-2xs flex items-center space-x-1.5 transition disabled:opacity-50"
+                            >
+                                <svg class="size-4 text-forest-800" :class="{ 'animate-spin': isScanningAnomalies }" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                                </svg>
+                                <span>{{ isScanningAnomalies ? 'Scanning System...' : 'Scan System' }}</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                @click="triggerScanAndFix()"
+                                :disabled="isScanningAnomalies || isFixingAnomalies"
+                                class="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center space-x-1.5 transition disabled:opacity-50"
+                            >
+                                <svg class="size-4" :class="{ 'animate-spin': isFixingAnomalies }" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                                </svg>
+                                <span>{{ isFixingAnomalies ? 'Scanning & Fixing...' : 'Scan & Fix All' }}</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 5 Threat Scan Category Cards -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 my-5">
+                        <div
+                            v-for="cat in scanCategoriesList"
+                            :key="cat.key"
+                            @click="selectedScanCategory = selectedScanCategory === cat.key ? 'all' : cat.key"
+                            class="p-4 rounded-2xl border transition cursor-pointer flex flex-col justify-between"
+                            :class="[
+                                cat.issues_count > 0
+                                    ? 'bg-red-50/70 border-red-300 hover:border-red-400'
+                                    : 'bg-cream-100/70 border-cream-300 hover:border-forest-600/50',
+                                selectedScanCategory === cat.key ? 'ring-2 ring-forest-800' : ''
+                            ]"
+                        >
+                            <div>
+                                <div class="flex items-center justify-between gap-2 mb-1.5">
+                                    <span class="text-xs font-extrabold text-gray-900 leading-snug">{{ cat.title }}</span>
+                                    <span
+                                        class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase shrink-0"
+                                        :class="cat.issues_count > 0 ? 'bg-red-200 text-red-900' : 'bg-emerald-200 text-emerald-900'"
+                                    >
+                                        {{ cat.issues_count > 0 ? `${cat.issues_count} found` : 'Clean' }}
+                                    </span>
+                                </div>
+                                <p class="text-[11px] text-gray-600 leading-relaxed line-clamp-3">
+                                    {{ cat.description }}
+                                </p>
+                            </div>
+
+                            <div class="mt-3 pt-2.5 border-t border-cream-300/80 flex items-center justify-between gap-2">
+                                <span class="text-[10px] font-bold uppercase tracking-wider" :class="cat.severity === 'critical' ? 'text-red-700' : 'text-amber-800'">
+                                    {{ cat.severity }} risk
+                                </span>
+                                <button
+                                    type="button"
+                                    @click.stop="triggerScanAndFix(cat.key)"
+                                    :disabled="isFixingAnomalies"
+                                    class="px-2.5 py-1 rounded-lg text-[11px] font-bold transition"
+                                    :class="cat.issues_count > 0
+                                        ? 'bg-red-600 hover:bg-red-700 text-white shadow-2xs'
+                                        : 'bg-forest-900/10 hover:bg-forest-900 hover:text-white text-forest-900'"
+                                >
+                                    {{ cat.issues_count > 0 ? 'Fix Now' : 'Scan & Fix' }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Detected Anomaly Findings Table -->
+                    <div v-if="filteredScanFindings.length > 0" class="mt-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h4 class="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                                Detected Anomalies ({{ filteredScanFindings.length }})
+                            </h4>
+                            <button
+                                v-if="selectedScanCategory !== 'all'"
+                                type="button"
+                                @click="selectedScanCategory = 'all'"
+                                class="text-xs font-semibold text-forest-800 hover:underline"
+                            >
+                                Show All Categories
+                            </button>
+                        </div>
+
+                        <div class="overflow-x-auto rounded-2xl border border-red-200">
+                            <table class="min-w-full divide-y divide-red-200 text-xs">
+                                <thead class="bg-red-50 text-red-950 uppercase tracking-wider font-bold text-[10px]">
+                                    <tr>
+                                        <th class="px-4 py-2.5 text-left">Category</th>
+                                        <th class="px-4 py-2.5 text-left">Target Surface</th>
+                                        <th class="px-4 py-2.5 text-left">Diagnosis & Forensic Snippet</th>
+                                        <th class="px-4 py-2.5 text-left">Severity</th>
+                                        <th class="px-4 py-2.5 text-right">Remediation</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-red-100 bg-white">
+                                    <tr v-for="item in filteredScanFindings" :key="item.id" class="hover:bg-red-50/30 transition">
+                                        <td class="px-4 py-3 whitespace-nowrap font-bold text-gray-900">
+                                            {{ item.category_title }}
+                                        </td>
+                                        <td class="px-4 py-3 whitespace-nowrap">
+                                            <div class="font-bold text-gray-900">{{ item.target }}</div>
+                                            <div class="text-[10px] font-mono text-gray-500">{{ item.location }}</div>
+                                        </td>
+                                        <td class="px-4 py-3 max-w-md">
+                                            <div class="text-gray-800 font-medium">{{ item.description }}</div>
+                                            <code class="mt-1 block px-2 py-1 bg-gray-950 text-amber-300 rounded text-[10px] font-mono truncate" :title="item.snippet">
+                                                {{ item.snippet }}
+                                            </code>
+                                        </td>
+                                        <td class="px-4 py-3 whitespace-nowrap">
+                                            <span class="px-2 py-0.5 rounded-md font-bold uppercase text-[10px] border" :class="getSeverityBadgeClass(item.severity)">
+                                                {{ item.severity }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-3 whitespace-nowrap text-right">
+                                            <button
+                                                type="button"
+                                                @click="triggerScanAndFix(item.category, item.id)"
+                                                :disabled="isFixingAnomalies"
+                                                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold shadow-2xs transition"
+                                            >
+                                                Scan & Fix
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div v-else class="py-4 px-4 rounded-2xl bg-emerald-50/60 border border-emerald-200 flex items-center justify-between text-xs text-emerald-900">
+                        <div class="flex items-center space-x-2">
+                            <svg class="size-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span class="font-semibold">
+                                Zero active anomalies detected across Malicious JS, Malicious iFrames, Suspicious Redirections, Blackhat SEO Spam, and Public Storage files.
+                            </span>
+                        </div>
+                        <span v-if="anomalyScan?.scanned_at" class="text-[11px] text-emerald-700 font-mono shrink-0 ml-2">
+                            Scanned: {{ new Date(anomalyScan.scanned_at).toLocaleTimeString() }}
+                        </span>
+                    </div>
+                </div>
+
                 <!-- Self-Healing Control Center & System Health Audit -->
                 <div class="bg-[#fffef9] p-6 rounded-3xl border border-cream-400/80 shadow-xs">
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-cream-300 gap-3">
@@ -857,8 +1093,15 @@ const formatThreatType = (type) => {
                                 <option value="ddos_rate_limit">DDoS / Rate Limit</option>
                                 <option value="sqli_attempt">SQL Injection</option>
                                 <option value="xss_attempt">XSS Attacks</option>
+                                <option value="malicious_js">Malicious JavaScript</option>
+                                <option value="malicious_iframe">Malicious iFrames</option>
+                                <option value="suspicious_redirect">Suspicious Redirections</option>
+                                <option value="blackhat_seo_spam">Blackhat SEO Spam</option>
+                                <option value="system_anomaly">System / File Anomalies</option>
                                 <option value="path_traversal">Path Traversal</option>
                                 <option value="malicious_scanner">Scanners / Bots</option>
+                                <option value="php_runtime_exploit_probe">PHP Runtime Exploit Probes</option>
+                                <option value="php_cgi_argument_injection">PHP CGI Injection</option>
                             </select>
 
                             <select

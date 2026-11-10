@@ -122,9 +122,101 @@ class ThreatDetectorService
             ];
         }
 
-        // 4. Cross-Site Scripting (XSS) Probe Detection
-        $xssPattern = '/(<script.*?>.*?<\/script>)|(javascript:)|(onerror\s*=)|(onload\s*=)|(<iframe.*?>)/i';
-        if (preg_match($xssPattern, $queryString)) {
+        // 4. Malicious iFrame / Embedded Object Injection
+        $decodedQuery = rawurldecode($queryString);
+        $inputPayload = ! $request->is('admin/*')
+            ? strtolower((string) json_encode($request->except(['password', 'password_confirmation', '_token', 'PHP_SESSION_UPLOAD_PROGRESS']), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))
+            : '';
+        $combinedInspectSurface = $decodedQuery.' '.$inputPayload;
+
+        if (preg_match('/<(?:iframe|frame|frameset|object|embed|applet)\b[^>]*>/i', $combinedInspectSurface)) {
+            return [
+                'detected' => true,
+                'type' => 'malicious_iframe',
+                'severity' => 'high',
+                'description' => 'Malicious iFrame or embedded object injection payload intercepted',
+            ];
+        }
+
+        // 5. System Anomaly / Webshell Execution Probe (check before generic eval JS check)
+        if (preg_match('/\b(?:eval\s*\(\s*base64_decode|eval\s*\(\s*gzinflate|shell_exec\s*\(|passthru\s*\(|proc_open\s*\(|popen\s*\()/i', $combinedInspectSurface)) {
+            return [
+                'detected' => true,
+                'type' => 'system_anomaly',
+                'severity' => 'critical',
+                'description' => 'Webshell or remote code execution anomaly signature intercepted',
+            ];
+        }
+
+        // 6. Obfuscated Malicious JavaScript Payload
+        if (preg_match('/\b(?:eval\s*\(|atob\s*\(|string\.fromcharcode\s*\(|document\.cookie|document\.write\s*\()/i', $combinedInspectSurface)) {
+            return [
+                'detected' => true,
+                'type' => 'malicious_js',
+                'severity' => 'critical',
+                'description' => 'Obfuscated malicious JavaScript execution payload intercepted',
+            ];
+        }
+
+        // 7. Suspicious Redirection / Open Redirect & Meta-Refresh Hijack
+        if (preg_match('/(<meta\b[^>]*http-equiv\s*=\s*["\']?refresh["\']?[^>]*>|\b(?:window\.location|document\.location|location\.(?:href|replace|assign))\s*(?:=|\())/i', $combinedInspectSurface)) {
+            return [
+                'detected' => true,
+                'type' => 'suspicious_redirect',
+                'severity' => 'high',
+                'description' => 'Client-side redirect injection (<meta refresh> or location hijack) intercepted',
+            ];
+        }
+
+        $redirectParamNames = ['redirect', 'redirect_to', 'return_to', 'next', 'dest', 'continue', 'goto', 'return_url'];
+        foreach ($redirectParamNames as $paramName) {
+            $redirectVal = $request->input($paramName) ?? $request->query($paramName);
+            if (is_string($redirectVal) && $redirectVal !== '') {
+                $trimmedRedirect = trim($redirectVal);
+                if (
+                    preg_match('/^(?:javascript|vbscript|data):/i', $trimmedRedirect) ||
+                    str_starts_with($trimmedRedirect, '//')
+                ) {
+                    return [
+                        'detected' => true,
+                        'type' => 'suspicious_redirect',
+                        'severity' => 'high',
+                        'description' => "Suspicious open redirection scheme in '{$paramName}' parameter",
+                    ];
+                }
+
+                if (preg_match('/^https?:\/\//i', $trimmedRedirect)) {
+                    $targetHost = strtolower((string) parse_url($trimmedRedirect, PHP_URL_HOST));
+                    $currentHost = strtolower((string) $request->getHost());
+                    $trustedHosts = array_filter([$currentHost, 'localhost', '127.0.0.1']);
+                    if ($targetHost !== '' && ! in_array($targetHost, $trustedHosts, true)) {
+                        return [
+                            'detected' => true,
+                            'type' => 'suspicious_redirect',
+                            'severity' => 'high',
+                            'description' => "Open redirect attempt to untrusted external host '{$targetHost}' via '{$paramName}'",
+                        ];
+                    }
+                }
+            }
+        }
+
+        // 8. Blackhat SEO Spam & Cloaked Link Injection
+        if (
+            preg_match('/<(?:div|span|p|a|section|ul)\b[^>]*style\s*=\s*["\'][^"\']*(?:display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0|left\s*:\s*-\d{3,}px)[^"\']*["\'][^>]*>[\s\S]*?<a\b/i', $combinedInspectSurface) ||
+            preg_match('/\b(?:viagra|cialis|levitra|slot\s*gacor|judi\s*online|online\s*casino|casino\s*slots|poker\s*bonus|buy\s*cheap\s*pharma|payday\s*loans\s*online)\b/i', $combinedInspectSurface)
+        ) {
+            return [
+                'detected' => true,
+                'type' => 'blackhat_seo_spam',
+                'severity' => 'high',
+                'description' => 'Blackhat SEO spam or cloaked link injection payload intercepted',
+            ];
+        }
+
+        // 9. Cross-Site Scripting (XSS) Probe Detection
+        $xssPattern = '/(<script.*?>.*?<\/script>)|(javascript:)|(onerror\s*=)|(onload\s*=)/i';
+        if (preg_match($xssPattern, $decodedQuery)) {
             return [
                 'detected' => true,
                 'type' => 'xss_attempt',

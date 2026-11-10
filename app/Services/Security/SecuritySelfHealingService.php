@@ -546,6 +546,18 @@ class SecuritySelfHealingService
             $healedActions[] = $phpHealedAction;
         }
 
+        // 9. Deep Malware, Injection, Redirection, Blackhat SEO & Anomaly Scan & Fix
+        /** @var MalwareAndAnomalyScannerService $anomalyScanner */
+        $anomalyScanner = app(MalwareAndAnomalyScannerService::class);
+        $anomalyScan = $anomalyScanner->scanAndFix($applyFixes);
+        $score -= $anomalyScan['score_penalty'];
+        foreach ($anomalyScan['diagnostic_findings'] as $scanFinding) {
+            $findings[] = $scanFinding;
+        }
+        foreach ($anomalyScan['healed_actions'] as $scanHealedAction) {
+            $healedActions[] = $scanHealedAction;
+        }
+
         // Ensure score stays within 0-100 range
         $score = max(0, min(100, $score));
 
@@ -554,6 +566,7 @@ class SecuritySelfHealingService
             'posture' => $score >= 90 ? 'Hardened' : ($score >= 70 ? 'Moderate' : 'Action Required'),
             'findings' => $findings,
             'healed_actions' => $healedActions,
+            'anomaly_scan' => $anomalyScan,
             'audited_at' => now()->toIso8601String(),
         ];
     }

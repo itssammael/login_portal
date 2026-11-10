@@ -23,6 +23,11 @@ class SecurityThreatLog extends Model
         'suspicious_auth' => 'Suspicious Auth Activity',
         'php_runtime_exploit_probe' => 'PHP Runtime / PHP2Shell Exploit Probe',
         'php_cgi_argument_injection' => 'PHP CGI / Windows Argument Injection',
+        'malicious_js' => 'Malicious JavaScript Injection',
+        'malicious_iframe' => 'Malicious iFrame / Frame Injection',
+        'suspicious_redirect' => 'Suspicious / Open Redirection',
+        'blackhat_seo_spam' => 'Blackhat SEO Spam & Link Injection',
+        'system_anomaly' => 'System & File Integrity Anomaly',
     ];
 
     /**

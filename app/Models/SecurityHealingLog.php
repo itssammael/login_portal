@@ -21,6 +21,11 @@ class SecurityHealingLog extends Model
         'rate_limit_enforce' => 'Dynamic Rate Limiter Applied',
         'php_runtime_hardening' => 'PHP Runtime & CVE Mitigation',
         'php_ini_hardening' => 'PHP Server Configuration Hardened',
+        'sanitize_malicious_js' => 'Malicious JavaScript Sanitized',
+        'remove_malicious_iframe' => 'Malicious iFrame Stripped',
+        'neutralize_redirect' => 'Suspicious Redirection Neutralized',
+        'clean_seo_spam' => 'Blackhat SEO Spam Purged',
+        'remediate_anomaly' => 'System / Storage Anomaly Remediated',
     ];
 
     /**
