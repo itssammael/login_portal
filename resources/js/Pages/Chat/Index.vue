@@ -3392,7 +3392,6 @@ onBeforeUnmount(() => {
                                                                 <span>📋 Copy text</span>
                                                             </button>
                                                             <button
-                                                                v-if="activeConversation?.type === 'group'"
                                                                 type="button"
                                                                 @click="openSeenByDetails(message)"
                                                                 class="w-full text-left px-3 py-1 hover:bg-cream-300 text-gray-800 flex items-center space-x-1.5"
@@ -3528,7 +3527,7 @@ onBeforeUnmount(() => {
                                                         <button
                                                             type="button"
                                                             @click.stop="toggleMessageMenu(message, $event)"
-                                                            class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                                                            class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition"
                                                             :class="activeMessageMenuId === message.id ? 'opacity-100 bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
                                                         >
