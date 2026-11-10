@@ -45,6 +45,99 @@ const conversationLoadError = ref(null);
 let currentFetchConversationId = null;
 let currentFetchAbortController = null;
 
+// In-memory message cache (session-only, unpersisted, keyed by `${userId}:${conversationId}`)
+const messageCache = new Map();
+const MAX_CACHED_MESSAGES = 20;
+
+const getCacheKey = (convId) => {
+    const userId = currentUser.value?.id;
+    return (userId && convId) ? `${userId}:${convId}` : null;
+};
+
+const hasCachedConversation = (convId) => {
+    const key = getCacheKey(convId);
+    return key ? messageCache.has(key) : false;
+};
+
+const getCachedMessages = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return null;
+    const entry = messageCache.get(key);
+    const msgs = Array.isArray(entry) ? entry : entry?.messages;
+    return (msgs || []).map(m => ({ ...m }));
+};
+
+const getCachedHasMore = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return false;
+    const entry = messageCache.get(key);
+    return !!entry?.hasMore;
+};
+
+const setCachedMessages = (convId, messages, hasMore = false) => {
+    const key = getCacheKey(convId);
+    if (!key || !Array.isArray(messages)) return;
+    const newest = messages.slice(-MAX_CACHED_MESSAGES).map(m => ({ ...m }));
+    messageCache.set(key, { messages: newest, hasMore: !!hasMore });
+};
+
+const addMessageToCache = (convId, message) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return;
+    const entry = messageCache.get(key);
+    const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    if (!currentList.some(m => m.id === message.id)) {
+        const updated = [...currentList, { ...message }].slice(-MAX_CACHED_MESSAGES);
+        messageCache.set(key, { messages: updated, hasMore: !!entry?.hasMore });
+    }
+};
+
+const updateMessageInCache = (convId, messageId, patchFn) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return;
+    const entry = messageCache.get(key);
+    const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    const target = currentList.find(m => m.id === messageId);
+    if (target) {
+        patchFn(target);
+    }
+};
+
+const markReadInCache = (convId, readAt) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return;
+    const entry = messageCache.get(key);
+    const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    currentList.forEach(m => {
+        if (m.is_sender) {
+            const msgTime = new Date(m.raw_created_at || m.created_at).getTime();
+            if (!isNaN(msgTime) && msgTime <= readAt) {
+                m.is_seen = true;
+                m.status = 2;
+            }
+        }
+    });
+};
+
+const deleteCachedConversation = (convId) => {
+    const key = getCacheKey(convId);
+    if (key) {
+        messageCache.delete(key);
+    }
+};
+
+// Seed initial active conversation into in-memory cache
+if (props.activeConversation?.id) {
+    setCachedMessages(props.activeConversation.id, props.activeConversation.messages || [], !!props.activeConversation.has_more);
+}
+
+// Clear cache if authenticated user ID changes
+watch(() => currentUser.value?.id, (newUserId, oldUserId) => {
+    if (newUserId !== oldUserId) {
+        messageCache.clear();
+    }
+});
+
 watch(() => props.activeConversation, (active) => {
     if (active?.id) {
         if (!isLoadingConversation.value || currentFetchConversationId === active.id) {
@@ -53,6 +146,8 @@ watch(() => props.activeConversation, (active) => {
             hasMoreMessages.value = !!active.has_more;
             isLoadingConversation.value = false;
             conversationLoadError.value = null;
+
+            setCachedMessages(active.id, active.messages || [], !!active.has_more);
 
             const currentConv = conversationsList.value.find(c => c.id === active.id);
             if (currentConv) {
@@ -103,7 +198,18 @@ const selectedFilePreview = ref(null);
 const fileValidationError = ref('');
 const showEmojiPicker = ref(false);
 const activeMessageMenuId = ref(null);
+const messageMenuPlacement = ref('top');
+const messageMenuHorizontalPlacement = ref('left');
+const messageMenuMaxHeight = ref(null);
+const messageMenuShiftX = ref(0);
 const activeConversationMenuId = ref(null);
+
+watch(activeMessageMenuId, (newId) => {
+    if (newId === null) {
+        messageMenuMaxHeight.value = null;
+        messageMenuShiftX.value = 0;
+    }
+});
 
 const isLoadingOlder = ref(false);
 const pendingMessages = ref([]);
@@ -241,6 +347,10 @@ const isNearBottom = () => {
 };
 
 const onMessagesScroll = () => {
+    if (activeMessageMenuId.value !== null) {
+        activeMessageMenuId.value = null;
+        messageMenuMaxHeight.value = null;
+    }
     if (isNearBottom()) {
         hasNewMessagesBelow.value = false;
         newIncomingCount.value = 0;
@@ -300,6 +410,8 @@ const loadOlderMessages = async () => {
         if (response.data && Array.isArray(response.data.messages)) {
             activeMessages.value = [...response.data.messages, ...activeMessages.value];
             hasMoreMessages.value = !!response.data.has_more;
+
+            setCachedMessages(activeConversation.value.id, activeMessages.value, !!response.data.has_more);
 
             await nextTick();
             if (container) {
@@ -867,7 +979,7 @@ const canEditMessage = (message) => {
         isWithin15Minutes(message.raw_created_at || message.created_at);
 };
 
-const toggleMessageMenu = (message) => {
+const toggleMessageMenu = (message, event = null) => {
     if (!message || message.is_deleted || message.is_deleted_for_me || message.status === 'sending' || message.status === 'failed') {
         return;
     }
@@ -875,12 +987,153 @@ const toggleMessageMenu = (message) => {
     if (selection && selection.toString().trim().length > 0) {
         return;
     }
-    activeMessageMenuId.value = activeMessageMenuId.value === message.id ? null : message.id;
+    if (activeMessageMenuId.value === message.id) {
+        activeMessageMenuId.value = null;
+        messageMenuMaxHeight.value = null;
+        messageMenuShiftX.value = 0;
+        return;
+    }
+
+    const MENU_ESTIMATED_HEIGHT = 220;
+    const MENU_WIDTH = 176;
+    const HORIZONTAL_PADDING = 8;
+
+    // Locate the toggle button or message row element
+    const messageEl = (event?.currentTarget?.closest ? event.currentTarget.closest(`#message-${message.id}`) : null)
+        || document.getElementById(`message-${message.id}`);
+    const optionButton = (event?.currentTarget?.tagName === 'BUTTON' ? event.currentTarget : null)
+        || messageEl?.querySelector('button[aria-label="Message options"]')
+        || messageEl?.querySelector('[data-message-menu] button');
+    const anchorEl = optionButton || messageEl?.querySelector('[data-message-menu]') || event?.currentTarget;
+
+    const containerRect = messagesContainer.value
+        ? messagesContainer.value.getBoundingClientRect()
+        : {
+            top: 0,
+            left: 0,
+            right: window.innerWidth || 360,
+            bottom: window.innerHeight || 600,
+            width: window.innerWidth || 360,
+            height: window.innerHeight || 600,
+        };
+
+    const minLeft = Math.max(0, containerRect.left) + HORIZONTAL_PADDING;
+    const maxRight = Math.min(window.innerWidth || containerRect.right, containerRect.right) - HORIZONTAL_PADDING;
+    const minTop = Math.max(0, containerRect.top);
+    const maxBottom = Math.min(window.innerHeight || containerRect.bottom, containerRect.bottom);
+
+    if (anchorEl) {
+        const targetRect = anchorEl.getBoundingClientRect();
+        const spaceAbove = targetRect.top - minTop;
+        const spaceBelow = maxBottom - targetRect.bottom;
+
+        if (spaceBelow >= MENU_ESTIMATED_HEIGHT && spaceAbove < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'bottom';
+        } else if (spaceAbove >= MENU_ESTIMATED_HEIGHT && spaceBelow < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'top';
+        } else {
+            messageMenuPlacement.value = spaceBelow >= spaceAbove ? 'bottom' : 'top';
+        }
+
+        const chosenSpace = messageMenuPlacement.value === 'bottom' ? spaceBelow : spaceAbove;
+        if (chosenSpace < MENU_ESTIMATED_HEIGHT) {
+            const positioningOffset = messageMenuPlacement.value === 'bottom'
+                ? Math.max(0, 32 - targetRect.height)
+                : Math.max(0, 28 - targetRect.height);
+            const padding = 8;
+            const availableHeight = Math.max(0, Math.floor(chosenSpace - positioningOffset - padding));
+            messageMenuMaxHeight.value = `${availableHeight}px`;
+        } else {
+            messageMenuMaxHeight.value = null;
+        }
+
+        // Horizontal placement: compare available room on right vs left
+        const spaceToLeft = targetRect.right - minLeft;
+        const spaceToRight = maxRight - targetRect.left;
+
+        let horizontalPlacement = 'left';
+        if (spaceToRight >= MENU_WIDTH && spaceToLeft < MENU_WIDTH) {
+            horizontalPlacement = 'left';
+        } else if (spaceToLeft >= MENU_WIDTH && spaceToRight < MENU_WIDTH) {
+            horizontalPlacement = 'right';
+        } else {
+            // Pick side with greater space
+            horizontalPlacement = spaceToRight >= spaceToLeft ? 'left' : 'right';
+        }
+        messageMenuHorizontalPlacement.value = horizontalPlacement;
+
+        // Shift calculation to guarantee menu stays within bounds
+        let shiftX = 0;
+        if (horizontalPlacement === 'left') {
+            const menuRight = targetRect.left + MENU_WIDTH;
+            if (menuRight > maxRight) {
+                shiftX = maxRight - menuRight;
+            }
+            if (targetRect.left + shiftX < minLeft) {
+                shiftX = minLeft - targetRect.left;
+            }
+        } else {
+            const menuLeft = targetRect.right - MENU_WIDTH;
+            if (menuLeft < minLeft) {
+                shiftX = minLeft - menuLeft;
+            }
+            if (targetRect.right + shiftX > maxRight) {
+                shiftX = maxRight - targetRect.right;
+            }
+        }
+        messageMenuShiftX.value = Math.round(shiftX);
+    } else if (event && event.clientY) {
+        const clientX = event.clientX || 0;
+        const clientY = event.clientY || 0;
+        const spaceAbove = clientY - minTop;
+        const spaceBelow = maxBottom - clientY;
+
+        if (spaceBelow >= MENU_ESTIMATED_HEIGHT && spaceAbove < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'bottom';
+        } else if (spaceAbove >= MENU_ESTIMATED_HEIGHT && spaceBelow < MENU_ESTIMATED_HEIGHT) {
+            messageMenuPlacement.value = 'top';
+        } else {
+            messageMenuPlacement.value = spaceBelow >= spaceAbove ? 'bottom' : 'top';
+        }
+
+        const chosenSpace = messageMenuPlacement.value === 'bottom' ? spaceBelow : spaceAbove;
+        if (chosenSpace < MENU_ESTIMATED_HEIGHT) {
+            const availableHeight = Math.max(0, Math.floor(chosenSpace - 12));
+            messageMenuMaxHeight.value = `${availableHeight}px`;
+        } else {
+            messageMenuMaxHeight.value = null;
+        }
+
+        const spaceToLeft = clientX - minLeft;
+        const spaceToRight = maxRight - clientX;
+        const horizontalPlacement = spaceToRight >= spaceToLeft ? 'left' : 'right';
+        messageMenuHorizontalPlacement.value = horizontalPlacement;
+
+        let shiftX = 0;
+        if (horizontalPlacement === 'left') {
+            const menuRight = clientX + MENU_WIDTH;
+            if (menuRight > maxRight) shiftX = maxRight - menuRight;
+            if (clientX + shiftX < minLeft) shiftX = minLeft - clientX;
+        } else {
+            const menuLeft = clientX - MENU_WIDTH;
+            if (menuLeft < minLeft) shiftX = minLeft - menuLeft;
+            if (clientX + shiftX > maxRight) shiftX = maxRight - clientX;
+        }
+        messageMenuShiftX.value = Math.round(shiftX);
+    } else {
+        messageMenuPlacement.value = 'top';
+        messageMenuHorizontalPlacement.value = message.is_sender ? 'left' : 'right';
+        messageMenuMaxHeight.value = null;
+        messageMenuShiftX.value = 0;
+    }
+
+    activeMessageMenuId.value = message.id;
 };
 
 const startEditMessage = (message) => {
     cancelReply();
     activeMessageMenuId.value = null;
+    messageMenuMaxHeight.value = null;
     editingMessage.value = {
         id: message.id,
         originalBody: message.body,
@@ -1151,8 +1404,19 @@ const confirmDeleteMessage = () => {
         closeDeleteModal();
         return;
     }
-    router.delete(route('chat.delete-message', deletingMessageId.value), {
+    const targetMsgId = deletingMessageId.value;
+    router.delete(route('chat.delete-message', targetMsgId), {
         preserveScroll: true,
+        onSuccess: () => {
+            if (activeConversation.value?.id) {
+                updateMessageInCache(activeConversation.value.id, targetMsgId, (m) => {
+                    m.is_deleted = true;
+                    m.body = 'This message was deleted';
+                    m.attachment_url = null;
+                    m.attachment_name = null;
+                });
+            }
+        },
         onFinish: () => closeDeleteModal(),
     });
 };
@@ -1198,6 +1462,21 @@ const confirmDeleteForMe = () => {
                 targetMsg.mentioned_user_ids = [];
                 targetMsg.is_edited = false;
                 targetMsg.edited_at = null;
+            }
+            if (activeConversation.value?.id) {
+                updateMessageInCache(activeConversation.value.id, msgId, (m) => {
+                    m.body = 'User has deleted a message';
+                    m.is_deleted_for_me = true;
+                    m.attachment_url = null;
+                    m.attachment_name = null;
+                    m.attachment_type = null;
+                    m.reply_to = null;
+                    m.reply_to_id = null;
+                    m.reactions = [];
+                    m.mentioned_user_ids = [];
+                    m.is_edited = false;
+                    m.edited_at = null;
+                });
             }
             const conv = conversationsList.value.find(c => c.id === activeConversation.value?.id);
             if (conv && conv.latest_message && conv.latest_message.id === msgId) {
@@ -1552,6 +1831,11 @@ const handleUserChannelEvent = (e) => {
             }
             reorderConversation(newConv);
         }
+
+        if (activeConversation.value?.id !== e.conversation_id && e.data?.message && hasCachedConversation(e.conversation_id)) {
+            const isMe = (e.data.message.sender_id === currentUser.value.id);
+            addMessageToCache(e.conversation_id, { ...e.data.message, is_sender: isMe });
+        }
     } else if (e.action === 'group_created') {
         if (e.data?.conversation && !conversationsList.value.some(c => c.id === e.data.conversation.id)) {
             reorderConversation(e.data.conversation);
@@ -1560,6 +1844,16 @@ const handleUserChannelEvent = (e) => {
         const conv = conversationsList.value.find(c => c.id === e.conversation_id);
         if (conv && conv.latest_message?.id === e.data?.message_id && !conv.latest_message.is_deleted_for_me) {
             conv.latest_message.body = e.data?.body ?? conv.latest_message.body;
+        }
+        if (hasCachedConversation(e.conversation_id)) {
+            updateMessageInCache(e.conversation_id, e.data?.message_id, (m) => {
+                m.body = e.data?.body ?? m.body;
+                m.is_edited = true;
+                m.edited_at = e.data?.edited_at_relative ?? 'just now';
+                if (e.data?.mentioned_user_ids) {
+                    m.mentioned_user_ids = e.data.mentioned_user_ids;
+                }
+            });
         }
         if (conv && activeConversation.value?.id !== e.conversation_id) {
             const mentionedIds = e.data?.mentioned_user_ids || [];
@@ -1582,6 +1876,14 @@ const handleUserChannelEvent = (e) => {
             conv.latest_message.body = 'This message was deleted';
             conv.latest_message.is_deleted = true;
         }
+        if (hasCachedConversation(e.conversation_id)) {
+            updateMessageInCache(e.conversation_id, e.data?.message_id, (m) => {
+                m.is_deleted = true;
+                m.body = 'This message was deleted';
+                m.attachment_url = null;
+                m.attachment_name = null;
+            });
+        }
     } else if (e.action === 'group_renamed') {
         const conv = conversationsList.value.find(c => c.id === e.conversation_id);
         if (conv && e.data?.title) {
@@ -1593,6 +1895,7 @@ const handleUserChannelEvent = (e) => {
             reorderConversation(e.data.conversation);
         }
     } else if (e.action === 'group_deleted') {
+        deleteCachedConversation(e.conversation_id);
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
         if (activeConversation.value?.id === e.conversation_id) {
             showToast('This group chat was deleted');
@@ -1631,6 +1934,8 @@ const handleConversationChannelEvent = (e) => {
                 is_sender: isMe,
             });
 
+            addMessageToCache(e.conversation_id, { ...msg, is_sender: isMe });
+
             if (isMe || isNearBottom()) {
                 scrollToBottom(true);
             } else {
@@ -1653,6 +1958,14 @@ const handleConversationChannelEvent = (e) => {
                 targetMsg.mentioned_user_ids = e.data.mentioned_user_ids;
             }
         }
+        updateMessageInCache(e.conversation_id, messageId, (m) => {
+            m.body = e.data?.body ?? m.body;
+            m.is_edited = true;
+            m.edited_at = e.data?.edited_at_relative ?? 'just now';
+            if (e.data?.mentioned_user_ids) {
+                m.mentioned_user_ids = e.data.mentioned_user_ids;
+            }
+        });
     } else if (e.action === 'typing') {
         const userId = e.data?.user_id;
         const userName = e.data?.user_name;
@@ -1679,17 +1992,22 @@ const handleConversationChannelEvent = (e) => {
                 }
             }
         });
+        markReadInCache(e.conversation_id, readAt);
     } else if (e.action === 'reaction_toggled') {
         const messageId = e.data?.message_id;
         const reactions = e.data?.reactions;
         if (messageId && Array.isArray(reactions)) {
+            const formattedReactions = reactions.map(r => ({
+                ...r,
+                reacted_by_me: r.user_ids ? r.user_ids.includes(currentUser.value.id) : false,
+            }));
             const targetMsg = activeMessages.value.find(m => m.id === messageId);
             if (targetMsg && !targetMsg.is_deleted_for_me) {
-                targetMsg.reactions = reactions.map(r => ({
-                    ...r,
-                    reacted_by_me: r.user_ids ? r.user_ids.includes(currentUser.value.id) : false,
-                }));
+                targetMsg.reactions = formattedReactions;
             }
+            updateMessageInCache(e.conversation_id, messageId, (m) => {
+                m.reactions = formattedReactions;
+            });
         }
     } else if (e.action === 'deleted') {
         const messageId = e.data?.message_id;
@@ -1701,6 +2019,12 @@ const handleConversationChannelEvent = (e) => {
                 targetMsg.attachment_url = null;
                 targetMsg.attachment_name = null;
             }
+            updateMessageInCache(e.conversation_id, messageId, (m) => {
+                m.is_deleted = true;
+                m.body = 'This message was deleted';
+                m.attachment_url = null;
+                m.attachment_name = null;
+            });
         }
     } else if (e.action === 'group_renamed') {
         if (activeConversation.value && activeConversation.value.id === e.conversation_id && e.data?.title) {
@@ -1745,6 +2069,7 @@ const handleConversationChannelEvent = (e) => {
             }
         }
     } else if (e.action === 'group_deleted') {
+        deleteCachedConversation(e.conversation_id);
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
         if (activeConversation.value && activeConversation.value.id === e.conversation_id) {
             showToast('This group chat was deleted');
@@ -1777,10 +2102,22 @@ const selectConversation = async (conv, shouldPushState = true) => {
         shared_attachments: conv.shared_attachments || [],
     };
 
-    // 2. Immediately clear previous conversation messages and load error
-    activeMessages.value = [];
-    hasMoreMessages.value = false;
-    isLoadingConversation.value = true;
+    // 2. Check if conversation has cached messages in memory
+    if (hasCachedConversation(targetId)) {
+        activeMessages.value = getCachedMessages(targetId) || [];
+        hasMoreMessages.value = getCachedHasMore(targetId);
+        isLoadingConversation.value = false;
+        nextTick(() => {
+            scrollToBottom(false);
+            resizeComposer();
+            focusComposer();
+        });
+    } else {
+        // Clear previous conversation messages and show loading skeleton
+        activeMessages.value = [];
+        hasMoreMessages.value = false;
+        isLoadingConversation.value = true;
+    }
     conversationLoadError.value = null;
 
     // Reset interaction states
@@ -1826,13 +2163,70 @@ const selectConversation = async (conv, shouldPushState = true) => {
                 ...response.data.conversation,
             };
         }
-        activeMessages.value = response.data.messages || [];
+
+        const serverMessages = response.data.messages || [];
+        const currentMessages = activeMessages.value || [];
+
+        // Reconcile refreshed messages by ID:
+        // Server response is authoritative within its returned ID range.
+        // Absent current messages are kept only if older than oldest server ID
+        // or newer than newest server ID; absent messages inside range are discarded.
+        const reconciledMap = new Map();
+        serverMessages.forEach(m => {
+            reconciledMap.set(m.id, { ...m });
+        });
+
+        if (serverMessages.length > 0) {
+            const serverNumericIds = serverMessages
+                .map(m => m.id)
+                .filter(id => typeof id === 'number');
+
+            const minServerId = serverNumericIds.length > 0 ? Math.min(...serverNumericIds) : null;
+            const maxServerId = serverNumericIds.length > 0 ? Math.max(...serverNumericIds) : null;
+
+            currentMessages.forEach(m => {
+                if (reconciledMap.has(m.id)) {
+                    return;
+                }
+
+                const isNumeric = typeof m.id === 'number';
+                const isOlder = isNumeric && minServerId !== null && m.id < minServerId;
+                const isNewer = (!isNumeric) || (maxServerId !== null && m.id > maxServerId);
+
+                if (isOlder || isNewer) {
+                    reconciledMap.set(m.id, { ...m });
+                }
+            });
+        } else {
+            // When server returns no messages, do not retain stale cached entries by default
+            currentMessages.forEach(m => {
+                if (typeof m.id !== 'number' && !reconciledMap.has(m.id)) {
+                    reconciledMap.set(m.id, { ...m });
+                }
+            });
+        }
+
+        const reconciled = Array.from(reconciledMap.values()).sort((a, b) => {
+            if (typeof a.id === 'number' && typeof b.id === 'number') {
+                return a.id - b.id;
+            }
+            const timeA = new Date(a.raw_created_at || a.created_at).getTime();
+            const timeB = new Date(b.raw_created_at || b.created_at).getTime();
+            return timeA - timeB;
+        });
+
+        activeMessages.value = reconciled;
         hasMoreMessages.value = !!response.data.has_more;
         isLoadingConversation.value = false;
         conversationLoadError.value = null;
 
+        // Keep cache updated with newest 20 messages
+        setCachedMessages(targetId, reconciled, !!response.data.has_more);
+
         nextTick(() => {
-            scrollToBottom(false);
+            if (isNearBottom()) {
+                scrollToBottom(false);
+            }
             resizeComposer();
             focusComposer();
         });
@@ -1845,7 +2239,11 @@ const selectConversation = async (conv, shouldPushState = true) => {
         }
 
         isLoadingConversation.value = false;
-        conversationLoadError.value = err.response?.data?.message || 'Unable to load conversation messages. Please check your connection and try again.';
+        if (activeMessages.value.length === 0) {
+            conversationLoadError.value = err.response?.data?.message || 'Unable to load conversation messages. Please check your connection and try again.';
+        } else {
+            showToast('Unable to refresh messages. Check your connection.');
+        }
     }
 };
 
@@ -1935,6 +2333,7 @@ const handleGlobalKeydown = (e) => {
         }
         if (activeMessageMenuId.value !== null || activeConversationMenuId.value !== null) {
             activeMessageMenuId.value = null;
+            messageMenuMaxHeight.value = null;
             activeConversationMenuId.value = null;
             return;
         }
@@ -1982,6 +2381,7 @@ const handleGlobalClick = (e) => {
     if (activeMessageMenuId.value !== null) {
         if (!e.target.closest('[data-message-menu]')) {
             activeMessageMenuId.value = null;
+            messageMenuMaxHeight.value = null;
         }
     }
     if (activeConversationMenuId.value !== null) {
@@ -2058,10 +2458,10 @@ onBeforeUnmount(() => {
             <span>{{ toastMessage }}</span>
         </div>
 
-        <div class="flex-1 flex flex-col min-h-0 p-2 sm:p-3 bg-cream-300">
-            <div class="max-w-8xl w-full mx-auto flex-1 flex flex-col min-h-0">
+        <div class="flex-1 flex flex-col min-h-0 min-w-0 p-2 sm:p-3 bg-cream-300">
+            <div class="max-w-8xl w-full mx-auto flex-1 flex flex-col min-h-0 min-w-0">
                 <!-- Messenger Container -->
-                <div class="bg-cream-200 rounded-2xl shadow-sm border border-cream-500/60 overflow-hidden flex flex-1 min-h-0">
+                <div class="bg-cream-200 rounded-2xl shadow-sm border border-cream-500/60 overflow-hidden flex flex-1 min-h-0 min-w-0">
                     
                     <!-- Left Sidebar (Conversations List) -->
                     <div 
@@ -2150,7 +2550,10 @@ onBeforeUnmount(() => {
                                     v-for="conv in filteredConversations"
                                     :key="conv.id"
                                     class="rounded-xl transition duration-150 group relative"
-                                    :class="activeConversation?.id === conv.id ? 'bg-[#ede1b8] shadow-xs border border-cream-500/50' : 'hover:bg-cream-300/60'"
+                                    :class="[
+                                        activeConversation?.id === conv.id ? 'bg-[#ede1b8] shadow-xs border border-cream-500/50' : 'hover:bg-cream-300/60',
+                                        activeConversationMenuId === conv.id ? 'z-30' : 'z-0'
+                                    ]"
                                 >
                                     <a
                                         :href="route('chat.index', { conversation: conv.id })"
@@ -2309,7 +2712,7 @@ onBeforeUnmount(() => {
 
                     <!-- Right Chat Area -->
                     <div 
-                        class="flex-1 flex flex-col bg-cream-300 min-h-0 h-full relative"
+                        class="flex-1 flex flex-col bg-cream-300 min-h-0 min-w-0 h-full relative overflow-hidden"
                         :class="{'flex': activeConversation, 'hidden md:flex': !activeConversation}"
                         @dragenter="handleDragEnter"
                         @dragover="handleDragOver"
@@ -2333,7 +2736,7 @@ onBeforeUnmount(() => {
                         <template v-if="activeConversation">
                             <!-- Active Chat Header -->
                             <div class="h-16 px-4 sm:px-6 border-b border-cream-500/40 flex items-center justify-between bg-cream-200/90 z-10 shrink-0">
-                                <div class="flex items-center space-x-3 truncate me-2">
+                                <div class="flex items-center space-x-3 truncate me-2 min-w-0 flex-1">
                                     <!-- Mobile Back Button -->
                                     <button
                                         type="button"
@@ -2377,9 +2780,9 @@ onBeforeUnmount(() => {
                                         ></span>
                                     </div>
 
-                                    <div class="truncate">
-                                        <h3 class="font-bold text-gray-900 text-sm md:text-base leading-tight truncate flex items-center space-x-1.5">
-                                            <span>{{ (activeConversation.is_system || activeConversation.type === 'system') ? 'System Notifications' : activeConversation.title }}</span>
+                                    <div class="truncate min-w-0 flex-1">
+                                        <h3 class="font-bold text-gray-900 text-sm md:text-base leading-tight truncate flex items-center space-x-1.5 min-w-0">
+                                            <span class="truncate">{{ (activeConversation.is_system || activeConversation.type === 'system') ? 'System Notifications' : activeConversation.title }}</span>
                                             <span v-if="activeConversation.is_pinned" class="text-xs" title="Pinned">📌</span>
                                             <span v-if="activeConversation.is_muted" class="text-xs" title="Muted">🔕</span>
                                         </h3>
@@ -2515,7 +2918,7 @@ onBeforeUnmount(() => {
                                                 <span class="font-bold text-gray-800">{{ res.sender_name }}</span>
                                                 <span>{{ res.created_at_relative }}</span>
                                             </div>
-                                            <p class="text-xs text-gray-900 line-clamp-2">{{ res.body }}</p>
+                                            <p class="text-xs text-gray-900 line-clamp-2 break-words [overflow-wrap:anywhere]">{{ res.body }}</p>
                                         </button>
                                     </template>
                                     <div v-else class="p-4 text-center text-xs text-gray-500">
@@ -2525,14 +2928,14 @@ onBeforeUnmount(() => {
                             </div>
 
                             <!-- Horizontal flex layout for Messages + Info Drawer -->
-                            <div class="flex-1 flex flex-row min-h-0 overflow-hidden relative">
+                            <div class="flex-1 flex flex-row min-h-0 min-w-0 overflow-hidden relative">
                                 <!-- Messages & Input Column -->
-                                <div class="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+                                <div class="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden relative">
                                     <!-- Messages Scroll Container -->
                                     <div 
                                         ref="messagesContainer"
                                         @scroll="onMessagesScroll"
-                                        class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-cream-300"
+                                        class="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-4 bg-cream-300 min-w-0"
                                     >
                                         <!-- Load Older Messages Button (Top of message history) -->
                                         <div v-if="hasMoreMessages && !isLoadingConversation" class="flex justify-center pb-2 pt-1">
@@ -2609,32 +3012,34 @@ onBeforeUnmount(() => {
                                                 v-for="message in allMessages"
                                                 :id="`message-${message.id}`"
                                                 :key="message.id"
-                                                class="flex flex-col transition-colors duration-500 rounded-xl p-1"
+                                                class="w-full max-w-full min-w-0 flex flex-col transition-colors duration-500 rounded-xl p-1"
                                                 :class="[
                                                     message.is_sender ? 'items-end' : 'items-start',
-                                                    highlightedMessageId === message.id ? 'bg-golden-300/60 ring-2 ring-golden-500' : ''
+                                                    highlightedMessageId === message.id ? 'bg-golden-300/60 ring-2 ring-golden-500' : '',
+                                                    activeMessageMenuId === message.id ? 'relative z-30' : 'relative z-0'
                                                 ]"
                                             >
                                                 <!-- Sender Name in group/chat if not sender -->
                                                 <span 
                                                     v-if="!message.is_sender"
-                                                    class="text-[11px] font-semibold text-gray-700 mb-1 block pl-2"
+                                                    class="text-[11px] font-semibold text-gray-700 mb-1 block pl-2 max-w-full truncate"
                                                 >
                                                     {{ message.sender.name }}
                                                 </span>
 
                                                 <!-- Message Bubble Row -->
-                                                <div class="group flex items-center space-x-2 max-w-[92%] sm:max-w-[85%] md:max-w-[75%]">
+                                                <div class="group flex items-center space-x-2 max-w-[92%] sm:max-w-[85%] md:max-w-[75%] min-w-0">
                                                     
                                                     <!-- Actions Menu Toggle (Left of sender's bubble) -->
                                                     <div
                                                         v-if="message.is_sender && !message.is_deleted && !message.is_deleted_for_me && message.status !== 'sending' && message.status !== 'failed'"
-                                                        class="relative shrink-0 z-10"
+                                                        class="relative shrink-0"
+                                                        :class="activeMessageMenuId === message.id ? 'z-40' : 'z-10'"
                                                         data-message-menu
                                                     >
                                                         <button
                                                             type="button"
-                                                            @click.stop="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
+                                                            @click.stop="toggleMessageMenu(message, $event)"
                                                             class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition"
                                                             :class="activeMessageMenuId === message.id ? 'bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
@@ -2647,7 +3052,15 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Sender -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute right-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-30 text-xs"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            :class="[
+                                                                messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
+                                                                messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'
+                                                            ]"
+                                                            :style="{
+                                                                ...(messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}),
+                                                                ...(messageMenuShiftX ? { transform: `translateX(${messageMenuShiftX}px)` } : {})
+                                                            }"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
@@ -2715,20 +3128,20 @@ onBeforeUnmount(() => {
                                                         <div
                                                             v-if="message.reply_to && !message.is_deleted_for_me"
                                                             @click="scrollToMessage(message.reply_to.id)"
-                                                            class="mb-1 px-3 py-1.5 rounded-lg text-xs border border-cream-500/40 bg-cream-100/90 hover:bg-cream-200/90 transition cursor-pointer max-w-full shadow-2xs break-words"
+                                                            class="mb-1 px-3 py-1.5 rounded-lg text-xs border border-cream-500/40 bg-cream-100/90 hover:bg-cream-200/90 transition cursor-pointer max-w-full shadow-2xs break-words [overflow-wrap:anywhere] [word-break:break-word] min-w-0"
                                                             :class="message.is_sender ? 'border-r-4 border-r-golden-600' : 'border-l-4 border-l-forest-600'"
                                                         >
                                                             <div class="font-bold text-[10px] text-forest-900 truncate">
                                                                 {{ message.reply_to.sender_name }}
                                                             </div>
-                                                            <div class="text-gray-700 italic text-[11px] break-words whitespace-normal line-clamp-3">
+                                                            <div class="text-gray-700 italic text-[11px] break-words [overflow-wrap:anywhere] [word-break:break-word] whitespace-normal line-clamp-3">
                                                                 {{ message.reply_to.body || 'Attachment' }}
                                                             </div>
                                                         </div>
 
                                                         <!-- Message Bubble -->
                                                         <div
-                                                            class="px-4 py-2.5 shadow-xs text-sm break-words relative transition"
+                                                            class="px-4 py-2.5 shadow-xs text-sm break-words [overflow-wrap:anywhere] [word-break:break-word] max-w-full min-w-0 relative transition"
                                                             :class="[
                                                                 message.is_sender
                                                                     ? 'bg-golden-500 text-gray-950 font-medium rounded-2xl rounded-tr-xs border border-golden-600/30'
@@ -2737,8 +3150,7 @@ onBeforeUnmount(() => {
                                                                 message.status === 'sending' ? 'opacity-90' : '',
                                                                 message.status === 'failed' ? 'border-red-400 bg-amber-100' : ''
                                                             ]"
-                                                            data-message-menu
-                                                            @click.stop="toggleMessageMenu(message)"
+                                                            @click.stop="toggleMessageMenu(message, $event)"
                                                         >
                                                             <!-- Image Attachment with Inline Lightbox trigger -->
                                                             <div v-if="!message.is_deleted_for_me && message.attachment_url && message.type === 'image'" class="mb-2 overflow-hidden rounded-xl">
@@ -2757,28 +3169,28 @@ onBeforeUnmount(() => {
                                                             </div>
 
                                                             <!-- Document / File Attachment -->
-                                                            <div v-else-if="!message.is_deleted_for_me && (message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1">
+                                                            <div v-else-if="!message.is_deleted_for_me && (message.attachment_url || message.attachment_name) && message.type === 'file'" class="mb-1 max-w-full min-w-0">
                                                                 <a
                                                                     :href="message.attachment_url || '#'"
                                                                     :target="message.attachment_url ? '_blank' : '_self'"
                                                                     :download="!!message.attachment_url"
                                                                     @click.stop
-                                                                    class="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold shadow-xs"
+                                                                    class="flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold shadow-xs max-w-full min-w-0"
                                                                     :class="message.is_sender ? 'bg-golden-600/20 text-gray-950 hover:bg-golden-600/30' : 'bg-golden-500/80 text-gray-950 hover:bg-golden-500'"
                                                                 >
                                                                     <svg class="size-4 shrink-0 text-gray-800" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                                                         <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                                                                     </svg>
-                                                                    <span class="truncate">{{ message.attachment_name || 'Download file' }}</span>
+                                                                    <span class="truncate min-w-0">{{ message.attachment_name || 'Download file' }}</span>
                                                                 </a>
                                                             </div>
 
                                                             <!-- Message Body -->
-                                                            <p v-if="message.body" class="whitespace-pre-wrap leading-relaxed">
+                                                            <p v-if="message.body" class="whitespace-pre-wrap leading-relaxed break-words [overflow-wrap:anywhere] [word-break:break-word]">
                                                                 <template v-for="(seg, sIdx) in parseMessageSegments(message.body)" :key="sIdx">
                                                                     <span
                                                                         v-if="seg.type === 'mention'"
-                                                                        class="inline-block px-1.5 py-0.2 mx-0.5 rounded font-bold transition-colors"
+                                                                        class="inline-block px-1.5 py-0.2 mx-0.5 rounded font-bold transition-colors break-words [overflow-wrap:anywhere] [word-break:break-word]"
                                                                         :class="[
                                                                             seg.isEveryone
                                                                                 ? 'bg-amber-500/25 text-amber-950 border border-amber-600/30 ring-1 ring-amber-500/20'
@@ -2815,12 +3227,13 @@ onBeforeUnmount(() => {
                                                     <!-- Actions Menu Toggle (Right of receiver's bubble) -->
                                                     <div
                                                         v-if="!message.is_sender && !message.is_deleted && !message.is_deleted_for_me"
-                                                        class="relative shrink-0 z-10"
+                                                        class="relative shrink-0"
+                                                        :class="activeMessageMenuId === message.id ? 'z-40' : 'z-10'"
                                                         data-message-menu
                                                     >
                                                         <button
                                                             type="button"
-                                                            @click.stop="activeMessageMenuId = activeMessageMenuId === message.id ? null : message.id"
+                                                            @click.stop="toggleMessageMenu(message, $event)"
                                                             class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
                                                             :class="activeMessageMenuId === message.id ? 'opacity-100 bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
@@ -2833,7 +3246,15 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Receiver -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute left-0 bottom-7 bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-30 text-xs"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            :class="[
+                                                                messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
+                                                                messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'
+                                                            ]"
+                                                            :style="{
+                                                                ...(messageMenuMaxHeight ? { maxHeight: messageMenuMaxHeight } : {}),
+                                                                ...(messageMenuShiftX ? { transform: `translateX(${messageMenuShiftX}px)` } : {})
+                                                            }"
                                                         >
                                                             <!-- Quick Reactions Row -->
                                                             <div class="flex items-center justify-around px-1.5 py-1 border-b border-cream-400/40 mb-1">
@@ -2987,12 +3408,12 @@ onBeforeUnmount(() => {
                                         <span>System Notifications are read-only and cannot be replied to.</span>
                                     </div>
 
-                                    <div v-else class="p-3 sm:p-4 border-t border-cream-500/40 bg-cream-300 relative">
+                                    <div v-else class="w-full max-w-full min-w-0 p-3 sm:p-4 border-t border-cream-500/40 bg-cream-300 relative">
                                         <!-- Replying-to Preview Bar -->
-                                        <div v-if="replyingToMessage" class="mb-2 p-2 bg-cream-100 rounded-xl border border-cream-500/60 flex items-center justify-between text-xs animate-fadeIn gap-2">
+                                        <div v-if="replyingToMessage" class="mb-2 p-2 bg-cream-100 rounded-xl border border-cream-500/60 flex items-center justify-between text-xs animate-fadeIn gap-2 min-w-0 max-w-full">
                                             <div class="flex items-start space-x-2 min-w-0 flex-1">
                                                 <span class="text-forest-800 font-bold shrink-0">Replying to {{ replyingToMessage.sender_name }}:</span>
-                                                <span class="text-gray-600 italic break-words line-clamp-2">{{ replyingToMessage.body }}</span>
+                                                <span class="text-gray-600 italic break-words [overflow-wrap:anywhere] [word-break:break-word] line-clamp-2 min-w-0">{{ replyingToMessage.body }}</span>
                                             </div>
                                             <button type="button" @click="cancelReply" class="text-gray-400 hover:text-gray-700 p-1 cursor-pointer shrink-0" aria-label="Cancel reply">
                                                 <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -3119,7 +3540,7 @@ onBeforeUnmount(() => {
                                         </div>
 
                                         <!-- Input Controls Form -->
-                                        <form @submit.prevent="editingMessage ? submitEditMessage() : sendMessage()" class="flex items-center space-x-2 sm:space-x-3">
+                                        <form @submit.prevent="editingMessage ? submitEditMessage() : sendMessage()" class="flex items-center space-x-2 sm:space-x-3 w-full max-w-full min-w-0">
                                             <!-- Hidden File Input -->
                                             <input
                                                 ref="fileInput"
@@ -3131,7 +3552,7 @@ onBeforeUnmount(() => {
                                             />
 
                                             <!-- Pill Wrapper for attachment icon, emoji icon, and textarea -->
-                                            <div class="flex-1 flex items-center bg-[#ebe2c8] border border-cream-500/50 rounded-full px-3 py-1 focus-within:ring-2 focus-within:ring-forest-600/30 focus-within:border-forest-600 transition">
+                                            <div class="flex-1 flex items-center bg-[#ebe2c8] border border-cream-500/50 rounded-full px-3 py-1 focus-within:ring-2 focus-within:ring-forest-600/30 focus-within:border-forest-600 transition min-w-0">
                                                 <!-- Attachment Button (disabled during edit or conversation load) -->
                                                 <button
                                                     v-if="!editingMessage"
@@ -3172,7 +3593,7 @@ onBeforeUnmount(() => {
                                                     rows="1"
                                                     :disabled="isLoadingConversation || !!conversationLoadError"
                                                     :placeholder="isLoadingConversation ? 'Loading conversation messages...' : (conversationLoadError ? 'Could not load messages' : (editingMessage ? 'Edit your message...' : 'Type a message... (Enter to send, Shift+Enter for newline)'))"
-                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    class="w-full resize-none py-1.5 px-3 bg-transparent text-sm text-gray-900 placeholder:text-gray-600 border-0 focus:ring-0 overflow-y-hidden disabled:opacity-50 disabled:cursor-not-allowed min-w-0"
                                                     @keydown="onComposerKeydown"
                                                     aria-label="Type message content"
                                                 ></textarea>

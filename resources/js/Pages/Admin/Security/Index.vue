@@ -10,6 +10,7 @@ import DangerButton from '@/Components/DangerButton.vue';
 import TextInput from '@/Components/TextInput.vue';
 import InputLabel from '@/Components/InputLabel.vue';
 import InputError from '@/Components/InputError.vue';
+import AttackVelocityChart from './AttackVelocityChart.vue';
 
 const props = defineProps({
     stats: {
@@ -217,25 +218,6 @@ const toggleAutoDefense = () => {
     router.post(route('admin.security.toggle-auto-defense'), {}, {
         preserveScroll: true,
     });
-};
-
-// Max timeline calculation for proportional height
-const maxTimelineTotal = computed(() => {
-    const max = Math.max(...props.timeline.map((t) => t.total), 1);
-    return max;
-});
-
-const formatTimeLabel = (point) => {
-    if (!point) return '';
-    if (point.timestamp) {
-        try {
-            const d = new Date(point.timestamp);
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-        } catch (e) {
-            return point.label;
-        }
-    }
-    return point.label;
 };
 
 // Severity styling helpers
@@ -467,48 +449,9 @@ const formatThreatType = (type) => {
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <!-- Timeline Graph (2 Columns) -->
                     <div class="lg:col-span-2 bg-[#fffef9] p-6 rounded-3xl border border-cream-400/80 shadow-xs flex flex-col justify-between">
-                        <div>
-                            <div class="flex items-center justify-between mb-4">
-                                <div>
-                                    <h3 class="text-sm font-bold text-gray-950 uppercase tracking-wider">Attack Velocity & Threat Timeline</h3>
-                                    <p class="text-xs text-gray-500 mt-0.5">24-hour volume distribution by threat classification</p>
-                                </div>
-                                <div class="flex items-center space-x-3 text-[11px] font-semibold text-gray-600">
-                                    <span class="flex items-center space-x-1"><span class="size-2 rounded-full bg-amber-500"></span><span>404 Probes</span></span>
-                                    <span class="flex items-center space-x-1"><span class="size-2 rounded-full bg-orange-500"></span><span>DDoS</span></span>
-                                    <span class="flex items-center space-x-1"><span class="size-2 rounded-full bg-red-500"></span><span>Exploits</span></span>
-                                </div>
-                            </div>
+                        <AttackVelocityChart :timeline="timeline" />
 
-                            <!-- Interactive Bar Chart -->
-                            <div class="h-44 flex items-end gap-2 pt-6 pb-2 border-b border-cream-300">
-                                <div
-                                    v-for="(point, idx) in timeline"
-                                    :key="idx"
-                                    class="flex-1 flex flex-col items-center h-full justify-end group relative"
-                                >
-                                    <!-- Tooltip -->
-                                    <div class="absolute bottom-full mb-2 hidden group-hover:flex flex-col bg-forest-950 text-white text-[10px] p-2 rounded-lg shadow-xl z-20 whitespace-nowrap pointer-events-none">
-                                        <span class="font-bold border-b border-white/20 pb-1 mb-1">{{ formatTimeLabel(point) }} — Total: {{ point.total }}</span>
-                                        <span>Probes: {{ point.probes }}</span>
-                                        <span>DDoS: {{ point.ddos }}</span>
-                                        <span>Exploits: {{ point.exploits }}</span>
-                                    </div>
-
-                                    <!-- Stacked Column -->
-                                    <div class="w-full max-w-[28px] flex flex-col justify-end rounded-t-md overflow-hidden bg-cream-300 transition-all group-hover:opacity-90"
-                                         :style="{ height: point.total > 0 ? `${Math.max(14, Math.round((point.total / maxTimelineTotal) * 100))}%` : '4px' }">
-                                        <div v-if="point.exploits > 0" class="bg-red-500 w-full shrink-0" :style="{ flex: point.exploits, height: `${(point.exploits / point.total) * 100}%` }"></div>
-                                        <div v-if="point.ddos > 0" class="bg-orange-500 w-full shrink-0" :style="{ flex: point.ddos, height: `${(point.ddos / point.total) * 100}%` }"></div>
-                                        <div v-if="point.probes > 0" class="bg-amber-500 w-full shrink-0" :style="{ flex: point.probes, height: `${(point.probes / point.total) * 100}%` }"></div>
-                                    </div>
-
-                                    <span class="text-[9px] text-gray-500 font-semibold mt-2">{{ formatTimeLabel(point) }}</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="flex items-center justify-between text-xs text-gray-500 pt-3">
+                        <div class="flex items-center justify-between text-xs text-gray-500 pt-3 border-t border-cream-300/60 mt-1">
                             <span>Sampling: 2-hour rolling intervals</span>
                             <span class="text-forest-800 font-semibold">Continuous Ingestion</span>
                         </div>

@@ -2390,4 +2390,93 @@ class ChatTest extends TestCase
         $this->assertNotNull($seenBy[0]['user']['profile_photo_url']);
         $this->assertEquals($bob->profile_photo_url, $seenBy[0]['user']['profile_photo_url']);
     }
+
+    public function test_initial_active_conversation_props_include_messages_and_pagination_state_for_cache_seeding(): void
+    {
+        $user1 = User::factory()->create(['name' => 'User One']);
+        $user2 = User::factory()->create(['name' => 'User Two']);
+
+        $conversation = Conversation::create([
+            'type' => 'direct',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        $message = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user2->id,
+            'body' => 'Initial seeded message',
+            'type' => 'text',
+        ]);
+
+        $response = $this->actingAs($user1)->get(route('chat.index', ['conversation' => $conversation->id]));
+
+        $response->assertOk();
+        $response->assertInertia(function ($page) use ($conversation, $message): void {
+            $page->component('Chat/Index');
+            $activeConv = $page->toArray()['props']['activeConversation'];
+            $this->assertNotNull($activeConv);
+            $this->assertEquals($conversation->id, $activeConv['id']);
+            $this->assertArrayHasKey('messages', $activeConv);
+            $this->assertArrayHasKey('has_more', $activeConv);
+            $this->assertCount(1, $activeConv['messages']);
+            $this->assertEquals($message->id, $activeConv['messages'][0]['id']);
+            $this->assertEquals('Initial seeded message', $activeConv['messages'][0]['body']);
+        });
+    }
+
+    public function test_messages_endpoint_supports_metadata_inclusion_and_cursor_pagination(): void
+    {
+        $user1 = User::factory()->create(['name' => 'User One']);
+        $user2 = User::factory()->create(['name' => 'User Two']);
+
+        $conversation = Conversation::create([
+            'type' => 'direct',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        $msg1 = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user1->id,
+            'body' => 'Message 1',
+            'type' => 'text',
+            'created_at' => now()->subMinutes(10),
+        ]);
+
+        $msg2 = Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user2->id,
+            'body' => 'Message 2',
+            'type' => 'text',
+            'created_at' => now()->subMinutes(5),
+        ]);
+
+        // Background refresh with metadata and mark_read
+        $refreshResponse = $this->actingAs($user1)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+            'include_meta' => 1,
+            'mark_read' => 1,
+        ]));
+
+        $refreshResponse->assertOk();
+        $refreshData = $refreshResponse->json();
+        $this->assertCount(2, $refreshData['messages']);
+        $this->assertEquals($conversation->id, $refreshData['conversation']['id']);
+
+        // Cursor pagination with before_id
+        $cursorResponse = $this->actingAs($user1)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+            'before_id' => $msg2->id,
+        ]));
+
+        $cursorResponse->assertOk();
+        $cursorData = $cursorResponse->json();
+        $this->assertCount(1, $cursorData['messages']);
+        $this->assertEquals($msg1->id, $cursorData['messages'][0]['id']);
+    }
 }
