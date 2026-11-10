@@ -74,11 +74,23 @@ const getCachedHasMore = (convId) => {
     return !!entry?.hasMore;
 };
 
-const setCachedMessages = (convId, messages, hasMore = false) => {
+const getCachedLastMessageAt = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return null;
+    const entry = messageCache.get(key);
+    return entry?.lastMessageAt || null;
+};
+
+const setCachedMessages = (convId, messages, hasMore = false, lastMessageAt = null) => {
     const key = getCacheKey(convId);
     if (!key || !Array.isArray(messages)) return;
     const newest = messages.slice(-MAX_CACHED_MESSAGES).map(m => ({ ...m }));
-    messageCache.set(key, { messages: newest, hasMore: !!hasMore });
+    const existingLastMessageAt = getCachedLastMessageAt(convId);
+    messageCache.set(key, {
+        messages: newest,
+        hasMore: !!hasMore,
+        lastMessageAt: lastMessageAt ?? existingLastMessageAt ?? null,
+    });
 };
 
 const addMessageToCache = (convId, message) => {
@@ -86,9 +98,20 @@ const addMessageToCache = (convId, message) => {
     if (!key || !messageCache.has(key)) return;
     const entry = messageCache.get(key);
     const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    const msgTimestamp = message.raw_created_at || message.created_at_iso || null;
     if (!currentList.some(m => m.id === message.id)) {
         const updated = [...currentList, { ...message }].slice(-MAX_CACHED_MESSAGES);
-        messageCache.set(key, { messages: updated, hasMore: !!entry?.hasMore });
+        messageCache.set(key, {
+            messages: updated,
+            hasMore: !!entry?.hasMore,
+            lastMessageAt: msgTimestamp || entry?.lastMessageAt || null,
+        });
+    } else if (msgTimestamp && !Array.isArray(entry)) {
+        const currentEntryTime = entry.lastMessageAt ? new Date(entry.lastMessageAt).getTime() : 0;
+        const newMsgTime = new Date(msgTimestamp).getTime();
+        if (!entry.lastMessageAt || (!isNaN(newMsgTime) && (isNaN(currentEntryTime) || newMsgTime > currentEntryTime))) {
+            entry.lastMessageAt = msgTimestamp;
+        }
     }
 };
 
@@ -128,7 +151,12 @@ const deleteCachedConversation = (convId) => {
 
 // Seed initial active conversation into in-memory cache
 if (props.activeConversation?.id) {
-    setCachedMessages(props.activeConversation.id, props.activeConversation.messages || [], !!props.activeConversation.has_more);
+    setCachedMessages(
+        props.activeConversation.id,
+        props.activeConversation.messages || [],
+        !!props.activeConversation.has_more,
+        props.activeConversation.last_message_at || null
+    );
 }
 
 // Clear cache if authenticated user ID changes
@@ -147,7 +175,12 @@ watch(() => props.activeConversation, (active) => {
             isLoadingConversation.value = false;
             conversationLoadError.value = null;
 
-            setCachedMessages(active.id, active.messages || [], !!active.has_more);
+            setCachedMessages(
+                active.id,
+                active.messages || [],
+                !!active.has_more,
+                active.last_message_at || null
+            );
 
             const currentConv = conversationsList.value.find(c => c.id === active.id);
             if (currentConv) {
@@ -818,6 +851,21 @@ const formatCurrentTime = () => {
     return `${month} ${day}, ${hours}:${minutes} ${ampm}`;
 };
 
+// Helper to format relative time for sidebar display if relative string is missing
+const formatRelativeTime = (timeStr) => {
+    if (!timeStr) return '';
+    if (typeof timeStr !== 'string') return '';
+    if (timeStr.includes('ago') || timeStr === 'just now') return timeStr;
+    const d = new Date(timeStr);
+    if (isNaN(d.getTime())) return timeStr;
+    const diffSec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (diffSec < 60) return 'just now';
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    if (diffSec < 604800) return `${Math.floor(diffSec / 86400)}d ago`;
+    return d.toLocaleDateString();
+};
+
 // Send a pending message via Inertia post
 const sendPendingMessage = (pendingMsg) => {
     pendingMsg.status = 'sending';
@@ -1080,6 +1128,9 @@ const toggleMessageMenu = (message, event = null) => {
             if (targetRect.right + shiftX > maxRight) {
                 shiftX = maxRight - targetRect.right;
             }
+            if (targetRect.right - MENU_WIDTH + shiftX < minLeft) {
+                shiftX = minLeft - (targetRect.right - MENU_WIDTH);
+            }
         }
         messageMenuShiftX.value = Math.round(shiftX);
     } else if (event && event.clientY) {
@@ -1118,6 +1169,7 @@ const toggleMessageMenu = (message, event = null) => {
             const menuLeft = clientX - MENU_WIDTH;
             if (menuLeft < minLeft) shiftX = minLeft - menuLeft;
             if (clientX + shiftX > maxRight) shiftX = maxRight - clientX;
+            if (clientX - MENU_WIDTH + shiftX < minLeft) shiftX = minLeft - (clientX - MENU_WIDTH);
         }
         messageMenuShiftX.value = Math.round(shiftX);
     } else {
@@ -1805,6 +1857,7 @@ const handleUserChannelEvent = (e) => {
             if (e.data?.conversation?.latest_message) {
                 conv.latest_message = e.data.conversation.latest_message;
                 conv.last_message_at = e.data.conversation.last_message_at;
+                conv.last_message_at_relative = e.data.conversation.last_message_at_relative;
             }
             if (activeConversation.value?.id !== e.conversation_id && isFromOther) {
                 conv.unread_count = (conv.unread_count || 0) + 1;
@@ -1935,6 +1988,15 @@ const handleConversationChannelEvent = (e) => {
             });
 
             addMessageToCache(e.conversation_id, { ...msg, is_sender: isMe });
+
+            const msgTimestamp = msg.raw_created_at || msg.created_at_iso || msg.created_at;
+            if (activeConversation.value?.id === e.conversation_id && msgTimestamp) {
+                activeConversation.value.last_message_at = msgTimestamp;
+            }
+            const activeConvInList = conversationsList.value.find(c => c.id === e.conversation_id);
+            if (activeConvInList && msgTimestamp) {
+                activeConvInList.last_message_at = msgTimestamp;
+            }
 
             if (isMe || isNearBottom()) {
                 scrollToBottom(true);
@@ -2103,7 +2165,22 @@ const selectConversation = async (conv, shouldPushState = true) => {
     };
 
     // 2. Check if conversation has cached messages in memory
-    if (hasCachedConversation(targetId)) {
+    const hasCache = hasCachedConversation(targetId);
+    const cachedLastMessageAt = hasCache ? getCachedLastMessageAt(targetId) : null;
+    const sidebarConv = conversationsList.value.find(c => c.id === targetId);
+    const currentLastMessageAt = conv.last_message_at || sidebarConv?.last_message_at || null;
+    const cachedTime = cachedLastMessageAt ? new Date(cachedLastMessageAt).getTime() : NaN;
+    const currentTime = currentLastMessageAt ? new Date(currentLastMessageAt).getTime() : NaN;
+    const isCacheUpToDate = Boolean(
+        hasCache &&
+        cachedLastMessageAt &&
+        currentLastMessageAt &&
+        !isNaN(cachedTime) &&
+        !isNaN(currentTime) &&
+        cachedTime === currentTime
+    );
+
+    if (hasCache) {
         activeMessages.value = getCachedMessages(targetId) || [];
         hasMoreMessages.value = getCachedHasMore(targetId);
         isLoadingConversation.value = false;
@@ -2132,7 +2209,6 @@ const selectConversation = async (conv, shouldPushState = true) => {
     typingUsers.value = {};
 
     // Locally mark conversation as read in sidebar list
-    const sidebarConv = conversationsList.value.find(c => c.id === targetId);
     if (sidebarConv) {
         sidebarConv.unread_count = 0;
         sidebarConv.has_unread_mentions = false;
@@ -2144,6 +2220,13 @@ const selectConversation = async (conv, shouldPushState = true) => {
 
     // Load draft
     messageForm.body = loadDraft(targetId);
+
+    // If cached messages exist and timestamps match, skip fetching messages list!
+    // Preserve mark-as-read behavior using the existing lightweight mark-read mechanism.
+    if (isCacheUpToDate) {
+        markCurrentConversationAsSeen(targetId);
+        return;
+    }
 
     // 3. Asynchronously fetch latest messages & full metadata
     try {
@@ -2220,8 +2303,10 @@ const selectConversation = async (conv, shouldPushState = true) => {
         isLoadingConversation.value = false;
         conversationLoadError.value = null;
 
-        // Keep cache updated with newest 20 messages
-        setCachedMessages(targetId, reconciled, !!response.data.has_more);
+        const freshLastMessageAt = response.data.conversation?.last_message_at || currentLastMessageAt;
+
+        // Keep cache updated with newest 20 messages and fresh timestamp
+        setCachedMessages(targetId, reconciled, !!response.data.has_more, freshLastMessageAt);
 
         nextTick(() => {
             if (isNearBottom()) {
@@ -2604,7 +2689,7 @@ onBeforeUnmount(() => {
                                                     <span v-if="conv.is_muted" class="text-gray-400 shrink-0" title="Notifications muted">🔕</span>
                                                 </h4>
                                                 <span class="text-xs text-gray-500 shrink-0 ms-2">
-                                                    {{ conv.latest_message?.created_at || conv.last_message_at }}
+                                                    {{ conv.latest_message?.created_at || conv.last_message_at_relative || formatRelativeTime(conv.last_message_at) }}
                                                 </span>
                                             </div>
 
@@ -3052,7 +3137,7 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Sender -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 max-w-[calc(100vw-24px)] z-40 text-xs overflow-y-auto"
                                                             :class="[
                                                                 messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
                                                                 messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'
@@ -3246,7 +3331,7 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Receiver -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 max-w-[calc(100vw-24px)] z-40 text-xs overflow-y-auto"
                                                             :class="[
                                                                 messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
                                                                 messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'

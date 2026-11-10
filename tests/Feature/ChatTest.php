@@ -2479,4 +2479,85 @@ class ChatTest extends TestCase
         $this->assertCount(1, $cursorData['messages']);
         $this->assertEquals($msg1->id, $cursorData['messages'][0]['id']);
     }
+
+    public function test_conversations_list_and_metadata_provide_stable_iso_timestamps(): void
+    {
+        $user1 = User::factory()->create(['name' => 'User One']);
+        $user2 = User::factory()->create(['name' => 'User Two']);
+
+        $conversation = Conversation::create([
+            'type' => 'direct',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user2->id,
+            'body' => 'Timestamp check message',
+            'type' => 'text',
+            'created_at' => now()->subMinutes(3),
+        ]);
+
+        $response = $this->actingAs($user1)->get(route('chat.index', ['conversation' => $conversation->id]));
+
+        $response->assertOk();
+        $response->assertInertia(function ($page) use ($conversation): void {
+            $page->component('Chat/Index');
+            $props = $page->toArray()['props'];
+
+            // Sidebar conversation checks
+            $convs = $props['conversations'];
+            $convItem = collect($convs)->firstWhere('id', $conversation->id);
+            $this->assertNotNull($convItem);
+            $this->assertArrayHasKey('last_message_at', $convItem);
+            $this->assertArrayHasKey('last_message_at_relative', $convItem);
+            $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $convItem['last_message_at']);
+            $this->assertStringContainsString('ago', $convItem['last_message_at_relative']);
+
+            // Active conversation metadata checks
+            $activeConv = $props['activeConversation'];
+            $this->assertNotNull($activeConv);
+            $this->assertEquals($conversation->id, $activeConv['id']);
+            $this->assertArrayHasKey('last_message_at', $activeConv);
+            $this->assertArrayHasKey('last_message_at_relative', $activeConv);
+            $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $activeConv['last_message_at']);
+        });
+    }
+
+    public function test_messages_endpoint_metadata_includes_stable_iso_last_message_at(): void
+    {
+        $user1 = User::factory()->create(['name' => 'User One']);
+        $user2 = User::factory()->create(['name' => 'User Two']);
+
+        $conversation = Conversation::create([
+            'type' => 'direct',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user1->id]);
+        ConversationParticipant::create(['conversation_id' => $conversation->id, 'user_id' => $user2->id]);
+
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'sender_id' => $user2->id,
+            'body' => 'Metadata message',
+            'type' => 'text',
+            'created_at' => now()->subMinutes(2),
+        ]);
+
+        $response = $this->actingAs($user1)->getJson(route('chat.messages', [
+            'conversation' => $conversation->id,
+            'include_meta' => 1,
+        ]));
+
+        $response->assertOk();
+        $data = $response->json();
+        $this->assertArrayHasKey('conversation', $data);
+        $this->assertArrayHasKey('last_message_at', $data['conversation']);
+        $this->assertArrayHasKey('last_message_at_relative', $data['conversation']);
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $data['conversation']['last_message_at']);
+    }
 }
