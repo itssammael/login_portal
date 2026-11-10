@@ -182,6 +182,8 @@ class ChatController extends Controller
                 $isMuted = (bool) ($participantPref?->is_muted || $participantPref?->notification_preference === ConversationParticipant::NOTIFICATION_NONE);
                 $notifPref = $participantPref?->notification_preference ?? ($isMuted ? 'none' : 'all');
 
+                $lastMessageDate = $latestMessage ? $latestMessage->created_at : ($conversation->last_message_at ?? $conversation->created_at);
+
                 return [
                     'id' => $conversation->id,
                     'type' => $conversation->type,
@@ -221,7 +223,8 @@ class ChatController extends Controller
                     'is_muted' => $isMuted,
                     'notification_preference' => $notifPref,
                     'is_admin' => $conversation->type === 'group' && ($participantPref?->role === 'admin'),
-                    'last_message_at' => $latestMessage ? $latestMessage->created_at->diffForHumans() : ($conversation->last_message_at?->diffForHumans() ?? $conversation->created_at?->diffForHumans()),
+                    'last_message_at' => $lastMessageDate?->toISOString(),
+                    'last_message_at_relative' => $lastMessageDate?->diffForHumans(),
                     'is_system' => $conversation->type === 'system',
                 ];
             })
@@ -297,7 +300,7 @@ class ChatController extends Controller
                 });
 
                 $activeConversation = array_merge(
-                    $this->formatConversationMetadata($convModel, $currentUser),
+                    $this->formatConversationMetadata($convModel, $currentUser, $latestMessages->get($convModel->id)),
                     [
                         'messages' => $formattedMessages,
                         'has_more' => $hasMoreMessages,
@@ -444,6 +447,7 @@ class ChatController extends Controller
             $participantPref = $participantsPreferences->get($conversation->id);
             $isMuted = (bool) ($participantPref?->is_muted || $participantPref?->notification_preference === ConversationParticipant::NOTIFICATION_NONE);
             $notifPref = $participantPref?->notification_preference ?? ($isMuted ? 'none' : 'all');
+            $lastMessageDate = $latestMessage ? $latestMessage->created_at : ($conversation->last_message_at ?? $conversation->created_at);
 
             return [
                 'id' => $conversation->id,
@@ -482,7 +486,8 @@ class ChatController extends Controller
                 'is_muted' => $isMuted,
                 'notification_preference' => $notifPref,
                 'is_admin' => $conversation->type === 'group' && ($participantPref?->role === 'admin'),
-                'last_message_at' => $latestMessage ? $latestMessage->created_at->diffForHumans() : ($conversation->last_message_at?->diffForHumans() ?? $conversation->created_at?->diffForHumans()),
+                'last_message_at' => $lastMessageDate?->toISOString(),
+                'last_message_at_relative' => $lastMessageDate?->diffForHumans(),
                 'is_system' => $conversation->type === 'system',
             ];
         })->values();
@@ -577,7 +582,7 @@ class ChatController extends Controller
      *
      * @return array<string, mixed>
      */
-    protected function formatConversationMetadata(Conversation $conversation, User $currentUser): array
+    protected function formatConversationMetadata(Conversation $conversation, User $currentUser, ?Message $latestMessage = null): array
     {
         $conversation->loadMissing([
             'users:id,name,username,email,profile_photo_path,last_seen_at,is_banned',
@@ -634,6 +639,15 @@ class ChatController extends Controller
         $isActiveMuted = (bool) ($currentParticipant?->is_muted || $currentParticipant?->notification_preference === ConversationParticipant::NOTIFICATION_NONE);
         $activeNotifPref = $currentParticipant?->notification_preference ?? ($isActiveMuted ? 'none' : 'all');
 
+        if ($latestMessage === null && func_num_args() < 3) {
+            $latestMessage = $conversation->messages()
+                ->visibleToUser($currentUser->id)
+                ->latest('id')
+                ->first();
+        }
+
+        $lastMessageDate = $latestMessage ? $latestMessage->created_at : ($conversation->last_message_at ?? $conversation->created_at);
+
         return [
             'id' => $conversation->id,
             'type' => $conversation->type,
@@ -643,6 +657,8 @@ class ChatController extends Controller
             'is_muted' => $isActiveMuted,
             'notification_preference' => $activeNotifPref,
             'is_admin' => $conversation->type === 'group' && ($currentParticipant?->role === 'admin'),
+            'last_message_at' => $lastMessageDate?->toISOString(),
+            'last_message_at_relative' => $lastMessageDate?->diffForHumans(),
             'created_at' => $conversation->created_at->format('M j, Y'),
             'other_user' => $otherUser ? [
                 'id' => $otherUser->id,
@@ -822,7 +838,8 @@ class ChatController extends Controller
             ])->values()->all(),
             'latest_message' => null,
             'unread_count' => 0,
-            'last_message_at' => $conversation->created_at->diffForHumans(),
+            'last_message_at' => $conversation->created_at->toISOString(),
+            'last_message_at_relative' => $conversation->created_at->diffForHumans(),
             'is_system' => false,
         ];
 
@@ -936,6 +953,8 @@ class ChatController extends Controller
             'is_admin' => ($user->pivot?->role === 'admin'),
         ])->values()->all();
 
+        $lastMessageDate = $latestMessage ? $latestMessage->created_at : ($conversation->last_message_at ?? $conversation->created_at);
+
         $conversationData = [
             'id' => $conversation->id,
             'type' => 'group',
@@ -955,7 +974,8 @@ class ChatController extends Controller
             'unread_count' => 0,
             'is_pinned' => false,
             'is_muted' => false,
-            'last_message_at' => $latestMessage ? $latestMessage->created_at->diffForHumans() : ($conversation->last_message_at?->diffForHumans() ?? $conversation->created_at?->diffForHumans()),
+            'last_message_at' => $lastMessageDate?->toISOString(),
+            'last_message_at_relative' => $lastMessageDate?->diffForHumans(),
             'is_system' => false,
         ];
 
@@ -1271,7 +1291,8 @@ class ChatController extends Controller
                 'created_at' => $messageModel->created_at->diffForHumans(),
                 'is_deleted' => false,
             ],
-            'last_message_at' => $messageModel->created_at->diffForHumans(),
+            'last_message_at' => $messageModel->created_at->toISOString(),
+            'last_message_at_relative' => $messageModel->created_at->diffForHumans(),
             'is_system' => $conversation->type === 'system',
         ];
 

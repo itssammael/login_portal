@@ -74,11 +74,72 @@ const getCachedHasMore = (convId) => {
     return !!entry?.hasMore;
 };
 
-const setCachedMessages = (convId, messages, hasMore = false) => {
+const getCachedLastMessageAt = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return null;
+    const entry = messageCache.get(key);
+    return entry?.lastMessageAt || null;
+};
+
+const extractConversationMetadata = (conv) => {
+    if (!conv || typeof conv !== 'object') return null;
+    return {
+        id: conv.id,
+        type: conv.type,
+        title: conv.title,
+        is_system: conv.is_system,
+        is_pinned: conv.is_pinned,
+        is_muted: conv.is_muted,
+        notification_preference: conv.notification_preference,
+        is_admin: conv.is_admin,
+        last_message_at: conv.last_message_at,
+        last_message_at_relative: conv.last_message_at_relative,
+        created_at: conv.created_at,
+        other_user: conv.other_user ? { ...conv.other_user } : null,
+        participants: Array.isArray(conv.participants) ? conv.participants.map(p => ({ ...p })) : [],
+        shared_attachments: Array.isArray(conv.shared_attachments) ? conv.shared_attachments.map(a => ({ ...a })) : [],
+        total_messages: conv.total_messages ?? null,
+    };
+};
+
+const getCachedMetadata = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return null;
+    const entry = messageCache.get(key);
+    return entry?.metadata ? { ...entry.metadata } : null;
+};
+
+const getCachedNeedsReconciliation = (convId) => {
+    const key = getCacheKey(convId);
+    if (!key || !messageCache.has(key)) return false;
+    const entry = messageCache.get(key);
+    return Boolean(entry?.needsReconciliation);
+};
+
+const markAllCacheNeedsReconciliation = () => {
+    messageCache.forEach((entry) => {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+            entry.needsReconciliation = true;
+        }
+    });
+};
+
+const setCachedMessages = (convId, messages, hasMore = false, lastMessageAt = null, metadata = null) => {
     const key = getCacheKey(convId);
     if (!key || !Array.isArray(messages)) return;
     const newest = messages.slice(-MAX_CACHED_MESSAGES).map(m => ({ ...m }));
-    messageCache.set(key, { messages: newest, hasMore: !!hasMore });
+    const existingLastMessageAt = getCachedLastMessageAt(convId);
+    const existingMetadata = getCachedMetadata(convId);
+    const effectiveHasMore = Boolean(hasMore || messages.length > MAX_CACHED_MESSAGES);
+    const resolvedMetadata = metadata ? extractConversationMetadata(metadata) : existingMetadata;
+
+    messageCache.set(key, {
+        messages: newest,
+        hasMore: effectiveHasMore,
+        lastMessageAt: lastMessageAt ?? existingLastMessageAt ?? null,
+        metadata: resolvedMetadata,
+        needsReconciliation: false,
+    });
 };
 
 const addMessageToCache = (convId, message) => {
@@ -86,9 +147,20 @@ const addMessageToCache = (convId, message) => {
     if (!key || !messageCache.has(key)) return;
     const entry = messageCache.get(key);
     const currentList = Array.isArray(entry) ? entry : entry?.messages || [];
+    const msgTimestamp = message.raw_created_at || message.created_at_iso || null;
     if (!currentList.some(m => m.id === message.id)) {
         const updated = [...currentList, { ...message }].slice(-MAX_CACHED_MESSAGES);
-        messageCache.set(key, { messages: updated, hasMore: !!entry?.hasMore });
+        messageCache.set(key, {
+            messages: updated,
+            hasMore: !!entry?.hasMore,
+            lastMessageAt: msgTimestamp || entry?.lastMessageAt || null,
+        });
+    } else if (msgTimestamp && !Array.isArray(entry)) {
+        const currentEntryTime = entry.lastMessageAt ? new Date(entry.lastMessageAt).getTime() : 0;
+        const newMsgTime = new Date(msgTimestamp).getTime();
+        if (!entry.lastMessageAt || (!isNaN(newMsgTime) && (isNaN(currentEntryTime) || newMsgTime > currentEntryTime))) {
+            entry.lastMessageAt = msgTimestamp;
+        }
     }
 };
 
@@ -128,7 +200,13 @@ const deleteCachedConversation = (convId) => {
 
 // Seed initial active conversation into in-memory cache
 if (props.activeConversation?.id) {
-    setCachedMessages(props.activeConversation.id, props.activeConversation.messages || [], !!props.activeConversation.has_more);
+    setCachedMessages(
+        props.activeConversation.id,
+        props.activeConversation.messages || [],
+        !!props.activeConversation.has_more,
+        props.activeConversation.last_message_at || null,
+        props.activeConversation
+    );
 }
 
 // Clear cache if authenticated user ID changes
@@ -138,8 +216,9 @@ watch(() => currentUser.value?.id, (newUserId, oldUserId) => {
     }
 });
 
-watch(() => props.activeConversation, (active) => {
+watch(() => props.activeConversation, (active, oldActive) => {
     if (active?.id) {
+        const isNewConversation = active.id !== oldActive?.id;
         if (!isLoadingConversation.value || currentFetchConversationId === active.id) {
             activeConversation.value = { ...active };
             activeMessages.value = [...(active.messages || [])];
@@ -147,7 +226,13 @@ watch(() => props.activeConversation, (active) => {
             isLoadingConversation.value = false;
             conversationLoadError.value = null;
 
-            setCachedMessages(active.id, active.messages || [], !!active.has_more);
+            setCachedMessages(
+                active.id,
+                active.messages || [],
+                !!active.has_more,
+                active.last_message_at || null,
+                active
+            );
 
             const currentConv = conversationsList.value.find(c => c.id === active.id);
             if (currentConv) {
@@ -157,6 +242,16 @@ watch(() => props.activeConversation, (active) => {
             }
             updateConversationChannelSubscription(active.id);
             messageForm.body = loadDraft(active.id);
+
+            nextTick(() => {
+                if (active.type === 'direct' && isNewConversation) {
+                    maintainScrollUntilImagesLoad();
+                } else if (isNearBottom()) {
+                    scrollToBottom(false);
+                }
+                resizeComposer();
+                focusComposer();
+            });
         }
     } else if (active === null && !currentFetchConversationId) {
         activeConversation.value = null;
@@ -354,6 +449,8 @@ const onMessagesScroll = () => {
     if (isNearBottom()) {
         hasNewMessagesBelow.value = false;
         newIncomingCount.value = 0;
+    } else if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
     }
 };
 
@@ -364,7 +461,68 @@ const scrollToBottom = (smooth = true) => {
                 top: messagesContainer.value.scrollHeight,
                 behavior: smooth ? 'smooth' : 'auto',
             });
+            if (!smooth) {
+                messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
+            }
         }
+    });
+};
+
+let cancelInitialImageScrollWatcher = null;
+
+const maintainScrollUntilImagesLoad = () => {
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+        cancelInitialImageScrollWatcher = null;
+    }
+
+    scrollToBottom(false);
+
+    nextTick(() => {
+        const container = messagesContainer.value;
+        if (!container) return;
+
+        const images = Array.from(container.querySelectorAll('img')).filter(img => !img.complete);
+        if (images.length === 0) return;
+
+        let stopped = false;
+
+        const stop = () => {
+            if (stopped) return;
+            stopped = true;
+            images.forEach(img => {
+                img.removeEventListener('load', onImageLoad);
+                img.removeEventListener('error', onImageLoad);
+            });
+            container.removeEventListener('wheel', onUserScroll);
+            container.removeEventListener('touchmove', onUserScroll);
+            if (cancelInitialImageScrollWatcher === stop) {
+                cancelInitialImageScrollWatcher = null;
+            }
+        };
+
+        const onUserScroll = () => {
+            stop();
+        };
+
+        const onImageLoad = () => {
+            if (stopped) return;
+            if (isNearBottom()) {
+                scrollToBottom(false);
+            } else {
+                stop();
+            }
+        };
+
+        images.forEach(img => {
+            img.addEventListener('load', onImageLoad, { once: true });
+            img.addEventListener('error', onImageLoad, { once: true });
+        });
+
+        container.addEventListener('wheel', onUserScroll, { passive: true, once: true });
+        container.addEventListener('touchmove', onUserScroll, { passive: true, once: true });
+
+        cancelInitialImageScrollWatcher = stop;
     });
 };
 
@@ -411,7 +569,7 @@ const loadOlderMessages = async () => {
             activeMessages.value = [...response.data.messages, ...activeMessages.value];
             hasMoreMessages.value = !!response.data.has_more;
 
-            setCachedMessages(activeConversation.value.id, activeMessages.value, !!response.data.has_more);
+            setCachedMessages(activeConversation.value.id, activeMessages.value, !!response.data.has_more, null, activeConversation.value);
 
             await nextTick();
             if (container) {
@@ -818,6 +976,21 @@ const formatCurrentTime = () => {
     return `${month} ${day}, ${hours}:${minutes} ${ampm}`;
 };
 
+// Helper to format relative time for sidebar display if relative string is missing
+const formatRelativeTime = (timeStr) => {
+    if (!timeStr) return '';
+    if (typeof timeStr !== 'string') return '';
+    if (timeStr.includes('ago') || timeStr === 'just now') return timeStr;
+    const d = new Date(timeStr);
+    if (isNaN(d.getTime())) return timeStr;
+    const diffSec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (diffSec < 60) return 'just now';
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    if (diffSec < 604800) return `${Math.floor(diffSec / 86400)}d ago`;
+    return d.toLocaleDateString();
+};
+
 // Send a pending message via Inertia post
 const sendPendingMessage = (pendingMsg) => {
     pendingMsg.status = 'sending';
@@ -1080,6 +1253,9 @@ const toggleMessageMenu = (message, event = null) => {
             if (targetRect.right + shiftX > maxRight) {
                 shiftX = maxRight - targetRect.right;
             }
+            if (targetRect.right - MENU_WIDTH + shiftX < minLeft) {
+                shiftX = minLeft - (targetRect.right - MENU_WIDTH);
+            }
         }
         messageMenuShiftX.value = Math.round(shiftX);
     } else if (event && event.clientY) {
@@ -1118,6 +1294,7 @@ const toggleMessageMenu = (message, event = null) => {
             const menuLeft = clientX - MENU_WIDTH;
             if (menuLeft < minLeft) shiftX = minLeft - menuLeft;
             if (clientX + shiftX > maxRight) shiftX = maxRight - clientX;
+            if (clientX - MENU_WIDTH + shiftX < minLeft) shiftX = minLeft - (clientX - MENU_WIDTH);
         }
         messageMenuShiftX.value = Math.round(shiftX);
     } else {
@@ -1585,6 +1762,9 @@ const isPromotingMember = ref(false);
 const showDeleteGroupModal = ref(false);
 const isDeletingGroup = ref(false);
 
+const showLeaveGroupModal = ref(false);
+const isLeavingGroup = ref(false);
+
 const addableContacts = computed(() => {
     if (!activeConversation.value?.participants) return contacts.value;
     const participantIds = new Set(activeConversation.value.participants.map(p => p.id));
@@ -1736,6 +1916,34 @@ const confirmDeleteGroup = () => {
     });
 };
 
+const promptLeaveGroup = () => {
+    showLeaveGroupModal.value = true;
+};
+
+const confirmLeaveGroup = () => {
+    if (!activeConversation.value) return;
+    const convId = activeConversation.value.id;
+    isLeavingGroup.value = true;
+
+    router.post(route('chat.leave-group', convId), {}, {
+        onSuccess: () => {
+            showLeaveGroupModal.value = false;
+            showInfoPanel.value = false;
+            deleteCachedConversation(convId);
+            conversationsList.value = conversationsList.value.filter(c => c.id !== convId);
+            closeActiveConversation(true);
+            showToast('You have left the group');
+        },
+        onError: (err) => {
+            const errorMsg = typeof err === 'string' ? err : (err?.leave || err?.error || err?.message || 'Failed to leave group');
+            showToast(errorMsg);
+        },
+        onFinish: () => {
+            isLeavingGroup.value = false;
+        },
+    });
+};
+
 // Real-Time Echo Subscriptions
 let subscribedConversationId = null;
 
@@ -1754,6 +1962,12 @@ const setupEchoListeners = () => {
             if (states.current === 'connecting' || states.current === 'unavailable') {
                 isReconnecting.value = true;
             } else if (states.current === 'connected') {
+                if (isReconnecting.value) {
+                    markAllCacheNeedsReconciliation();
+                    if (activeConversation.value?.id) {
+                        selectConversation(activeConversation.value, false);
+                    }
+                }
                 isReconnecting.value = false;
             }
         });
@@ -1805,6 +2019,7 @@ const handleUserChannelEvent = (e) => {
             if (e.data?.conversation?.latest_message) {
                 conv.latest_message = e.data.conversation.latest_message;
                 conv.last_message_at = e.data.conversation.last_message_at;
+                conv.last_message_at_relative = e.data.conversation.last_message_at_relative;
             }
             if (activeConversation.value?.id !== e.conversation_id && isFromOther) {
                 conv.unread_count = (conv.unread_count || 0) + 1;
@@ -1901,10 +2116,10 @@ const handleUserChannelEvent = (e) => {
             showToast('This group chat was deleted');
             closeActiveConversation(true);
         }
-    } else if (e.action === 'member_removed' && e.data?.user_id === currentUser.value.id) {
+    } else if ((e.action === 'member_removed' || e.action === 'member_left') && e.data?.user_id === currentUser.value.id) {
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
         if (activeConversation.value?.id === e.conversation_id) {
-            showToast('You were removed from this group');
+            showToast(e.action === 'member_left' ? 'You have left the group' : 'You were removed from this group');
             closeActiveConversation(true);
         }
     }
@@ -1935,6 +2150,15 @@ const handleConversationChannelEvent = (e) => {
             });
 
             addMessageToCache(e.conversation_id, { ...msg, is_sender: isMe });
+
+            const msgTimestamp = msg.raw_created_at || msg.created_at_iso || msg.created_at;
+            if (activeConversation.value?.id === e.conversation_id && msgTimestamp) {
+                activeConversation.value.last_message_at = msgTimestamp;
+            }
+            const activeConvInList = conversationsList.value.find(c => c.id === e.conversation_id);
+            if (activeConvInList && msgTimestamp) {
+                activeConvInList.last_message_at = msgTimestamp;
+            }
 
             if (isMe || isNearBottom()) {
                 scrollToBottom(true);
@@ -2043,10 +2267,10 @@ const handleConversationChannelEvent = (e) => {
                 }
             });
         }
-    } else if (e.action === 'member_removed') {
+    } else if (e.action === 'member_removed' || e.action === 'member_left') {
         if (activeConversation.value && activeConversation.value.id === e.conversation_id) {
             if (e.data?.user_id === currentUser.value.id) {
-                showToast('You were removed from this group');
+                showToast(e.action === 'member_left' ? 'You have left the group' : 'You were removed from this group');
                 closeActiveConversation(true);
                 return;
             }
@@ -2082,6 +2306,10 @@ const handleConversationChannelEvent = (e) => {
 const selectConversation = async (conv, shouldPushState = true) => {
     if (!conv) return;
 
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+    }
+
     if (currentFetchAbortController) {
         currentFetchAbortController.abort();
     }
@@ -2103,9 +2331,35 @@ const selectConversation = async (conv, shouldPushState = true) => {
     };
 
     // 2. Check if conversation has cached messages in memory
-    if (hasCachedConversation(targetId)) {
+    const hasCache = hasCachedConversation(targetId);
+    const isInitialFetch = !hasCache;
+    const cachedLastMessageAt = hasCache ? getCachedLastMessageAt(targetId) : null;
+    const cachedMetadata = hasCache ? getCachedMetadata(targetId) : null;
+    const isNeedsReconciliation = hasCache && getCachedNeedsReconciliation(targetId);
+    const sidebarConv = conversationsList.value.find(c => c.id === targetId);
+    const currentLastMessageAt = conv.last_message_at || sidebarConv?.last_message_at || null;
+    const cachedTime = cachedLastMessageAt ? new Date(cachedLastMessageAt).getTime() : NaN;
+    const currentTime = currentLastMessageAt ? new Date(currentLastMessageAt).getTime() : NaN;
+    const isCacheUpToDate = Boolean(
+        hasCache &&
+        cachedMetadata &&
+        !isNeedsReconciliation &&
+        cachedLastMessageAt &&
+        currentLastMessageAt &&
+        !isNaN(cachedTime) &&
+        !isNaN(currentTime) &&
+        cachedTime === currentTime
+    );
+
+    if (hasCache) {
         activeMessages.value = getCachedMessages(targetId) || [];
         hasMoreMessages.value = getCachedHasMore(targetId);
+        if (cachedMetadata) {
+            activeConversation.value = {
+                ...activeConversation.value,
+                ...cachedMetadata,
+            };
+        }
         isLoadingConversation.value = false;
         nextTick(() => {
             scrollToBottom(false);
@@ -2132,7 +2386,6 @@ const selectConversation = async (conv, shouldPushState = true) => {
     typingUsers.value = {};
 
     // Locally mark conversation as read in sidebar list
-    const sidebarConv = conversationsList.value.find(c => c.id === targetId);
     if (sidebarConv) {
         sidebarConv.unread_count = 0;
         sidebarConv.has_unread_mentions = false;
@@ -2144,6 +2397,19 @@ const selectConversation = async (conv, shouldPushState = true) => {
 
     // Load draft
     messageForm.body = loadDraft(targetId);
+
+    // If cached messages exist and timestamps match, skip fetching messages list!
+    // Restore full conversation metadata and preserve mark-as-read behavior.
+    if (isCacheUpToDate) {
+        if (cachedMetadata) {
+            activeConversation.value = {
+                ...activeConversation.value,
+                ...cachedMetadata,
+            };
+        }
+        markCurrentConversationAsSeen(targetId);
+        return;
+    }
 
     // 3. Asynchronously fetch latest messages & full metadata
     try {
@@ -2220,11 +2486,17 @@ const selectConversation = async (conv, shouldPushState = true) => {
         isLoadingConversation.value = false;
         conversationLoadError.value = null;
 
-        // Keep cache updated with newest 20 messages
-        setCachedMessages(targetId, reconciled, !!response.data.has_more);
+        const freshMetadata = response.data.conversation || activeConversation.value;
+        const freshLastMessageAt = response.data.conversation?.last_message_at || currentLastMessageAt;
+
+        // Keep cache updated with newest 20 messages, fresh timestamp, and metadata
+        setCachedMessages(targetId, reconciled, !!response.data.has_more, freshLastMessageAt, freshMetadata);
 
         nextTick(() => {
-            if (isNearBottom()) {
+            const isDirectChat = (conv?.type === 'direct') || (response.data.conversation?.type === 'direct') || (activeConversation.value?.type === 'direct');
+            if (isInitialFetch && isDirectChat) {
+                maintainScrollUntilImagesLoad();
+            } else if (isNearBottom()) {
                 scrollToBottom(false);
             }
             resizeComposer();
@@ -2267,6 +2539,9 @@ const retryLoadActiveConversation = () => {
 
 // Close active conversation
 const closeActiveConversation = (shouldPushState = true) => {
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+    }
     if (currentFetchAbortController) {
         currentFetchAbortController.abort();
     }
@@ -2315,6 +2590,7 @@ const handleGlobalKeydown = (e) => {
             seenByDetailsMessage.value !== null ||
             memberToRemove.value !== null ||
             memberToPromote.value !== null ||
+            showLeaveGroupModal.value ||
             showDeleteGroupModal.value ||
             showRenameGroupModal.value ||
             showAddMembersModal.value ||
@@ -2369,8 +2645,20 @@ const handleGlobalKeydown = (e) => {
     }
 };
 
-const handleOnline = () => { isOnline.value = true; isReconnecting.value = false; };
-const handleOffline = () => { isOnline.value = false; isReconnecting.value = true; };
+const handleOnline = () => {
+    isOnline.value = true;
+    if (isReconnecting.value) {
+        markAllCacheNeedsReconciliation();
+        if (activeConversation.value?.id) {
+            selectConversation(activeConversation.value, false);
+        }
+    }
+    isReconnecting.value = false;
+};
+const handleOffline = () => {
+    isOnline.value = false;
+    isReconnecting.value = true;
+};
 const handleWindowFocus = () => {
     if (activeConversation.value?.id && document.visibilityState === 'visible') {
         markCurrentConversationAsSeen(activeConversation.value.id);
@@ -2403,6 +2691,9 @@ onMounted(() => {
     nextTick(() => {
         resizeComposer();
         focusComposer();
+        if (activeConversation.value?.type === 'direct') {
+            maintainScrollUntilImagesLoad();
+        }
     });
     window.addEventListener('popstate', handlePopState);
     window.addEventListener('keydown', handleGlobalKeydown, true);
@@ -2414,6 +2705,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+    }
     window.removeEventListener('popstate', handlePopState);
     window.removeEventListener('keydown', handleGlobalKeydown, true);
     window.removeEventListener('online', handleOnline);
@@ -2604,7 +2898,7 @@ onBeforeUnmount(() => {
                                                     <span v-if="conv.is_muted" class="text-gray-400 shrink-0" title="Notifications muted">🔕</span>
                                                 </h4>
                                                 <span class="text-xs text-gray-500 shrink-0 ms-2">
-                                                    {{ conv.latest_message?.created_at || conv.last_message_at }}
+                                                    {{ conv.latest_message?.created_at || conv.last_message_at_relative || formatRelativeTime(conv.last_message_at) }}
                                                 </span>
                                             </div>
 
@@ -3052,7 +3346,7 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Sender -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 max-w-[calc(100vw-24px)] z-40 text-xs overflow-y-auto"
                                                             :class="[
                                                                 messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
                                                                 messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'
@@ -3098,7 +3392,6 @@ onBeforeUnmount(() => {
                                                                 <span>📋 Copy text</span>
                                                             </button>
                                                             <button
-                                                                v-if="activeConversation?.type === 'group'"
                                                                 type="button"
                                                                 @click="openSeenByDetails(message)"
                                                                 class="w-full text-left px-3 py-1 hover:bg-cream-300 text-gray-800 flex items-center space-x-1.5"
@@ -3234,7 +3527,7 @@ onBeforeUnmount(() => {
                                                         <button
                                                             type="button"
                                                             @click.stop="toggleMessageMenu(message, $event)"
-                                                            class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                                                            class="p-1.5 rounded-full text-forest-900/60 hover:text-forest-900 hover:bg-cream-400/50 transition"
                                                             :class="activeMessageMenuId === message.id ? 'opacity-100 bg-cream-400/50 text-forest-900' : ''"
                                                             aria-label="Message options"
                                                         >
@@ -3246,7 +3539,7 @@ onBeforeUnmount(() => {
                                                         <!-- Action Dropdown for Receiver -->
                                                         <div
                                                             v-if="activeMessageMenuId === message.id"
-                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 z-40 text-xs overflow-y-auto"
+                                                            class="absolute bg-cream-100 shadow-xl border border-cream-500/50 rounded-xl py-1.5 w-44 max-w-[calc(100vw-24px)] z-40 text-xs overflow-y-auto"
                                                             :class="[
                                                                 messageMenuPlacement === 'bottom' ? 'top-8' : 'bottom-7',
                                                                 messageMenuHorizontalPlacement === 'left' ? 'left-0' : 'right-0'
@@ -3712,6 +4005,15 @@ onBeforeUnmount(() => {
                                                         class="px-3 py-1.5 text-xs font-semibold rounded-xl border border-cream-500/60 bg-cream-100 hover:bg-cream-300 transition flex items-center space-x-1 text-gray-800"
                                                     >
                                                         <span>{{ activeConversation.is_muted ? '🔕 Muted' : '🔔 Mute' }}</span>
+                                                    </button>
+                                                    <button
+                                                        v-if="activeConversation.type === 'group'"
+                                                        type="button"
+                                                        @click="promptLeaveGroup"
+                                                        class="px-3 py-1.5 text-xs font-semibold rounded-xl border border-red-300 bg-red-50 hover:bg-red-100 transition flex items-center space-x-1 text-red-700 cursor-pointer"
+                                                        title="Leave Group"
+                                                    >
+                                                        <span>🚪 Leave Group</span>
                                                     </button>
                                                     <button
                                                         v-if="activeConversation.type === 'group' && activeConversation.is_admin"
@@ -4516,6 +4818,48 @@ onBeforeUnmount(() => {
                         class="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
                     >
                         {{ isPromotingMember ? 'Promoting...' : 'Promote to Admin' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Leave Group Confirmation Dialog Modal -->
+        <DialogModal :show="showLeaveGroupModal" max-width="sm" @close="showLeaveGroupModal = false">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-red-100 text-red-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Leave Group Chat</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to leave <strong class="text-gray-900">&ldquo;{{ activeConversation?.title }}&rdquo;</strong>? You will no longer be able to view or send messages in this conversation.
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="showLeaveGroupModal = false"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="isLeavingGroup"
+                        @click="confirmLeaveGroup"
+                        class="px-4 py-2 bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isLeavingGroup ? 'Leaving...' : 'Leave Group' }}
                     </button>
                 </div>
             </template>
