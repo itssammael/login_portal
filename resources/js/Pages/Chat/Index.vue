@@ -216,8 +216,9 @@ watch(() => currentUser.value?.id, (newUserId, oldUserId) => {
     }
 });
 
-watch(() => props.activeConversation, (active) => {
+watch(() => props.activeConversation, (active, oldActive) => {
     if (active?.id) {
+        const isNewConversation = active.id !== oldActive?.id;
         if (!isLoadingConversation.value || currentFetchConversationId === active.id) {
             activeConversation.value = { ...active };
             activeMessages.value = [...(active.messages || [])];
@@ -241,6 +242,16 @@ watch(() => props.activeConversation, (active) => {
             }
             updateConversationChannelSubscription(active.id);
             messageForm.body = loadDraft(active.id);
+
+            nextTick(() => {
+                if (active.type === 'direct' && isNewConversation) {
+                    maintainScrollUntilImagesLoad();
+                } else if (isNearBottom()) {
+                    scrollToBottom(false);
+                }
+                resizeComposer();
+                focusComposer();
+            });
         }
     } else if (active === null && !currentFetchConversationId) {
         activeConversation.value = null;
@@ -438,6 +449,8 @@ const onMessagesScroll = () => {
     if (isNearBottom()) {
         hasNewMessagesBelow.value = false;
         newIncomingCount.value = 0;
+    } else if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
     }
 };
 
@@ -448,7 +461,68 @@ const scrollToBottom = (smooth = true) => {
                 top: messagesContainer.value.scrollHeight,
                 behavior: smooth ? 'smooth' : 'auto',
             });
+            if (!smooth) {
+                messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
+            }
         }
+    });
+};
+
+let cancelInitialImageScrollWatcher = null;
+
+const maintainScrollUntilImagesLoad = () => {
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+        cancelInitialImageScrollWatcher = null;
+    }
+
+    scrollToBottom(false);
+
+    nextTick(() => {
+        const container = messagesContainer.value;
+        if (!container) return;
+
+        const images = Array.from(container.querySelectorAll('img')).filter(img => !img.complete);
+        if (images.length === 0) return;
+
+        let stopped = false;
+
+        const stop = () => {
+            if (stopped) return;
+            stopped = true;
+            images.forEach(img => {
+                img.removeEventListener('load', onImageLoad);
+                img.removeEventListener('error', onImageLoad);
+            });
+            container.removeEventListener('wheel', onUserScroll);
+            container.removeEventListener('touchmove', onUserScroll);
+            if (cancelInitialImageScrollWatcher === stop) {
+                cancelInitialImageScrollWatcher = null;
+            }
+        };
+
+        const onUserScroll = () => {
+            stop();
+        };
+
+        const onImageLoad = () => {
+            if (stopped) return;
+            if (isNearBottom()) {
+                scrollToBottom(false);
+            } else {
+                stop();
+            }
+        };
+
+        images.forEach(img => {
+            img.addEventListener('load', onImageLoad, { once: true });
+            img.addEventListener('error', onImageLoad, { once: true });
+        });
+
+        container.addEventListener('wheel', onUserScroll, { passive: true, once: true });
+        container.addEventListener('touchmove', onUserScroll, { passive: true, once: true });
+
+        cancelInitialImageScrollWatcher = stop;
     });
 };
 
@@ -2201,6 +2275,10 @@ const handleConversationChannelEvent = (e) => {
 const selectConversation = async (conv, shouldPushState = true) => {
     if (!conv) return;
 
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+    }
+
     if (currentFetchAbortController) {
         currentFetchAbortController.abort();
     }
@@ -2223,6 +2301,7 @@ const selectConversation = async (conv, shouldPushState = true) => {
 
     // 2. Check if conversation has cached messages in memory
     const hasCache = hasCachedConversation(targetId);
+    const isInitialFetch = !hasCache;
     const cachedLastMessageAt = hasCache ? getCachedLastMessageAt(targetId) : null;
     const cachedMetadata = hasCache ? getCachedMetadata(targetId) : null;
     const isNeedsReconciliation = hasCache && getCachedNeedsReconciliation(targetId);
@@ -2383,7 +2462,10 @@ const selectConversation = async (conv, shouldPushState = true) => {
         setCachedMessages(targetId, reconciled, !!response.data.has_more, freshLastMessageAt, freshMetadata);
 
         nextTick(() => {
-            if (isNearBottom()) {
+            const isDirectChat = (conv?.type === 'direct') || (response.data.conversation?.type === 'direct') || (activeConversation.value?.type === 'direct');
+            if (isInitialFetch && isDirectChat) {
+                maintainScrollUntilImagesLoad();
+            } else if (isNearBottom()) {
                 scrollToBottom(false);
             }
             resizeComposer();
@@ -2426,6 +2508,9 @@ const retryLoadActiveConversation = () => {
 
 // Close active conversation
 const closeActiveConversation = (shouldPushState = true) => {
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+    }
     if (currentFetchAbortController) {
         currentFetchAbortController.abort();
     }
@@ -2574,6 +2659,9 @@ onMounted(() => {
     nextTick(() => {
         resizeComposer();
         focusComposer();
+        if (activeConversation.value?.type === 'direct') {
+            maintainScrollUntilImagesLoad();
+        }
     });
     window.addEventListener('popstate', handlePopState);
     window.addEventListener('keydown', handleGlobalKeydown, true);
@@ -2585,6 +2673,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    if (cancelInitialImageScrollWatcher) {
+        cancelInitialImageScrollWatcher();
+    }
     window.removeEventListener('popstate', handlePopState);
     window.removeEventListener('keydown', handleGlobalKeydown, true);
     window.removeEventListener('online', handleOnline);
