@@ -2592,4 +2592,171 @@ class ChatTest extends TestCase
         $data = $response->json();
         $this->assertEquals($deletedLatestMessage->created_at->toISOString(), $data['conversation']['last_message_at']);
     }
+
+    public function test_regular_member_can_leave_group_chat_and_loses_access(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create([
+            'type' => 'group',
+            'title' => 'Project Alpha',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin->id,
+            'role' => 'admin',
+        ]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $member->id,
+            'role' => 'member',
+        ]);
+
+        $response = $this->actingAs($member)->post(route('chat.leave-group', $conversation));
+        $response->assertRedirect(route('chat.index'));
+        $response->assertSessionHas('success', 'You have left the group.');
+
+        $this->assertDatabaseMissing('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $member->id,
+        ]);
+
+        Event::assertDispatched(MessageSent::class, function (MessageSent $event) use ($conversation, $member, $admin): bool {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'member_left'
+                && $event->messageData['user_id'] === $member->id
+                && in_array($admin->id, $event->recipientUserIds ?? []);
+        });
+
+        // The former member loses access to the conversation messages
+        $this->actingAs($member)
+            ->getJson(route('chat.messages', $conversation))
+            ->assertStatus(403);
+    }
+
+    public function test_admin_can_leave_group_chat_when_another_admin_remains(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $admin1 = User::factory()->create(['name' => 'Admin One']);
+        $admin2 = User::factory()->create(['name' => 'Admin Two']);
+        $member = User::factory()->create(['name' => 'Member User']);
+
+        $conversation = Conversation::create([
+            'type' => 'group',
+            'title' => 'Co-Admins Guild',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin1->id,
+            'role' => 'admin',
+        ]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin2->id,
+            'role' => 'admin',
+        ]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $member->id,
+            'role' => 'member',
+        ]);
+
+        $response = $this->actingAs($admin1)->post(route('chat.leave-group', $conversation));
+        $response->assertRedirect(route('chat.index'));
+        $response->assertSessionHas('success', 'You have left the group.');
+
+        $this->assertDatabaseMissing('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin1->id,
+        ]);
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin2->id,
+            'role' => 'admin',
+        ]);
+
+        Event::assertDispatched(MessageSent::class, function (MessageSent $event) use ($conversation, $admin1, $admin2, $member): bool {
+            return $event->conversationId === $conversation->id
+                && $event->action === 'member_left'
+                && $event->messageData['user_id'] === $admin1->id
+                && $event->messageData['user_name'] === $admin1->name
+                && in_array($admin2->id, $event->recipientUserIds ?? [])
+                && in_array($member->id, $event->recipientUserIds ?? []);
+        });
+    }
+
+    public function test_only_admin_cannot_leave_group_chat_and_membership_is_preserved(): void
+    {
+        Event::fake([MessageSent::class]);
+
+        $admin = User::factory()->create();
+        $member = User::factory()->create();
+
+        $conversation = Conversation::create([
+            'type' => 'group',
+            'title' => 'Sole Admin Group',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin->id,
+            'role' => 'admin',
+        ]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $member->id,
+            'role' => 'member',
+        ]);
+
+        $response = $this->actingAs($admin)->post(route('chat.leave-group', $conversation));
+        $response->assertSessionHasErrors([
+            'leave' => 'You are the only admin in this group. You must promote another member to admin before leaving.',
+        ]);
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $admin->id,
+            'role' => 'admin',
+        ]);
+
+        Event::assertNotDispatched(MessageSent::class);
+    }
+
+    public function test_user_cannot_leave_non_group_conversation(): void
+    {
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        $conversation = Conversation::create([
+            'type' => 'direct',
+            'last_message_at' => now(),
+        ]);
+
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $user1->id,
+        ]);
+        ConversationParticipant::create([
+            'conversation_id' => $conversation->id,
+            'user_id' => $user2->id,
+        ]);
+
+        $response = $this->actingAs($user1)->post(route('chat.leave-group', $conversation));
+        $response->assertStatus(403);
+
+        $this->assertDatabaseHas('conversation_participants', [
+            'conversation_id' => $conversation->id,
+            'user_id' => $user1->id,
+        ]);
+    }
 }

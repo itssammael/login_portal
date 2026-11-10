@@ -1762,6 +1762,9 @@ const isPromotingMember = ref(false);
 const showDeleteGroupModal = ref(false);
 const isDeletingGroup = ref(false);
 
+const showLeaveGroupModal = ref(false);
+const isLeavingGroup = ref(false);
+
 const addableContacts = computed(() => {
     if (!activeConversation.value?.participants) return contacts.value;
     const participantIds = new Set(activeConversation.value.participants.map(p => p.id));
@@ -1909,6 +1912,34 @@ const confirmDeleteGroup = () => {
         },
         onFinish: () => {
             isDeletingGroup.value = false;
+        },
+    });
+};
+
+const promptLeaveGroup = () => {
+    showLeaveGroupModal.value = true;
+};
+
+const confirmLeaveGroup = () => {
+    if (!activeConversation.value) return;
+    const convId = activeConversation.value.id;
+    isLeavingGroup.value = true;
+
+    router.post(route('chat.leave-group', convId), {}, {
+        onSuccess: () => {
+            showLeaveGroupModal.value = false;
+            showInfoPanel.value = false;
+            deleteCachedConversation(convId);
+            conversationsList.value = conversationsList.value.filter(c => c.id !== convId);
+            closeActiveConversation(true);
+            showToast('You have left the group');
+        },
+        onError: (err) => {
+            const errorMsg = typeof err === 'string' ? err : (err?.leave || err?.error || err?.message || 'Failed to leave group');
+            showToast(errorMsg);
+        },
+        onFinish: () => {
+            isLeavingGroup.value = false;
         },
     });
 };
@@ -2085,10 +2116,10 @@ const handleUserChannelEvent = (e) => {
             showToast('This group chat was deleted');
             closeActiveConversation(true);
         }
-    } else if (e.action === 'member_removed' && e.data?.user_id === currentUser.value.id) {
+    } else if ((e.action === 'member_removed' || e.action === 'member_left') && e.data?.user_id === currentUser.value.id) {
         conversationsList.value = conversationsList.value.filter(c => c.id !== e.conversation_id);
         if (activeConversation.value?.id === e.conversation_id) {
-            showToast('You were removed from this group');
+            showToast(e.action === 'member_left' ? 'You have left the group' : 'You were removed from this group');
             closeActiveConversation(true);
         }
     }
@@ -2236,10 +2267,10 @@ const handleConversationChannelEvent = (e) => {
                 }
             });
         }
-    } else if (e.action === 'member_removed') {
+    } else if (e.action === 'member_removed' || e.action === 'member_left') {
         if (activeConversation.value && activeConversation.value.id === e.conversation_id) {
             if (e.data?.user_id === currentUser.value.id) {
-                showToast('You were removed from this group');
+                showToast(e.action === 'member_left' ? 'You have left the group' : 'You were removed from this group');
                 closeActiveConversation(true);
                 return;
             }
@@ -2559,6 +2590,7 @@ const handleGlobalKeydown = (e) => {
             seenByDetailsMessage.value !== null ||
             memberToRemove.value !== null ||
             memberToPromote.value !== null ||
+            showLeaveGroupModal.value ||
             showDeleteGroupModal.value ||
             showRenameGroupModal.value ||
             showAddMembersModal.value ||
@@ -3976,6 +4008,15 @@ onBeforeUnmount(() => {
                                                         <span>{{ activeConversation.is_muted ? '🔕 Muted' : '🔔 Mute' }}</span>
                                                     </button>
                                                     <button
+                                                        v-if="activeConversation.type === 'group'"
+                                                        type="button"
+                                                        @click="promptLeaveGroup"
+                                                        class="px-3 py-1.5 text-xs font-semibold rounded-xl border border-red-300 bg-red-50 hover:bg-red-100 transition flex items-center space-x-1 text-red-700 cursor-pointer"
+                                                        title="Leave Group"
+                                                    >
+                                                        <span>🚪 Leave Group</span>
+                                                    </button>
+                                                    <button
                                                         v-if="activeConversation.type === 'group' && activeConversation.is_admin"
                                                         type="button"
                                                         @click="promptDeleteGroup"
@@ -4778,6 +4819,48 @@ onBeforeUnmount(() => {
                         class="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
                     >
                         {{ isPromotingMember ? 'Promoting...' : 'Promote to Admin' }}
+                    </button>
+                </div>
+            </template>
+        </DialogModal>
+
+        <!-- Leave Group Confirmation Dialog Modal -->
+        <DialogModal :show="showLeaveGroupModal" max-width="sm" @close="showLeaveGroupModal = false">
+            <template #title>
+                <div class="flex items-center space-x-3 pt-2">
+                    <div class="size-10 rounded-xl bg-red-100 text-red-800 flex items-center justify-center shrink-0">
+                        <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-gray-900">Leave Group Chat</h3>
+                    </div>
+                </div>
+            </template>
+
+            <template #content>
+                <p class="text-sm text-gray-700 leading-relaxed">
+                    Are you sure you want to leave <strong class="text-gray-900">&ldquo;{{ activeConversation?.title }}&rdquo;</strong>? You will no longer be able to view or send messages in this conversation.
+                </p>
+            </template>
+
+            <template #footer>
+                <div class="flex items-center space-x-2">
+                    <button
+                        type="button"
+                        @click="showLeaveGroupModal = false"
+                        class="px-4 py-2 bg-cream-100 hover:bg-cream-300 text-gray-700 rounded-xl text-xs font-bold border border-cream-400 transition cursor-pointer"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="isLeavingGroup"
+                        @click="confirmLeaveGroup"
+                        class="px-4 py-2 bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                        {{ isLeavingGroup ? 'Leaving...' : 'Leave Group' }}
                     </button>
                 </div>
             </template>
