@@ -1357,7 +1357,7 @@ const printDocsPdf = (docData) => {
                             </div>
                         </div>
                         <div class="text-[11px] text-gray-600 bg-white/60 p-2 rounded-lg border border-cream-200">
-                            <strong>OAuth 2.0 Base URL:</strong> <code class="font-mono text-forest-900">{{ activeClientDocData.portalUrl }}</code> | <strong>Authorize Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/sso/authorize</code> | <strong>Token Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/api/sso/token</code> | <strong>User Info Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/api/user</code>
+                            <strong>OAuth 2.0 Base URL:</strong> <code class="font-mono text-forest-900">{{ activeClientDocData.portalUrl }}</code> | <strong>Authorize Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/sso/authorize</code> | <strong>Token &amp; Identity Endpoint:</strong> <code class="font-mono">{{ activeClientDocData.portalUrl }}/api/sso/token</code> | <strong>Client Bind Endpoint:</strong> <code class="font-mono">/api/sso/verify-credentials</code>
                         </div>
                     </div>
 

@@ -1,414 +1,1214 @@
-# LGUNET Portal — Single Sign-On (SSO) Integration Guide
+# LGUNET Portal — Single Sign-On (SSO) Client Integration Guides
 
-This document provides a comprehensive technical guide for developers, system administrators, and integration teams connecting relying party applications (SSO Clients) to **LGUNET Portal** (`login_portal`).
+This document is the authoritative technical reference for integrating relying client applications with **LGUNET Portal** (`login_portal`). Every endpoint, parameter, database requirement, and authentication behavior documented here is verified directly against the SSO server implementation.
 
----
+It contains two complete, synchronized guides that implement the exact same integration contract:
 
-## 1. Architecture Overview
-
-LGUNET Portal operates as a centralized **Identity Provider (IdP)** implementing an **OAuth 2.0 Authorization Code Grant** with **PKCE (RFC 7636)** support.
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              LGUNET Portal                              │
-│                      (Central Identity Provider)                        │
-│                                                                         │
-│  ┌──────────────────────┐               ┌───────────────────────────┐   │
-│  │ Laravel Jetstream    │──────Auth────►│ LGUNET SSO Layer          │   │
-│  │ User Authentication  │               │ Code & Token Authority    │   │
-│  └──────────────────────┘               └─────────────┬─────────────┘   │
-└───────────────────────────────────────────────────────┼─────────────────┘
-                                                        │
-                      ┌─────────────────────────────────┼─────────────────────────────────┐
-                      │                                 │                                 │
-                      ▼                                 ▼                                 ▼
-         ┌─────────────────────────┐       ┌─────────────────────────┐       ┌─────────────────────────┐
-         │       SSO Client        │       │       SSO Client        │       │       SSO Client        │
-         │       TeamTracker       │       │       GIS Portal        │       │      Budget System      │
-         │   http://teamtracker    │       │    http://gisportal     │       │    http://budgetsys     │
-         └─────────────────────────┘       └─────────────────────────┘       └─────────────────────────┘
-```
-
-### Key Architectural Principles
-- **No Shared Passwords**: User passwords never leave LGUNET Portal and are never transmitted to relying client applications.
-- **Explicit Account Binding**: Users must explicitly bind their LGUNET Portal account to an external client application account before SSO authorization is granted.
-- **Short-Lived Authorization Codes**: Codes expire in 2 minutes and are strictly single-use (replay protected).
-- **Backchannel Token Exchange**: Client secrets are exchanged exclusively via direct server-to-server requests over HTTPS/HTTP, never via browser query parameters.
-- **Preservation of Jetstream**: The core Jetstream/Fortify authentication architecture (session cookies, 2FA, password management) remains untouched and acts as the root authentication authority.
+1. **[Guide 1: Step-by-Step Manual Guide](#guide-1-step-by-step-manual-guide)** — Execution-ordered instructions from client registration and schema setup to verified login, account binding, logout, production deployment, and automated testing.
+2. **[Guide 2: Integration using AI Agent](#guide-2-integration-using-ai-agent)** — A self-contained, ready-to-copy prompt for autonomous coding agents working in a separate client repository without access to the SSO server source code.
 
 ---
 
-## 2. Database Schema
+## 1. Architecture Overview & Protocol Terminology
 
-### `sso` (Registered SSO Clients)
-| Column | Type | Description |
+LGUNET Portal operates as a centralized **Identity Provider (IdP)** implementing the **OAuth 2.0 Authorization Code Grant (RFC 6749)** with **PKCE (RFC 7636)** and **OpenID Connect (OIDC)-style `nonce` and identity assertions**, layered on top of **Laravel Jetstream** and **Laravel Sanctum**.
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         LGUNET Portal [SSO Server]                           │
+│                        (Central Identity Provider)                           │
+│                                                                              │
+│  ┌────────────────────────┐                ┌──────────────────────────────┐  │
+│  │ Jetstream / Fortify    │─────Session───►│ SsoProviderController        │  │
+│  │ Authentication & 2FA   │                │ /sso/authorize & /sso/token  │  │
+│  └────────────────────────┘                └──────────────┬───────────────┘  │
+│                                                           │                  │
+│  ┌────────────────────────┐                               │                  │
+│  │ ConnectedSystemsCtrl   │◄───Account Binding────────────┤                  │
+│  │ /connected-systems     │    (sso_user_bindings)        │                  │
+│  └───────────┬────────────┘                               │                  │
+└──────────────┼────────────────────────────────────────────┼──────────────────┘
+               │                                            │
+    1. Verify Target Credentials                 2. OAuth 2.0 Auth Code Flow
+    POST /api/sso/verify-credentials             GET /sso/authorize (Frontchannel)
+               │                                 POST /api/sso/token (Backchannel)
+               ▼                                            ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                      Relying Party [Client Application]                      │
+│     (/sso/redirect, /sso/callback, /api/sso/verify-credentials, /logout)     │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Protocol Terminology (Introduced Here and Used Throughout Both Guides)
+
+- **Identity Provider (IdP / `[SSO Server]`)**: The central `login_portal` application that authenticates users, manages client credentials, verifies account bindings, and issues authorization codes and identity assertions.
+- **Relying Party (RP / `[Client Application]`)**: The external web application that delegates authentication to the `[SSO Server]` while maintaining its own local database, user accounts, roles, and session lifecycle.
+- **OAuth 2.0 Authorization Code Grant (`response_type=code`, `grant_type=authorization_code`)**: A two-leg authentication flow:
+  1. **Frontchannel (Browser Redirect)**: The client redirects the user's browser to `GET /sso/authorize`. After authenticating the user and confirming their account binding, the `[SSO Server]` redirects the browser back to the client's `redirect_uri` with a short-lived, single-use `code`.
+  2. **Backchannel (Server-to-Server POST)**: The client backend exchanges the `code` and confidential `client_secret` via `POST /api/sso/token` (or `POST /sso/token`) over a direct server-to-server HTTP call and receives the verified `user` identity payload directly in the JSON response.
+- **CSRF `state` Parameter**: A cryptographically random string generated by the `[Client Application]` before redirecting to `/sso/authorize`, stored in the user's local session, and returned unchanged by the `[SSO Server]` on the callback URL. Comparing the returned `state` with the session value using constant-time `hash_equals()` and immediately invalidating it prevents Cross-Site Request Forgery (CSRF) and login-fixation attacks.
+- **PKCE (Proof Key for Code Exchange, RFC 7636)**: A defense against authorization-code interception. The client generates a high-entropy random `code_verifier`, hashes it with SHA-256 and Base64URL encoding (`code_challenge_method=S256`) to produce a `code_challenge` sent to `/sso/authorize`, and later sends the raw `code_verifier` to `/api/sso/token`. When `code_challenge` is present on an authorization code, `SsoAuthorizationCode::verifyPkce()` strictly requires a matching `code_verifier` during token exchange.
+- **`nonce` (Number Used Once)**: An optional random string generated by the client, stored in the client session, passed to `GET /sso/authorize`, persisted on the authorization code record, and echoed back in the `POST /api/sso/token` JSON response (`nonce`) to bind the token exchange response to the initiating browser session.
+- **Account Binding (`sso_user_bindings`)**: The verified association between a Portal user (`user_id`) and their account in a specific client application (`external_user_id` and `external_username`). In this SSO server's implementation, **an active account binding is required before `/sso/authorize` issues an authorization code**.
+
+---
+
+## 2. Prerequisites & Supported Versions
+
+### SSO Server Stack (Reference Truth)
+The central `[SSO Server]` runs on:
+- **PHP**: `^8.3`
+- **Laravel Framework**: `^13.17` (v13.40.0 installed)
+- **Authentication & API**: `laravel/jetstream` `^5.5` (v5.5.3), `laravel/sanctum` `^4.0` (v4.3.3)
+- **Frontend Stack**: `inertiajs/inertia-laravel` `^2.0` (v2.0.28), `@inertiajs/vue3` `^2.0`, `vue` `^3.3.13`, `tightenco/ziggy` `^2.0` (v2.6.5), `tailwindcss` `^3.4.0`, `vite` `^8.0.0`
+- **Testing**: `phpunit/phpunit` `^12.5.12` (v12.5.43)
+
+### Client Application Prerequisites
+A `[Client Application]` can be built with any server-side or hybrid web stack capable of:
+1. Issuing HTTP `302` redirects.
+2. Storing server-side session state (or signed `HttpOnly` cookies with `SameSite=Lax`) across external redirects.
+3. Making server-to-server `application/x-www-form-urlencoded` or `application/json` `POST` requests.
+
+| Client Stack | Supported Versions | Required Packages / Extensions |
 |---|---|---|
-| `id` | `BIGINT UNSIGNED (PK)` | Primary identifier |
-| `name` | `VARCHAR(255)` | Human-readable application name (e.g., "TeamTracker") |
-| `description` | `TEXT (NULL)` | Purpose and notes regarding the application |
-| `client_id` | `VARCHAR(255) (UNIQUE)` | Public client identifier (e.g., `client_a1b2c3d4e5f6g7h8`) |
-| `client_secret` | `VARCHAR(255)` | Secret key for backchannel authentication (hidden from JSON) |
-| `redirect_uri` | `TEXT` | Authorized callback URL(s), comma-separated |
-| `api_url` | `VARCHAR(500) (NULL)` | Explicit base API URL of client for account verification |
-| `icon` | `VARCHAR(255) (NULL)` | Relative path to uploaded icon file |
-| `framework` | `VARCHAR(100)` | Client technology stack preset (e.g., `laravel_inertia`) |
-| `created_by` | `BIGINT UNSIGNED (FK)` | Administrator who registered the client |
-| `is_active` | `BOOLEAN (DEFAULT TRUE)` | Whether the client is allowed to authenticate |
-| `last_used_at` | `TIMESTAMP (NULL)` | Timestamp of most recent token exchange |
-| `created_at` | `TIMESTAMP` | Record creation timestamp |
-| `updated_at` | `TIMESTAMP` | Record update timestamp |
-
-### `sso_authorization_codes` (Temporary One-Time Codes)
-| Column | Type | Description |
-|---|---|---|
-| `id` | `BIGINT UNSIGNED (PK)` | Primary identifier |
-| `code` | `VARCHAR(255) (UNIQUE)` | SHA-256 hash of the issued authorization code |
-| `client_id` | `VARCHAR(255)` | SSO client identifier |
-| `user_id` | `BIGINT UNSIGNED (FK)` | Authenticated LGUNET Portal user ID |
-| `redirect_uri` | `TEXT` | Redirect URI specified during the authorization request |
-| `nonce` | `VARCHAR(255) (NULL)` | Optional client nonce for replay prevention |
-| `code_challenge` | `VARCHAR(255) (NULL)` | PKCE code challenge |
-| `code_challenge_method` | `VARCHAR(255)` | PKCE method (`S256` or `plain`) |
-| `expires_at` | `TIMESTAMP` | Expiration timestamp (2 minutes from issue) |
-| `used_at` | `TIMESTAMP (NULL)` | Invalidation timestamp set immediately upon exchange |
-| `created_at` | `TIMESTAMP` | Record creation timestamp |
-
-### `sso_user_bindings` (User Identity Associations)
-| Column | Type | Description |
-|---|---|---|
-| `id` | `BIGINT UNSIGNED (PK)` | Primary identifier |
-| `user_id` | `BIGINT UNSIGNED (FK)` | LGUNET Portal user ID |
-| `client_id` | `VARCHAR(255)` | Registered SSO Client ID |
-| `external_user_id` | `VARCHAR(255)` | User ID in the external client application |
-| `external_username` | `VARCHAR(255)` | Username / Email in the external client application |
-| `is_verified` | `BOOLEAN (DEFAULT TRUE)` | Verified ownership flag |
-| `last_login_at` | `TIMESTAMP (NULL)` | Last time user launched SSO into this client |
-| `created_at` | `TIMESTAMP` | Binding timestamp |
-| `updated_at` | `TIMESTAMP` | Binding update timestamp |
+| **Laravel (Inertia / Livewire / Blade)** | PHP `^8.2` or `^8.3`, Laravel `10.x`, `11.x`, `12.x`, or `13.x` | Built-in `Illuminate\Support\Facades\Http` (`guzzlehttp/guzzle`), `ext-json`, `ext-openssl`, `ext-pdo`. **No third-party OAuth package (e.g., Socialite) is required.** |
+| **Native PHP + Vanilla JS / jQuery** | PHP `8.1+` | `ext-curl`, `ext-pdo`, `ext-json`, `ext-session`, `ext-openssl` |
+| **Node.js / Express** | Node.js `18+`, `20+`, or `22+` | `express`, `express-session`, `axios` (or native `fetch`), `dotenv` |
+| **Python / Django** | Python `3.10+`, Django `4.2 LTS` or `5.x` | `requests`, `django.contrib.auth`, `django.contrib.sessions` |
+| **ASP.NET Core (C#)** | .NET `8.0` or `9.0` | `Microsoft.AspNetCore.Authentication.Cookies`, `Microsoft.AspNetCore.Session`, `Microsoft.EntityFrameworkCore` |
+| **Spring Boot (Java)** | Java `17+` or `21+`, Spring Boot `3.x` | `spring-boot-starter-web`, `spring-boot-starter-security`, `spring-boot-starter-data-jpa` |
+| **Nuxt 3 / Node.js** | Nuxt `3.x` (Nitro server) | Built-in `h3` (`setCookie`, `getCookie`, `sendRedirect`) and `$fetch` |
+| **Vue / React SPA + Backend Proxy** | Vue `3.x` or React `18+` with any backend API | Browser Web Crypto API + **mandatory backend API proxy** to hold `client_secret` |
 
 ---
 
-## 3. SSO Client Registration (Administrators)
+## 3. Verified SSO Server Integration Contract
 
-Administrators manage SSO Clients via the Admin Panel:
-`GET /admin/sso` or `GET /admin/sso-clients`
+### 3.1 Client Registration & Credentials (`[SSO Server]`)
+Administrators register and manage client applications in the `[SSO Server]` Admin Panel at:
+- `GET /admin/sso` (alias: `GET /admin/sso-clients`)
+- Controller: `App\Http\Controllers\Admin\SsoPortalController`
+- Model: `App\Models\Sso` (extends `App\Models\SsoClient`, table `sso`)
 
-### Registration Fields:
-1. **Application Name**: Display name for the client (e.g., `GIS Portal`).
-2. **Client ID**: Unique alphanumeric identifier (e.g., `client_7f2b1c4e9a0d3f81`).
-3. **Redirect URI**: Strictly checked callback URL (e.g., `http://gisportal.local/sso/callback`). Multiple URIs can be comma-separated.
-4. **System Base URL (Optional)**: Root URL of the client system used for account verification (`/api/sso/verify-credentials`).
-5. **Framework Stack**: Preset for custom documentation export.
-6. **Icon**: Custom PNG/JPEG application logo.
-
-### Security Protocol for Client Secrets:
-- Client secrets are **cryptographically random (64 characters)** generated via `Str::random(64)`.
-- Client secrets are **never sent in listing responses** (`$hidden = ['client_secret']`).
-- When created or rotated, the plaintext secret is displayed **once** in a secure modal.
-- Administrators must copy the secret and store it in the client application's `.env` or vault.
-
----
-
-## 4. SSO Authorization Flow (Browser Redirect)
-
-### Endpoint: `GET /sso/authorize`
-
-```
-User Browser                  SSO Client                LGUNET Portal
-     │                            │                           │
-     │── 1. Click SSO Button ────►│                           │
-     │                            │── 2. Build Auth URL ─────►│
-     │◄── 3. 302 Redirect ────────│                           │
-     │                                                        │
-     │── 4. GET /sso/authorize ──────────────────────────────►│
-     │                                                        │
-     │   [If unauthenticated: prompt login & preserve state]  │
-     │   [If unbound: prompt account binding & preserve state]│
-     │                                                        │
-     │◄── 5. 302 Redirect back to callback URI with code ─────│
-     │                                                        │
-     │── 6. GET /sso/callback?code=CODE&state=STATE ─────────►│
-```
-
-### Request Parameters:
-| Parameter | Type | Required | Description |
+| Registration Field | DB Column (`sso`) | Validation Rules | Source & Behavior |
 |---|---|---|---|
-| `client_id` | string | Yes | Registered Client ID |
-| `redirect_uri` | string | Yes | Must exactly match registered redirect URI |
-| `response_type` | string | Yes | Must be `code` |
-| `state` | string | Yes | Random CSRF token generated by the SSO client |
-| `code_challenge` | string | Recommended | PKCE `BASE64URL(SHA256(verifier))` |
-| `code_challenge_method` | string | Recommended | Must be `S256` |
-| `nonce` | string | Optional | Replay prevention nonce |
+| **Client / Portal Name** | `name` | `required\|string\|max:255` | Human-readable application title displayed on the Portal Dashboard and Connected Systems page. |
+| **Description** | `description` | `nullable\|string\|max:1000` | Optional summary displayed under Profile → SSO Applications. |
+| **Client ID** | `client_id` | `required\|string\|max:255\|unique:sso,client_id` | Public identifier (e.g., `client_a1b2c3d4e5f6g7h8` or custom slug). Generated via UI button or `SsoService::generateClientId()`. |
+| **Client Secret** | `client_secret` | `nullable\|string\|max:255` | Confidential 64-character secret (`Str::random(64)` when left blank). **Displayed in plaintext only once** in a flash modal (`session('new_secret')`) after creation or secret rotation (`POST /admin/sso/{sso}/regenerate-secret`). Excluded from all JSON/Inertia queries (`$hidden = ['client_secret']`). Verified via `SsoClient::verifySecret()` using `hash_equals()`, `Crypt::decryptString()`, or `Hash::check()`. |
+| **Redirect URI** | `redirect_uri` | `required\|string` | Allowed callback URL(s) on the client (e.g., `https://app.example.com/sso/callback`). Backend supports comma-separated URIs in `SsoClient::validateRedirectUri()`. *(Note: Admin UI form input uses `type="url"`, which validates a single URL in browser submission).* |
+| **System Base URL** | `api_url` | `nullable\|url\|max:500` | Base URL of the client system used by `ConnectedSystemsController::resolveCandidateApiUrls()` to call `/api/sso/verify-credentials` during account binding. If empty, derived automatically from `{scheme}://{host}:{port}` of `redirect_uri`. |
+| **Target Framework** | `framework` | `nullable\|string\|max:100` | Default `laravel_inertia`. Selects the default stack in the Admin Integration Guide modal. |
+| **Client Icon** | `icon` | `nullable\|image\|mimes:jpeg,png,jpg,gif,svg,webp\|max:2048` | Stored on the `public` disk under `sso-icons/` (`storage/app/public/sso-icons`). |
+| **Active Status** | `is_active` | `boolean` (default `true`) | Toggled via `POST /admin/sso/{sso}/toggle` (or `/enable`, `/disable`). Inactive clients are blocked at both `/sso/authorize` and `/api/sso/token`. |
 
-### Validation & Behavior:
-1. If client is invalid or `is_active === false`, returns HTTP 400 (`unauthorized_client`).
-2. If `redirect_uri` does not match the registered domain/path, returns HTTP 400 (`invalid_redirect_uri`).
-3. If user is unauthenticated, LGUNET Portal saves params in session and redirects to Jetstream login (`/login`). Once authenticated, `CheckPendingSsoRequest` resumes the authorization flow.
-4. If user has not bound their account, redirects to `/connected-systems` with notice. Once bound, flow automatically resumes.
-5. If valid, generates a 40-character single-use code, stores its SHA-256 hash with 2-minute expiration, and redirects to:
-   `https://client.example/sso/callback?code={AUTH_CODE}&state={STATE}`
+#### Redirect URI Validation Rules (`SsoClient::validateRedirectUri`)
+The `[SSO Server]` validates `redirect_uri` against the client's registered `redirect_uri` (splitting by comma `,` if multiple are stored):
+1. **Exact Match**: If the input URI matches a registered URI string identically, validation passes.
+2. **Normalized Component Match**:
+   - `scheme` (`http` vs `https`) **must match** (case-insensitive).
+   - `host` **must match** (case-insensitive), except in local development where `127.0.0.1` and `localhost` are treated as equivalent loopback hosts.
+   - `port` **must match** for all non-loopback hosts (defaulting to `80` for `http` and `443` for `https`). For `localhost` / `127.0.0.1`, loopback port differences are tolerated by `validateRedirectUri()`.
+   - `path` **must match** after trimming trailing slashes (`rtrim($path, '/')`).
 
 ---
 
-## 5. Token Exchange (Backchannel Server-to-Server)
+### 3.2 Authorization Endpoint (`GET /sso/authorize`)
+- **URL**: `{LOGIN_PORTAL_URL}/sso/authorize`
+- **Route Name**: `sso.authorize`
+- **Middleware**: `web`, `throttle:60,1` (60 requests per minute per IP)
+- **Controller**: `App\Http\Controllers\Sso\SsoProviderController::authorize`
 
-### Endpoint: `POST /sso/token` (or `POST /api/sso/token`)
-- Protected by rate limiting (`60 requests/min`).
-- CSRF exempt for server-to-server requests.
+#### Query Parameters
+| Parameter | Required | Default | Validation & Behavior |
+|---|---|---|---|
+| `client_id` | **Yes** | — | Must match an existing `sso.client_id` (or `sso.name`) with `is_active = true`. |
+| `redirect_uri` | **Yes** | — | Must pass `$client->validateRedirectUri($redirectUri)`. |
+| `response_type` | **Yes** | `code` | Must be `code`. Any other value returns `400 unsupported_response_type`. |
+| `state` | **Recommended (Required by Client)** | `null` | Returned unchanged as `&state={state}` on redirect back to `redirect_uri` when non-empty. |
+| `code_challenge` | **Recommended (PKCE)** | `null` | Stored on `sso_authorization_codes.code_challenge`. If sent, `code_verifier` **must** be sent during token exchange. |
+| `code_challenge_method` | Optional | `S256` | `S256` (`BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))`) or `plain`. Defaults to `S256`. |
+| `nonce` | Optional | `null` | Stored on `sso_authorization_codes.nonce` and returned in `/api/sso/token` response JSON. |
 
-### Request Body (`application/x-www-form-urlencoded` or `application/json`):
-```json
-{
-  "grant_type": "authorization_code",
-  "client_id": "your_client_id",
-  "client_secret": "your_client_secret",
-  "code": "40_character_authorization_code_here",
-  "redirect_uri": "https://your-app.example/sso/callback",
-  "code_verifier": "plain_code_verifier_if_pkce_was_used"
-}
-```
+#### Exact Server Execution & Error Responses
+1. **Missing `client_id` or `redirect_uri`**: Returns `HTTP 400` JSON directly (does **not** redirect to `redirect_uri`):
+   ```json
+   {
+     "error": "invalid_request",
+     "error_description": "Missing required parameter: client_id and redirect_uri are required."
+   }
+   ```
+2. **Unknown or Inactive Client**: Returns `HTTP 400` JSON:
+   ```json
+   {
+     "error": "unauthorized_client",
+     "error_description": "Invalid or inactive client ID."
+   }
+   ```
+3. **Unregistered `redirect_uri`**: Returns `HTTP 400` JSON:
+   ```json
+   {
+     "error": "invalid_redirect_uri",
+     "error_description": "The provided redirect_uri does not match registered client configuration."
+   }
+   ```
+4. **Invalid `response_type` (`!== 'code'`)**: Returns `HTTP 400` JSON:
+   ```json
+   {
+     "error": "unsupported_response_type",
+     "error_description": "Only response_type=code is supported."
+   }
+   ```
+5. **User Not Logged In at `[SSO Server]` (`! Auth::check()`)**:
+   - Saves query parameters in `session(['sso_authorize_params' => $request->all()])`.
+   - Redirects (`HTTP 302`) to Portal `/login`.
+   - Once the user logs in (and passes email verification), `App\Http\Middleware\CheckPendingSsoRequest` automatically pulls `sso_authorize_params` from the session and redirects back to `GET /sso/authorize` to resume the flow.
+6. **Portal User is Banned (`$user->isBanned()`)**: Returns `HTTP 403` JSON:
+   ```json
+   {
+     "error": "access_denied",
+     "error_description": "Your LGUNET Portal account is suspended."
+   }
+   ```
+7. **Portal User Has Not Bound Their Client Account (`! $binding` in `sso_user_bindings`)**:
+   - Saves `sso_pending_bind_client = $client->client_id` and `sso_authorize_params = $request->all()` in the Portal session.
+   - Redirects (`HTTP 302`) to `GET /connected-systems` (`route('sso.connected-systems')`) with flash error:
+     `"This application is not linked to your LGUNET Portal account. Please bind your account first."`
+   - Once the user binds their account on `/connected-systems`, `ConnectedSystemsController::bind` automatically pulls `sso_authorize_params` and redirects back to `GET /sso/authorize` to complete the flow.
+8. **Success (Authenticated, Not Banned, Account Bound)**:
+   - Generates a 40-character random code (`$rawCode = Str::random(40)`).
+   - Stores `hash('sha256', $rawCode)` in `sso_authorization_codes` with `expires_at = now()->addMinutes(2)` (120-second TTL) and `used_at = null`.
+   - Logs audit action `sso_authorization_code_issued`.
+   - Redirects (`HTTP 302`) the browser to:
+     `{redirect_uri}?code={rawCode}&state={state}` (using `&` instead of `?` if `redirect_uri` already contains a query string).
 
-### Response (`200 OK`):
+---
+
+### 3.3 Backchannel Token Exchange Endpoint (`POST /api/sso/token` or `POST /sso/token`)
+- **URLs**:
+  - `{LOGIN_PORTAL_URL}/api/sso/token` (Route name: `api.sso.token`, in `routes/api.php`)
+  - `{LOGIN_PORTAL_URL}/sso/token` (Route name: `sso.token`, in `routes/web.php`, exempted from CSRF in `bootstrap/app.php`)
+- **Middleware**: `throttle:60,1` (60 requests per minute)
+- **Controller / Service**: `SsoProviderController::token` → `SsoService::exchangeToken`
+- **Accepted Content-Types**: `application/x-www-form-urlencoded` or `application/json`
+
+#### Request Parameters
+| Parameter | Required | Description |
+|---|---|---|
+| `grant_type` | **Yes** | Must be `"authorization_code"`. |
+| `client_id` | **Yes** | Registered Client ID. |
+| `client_secret` | **Yes** | Registered Client Secret (64-character string). |
+| `code` | **Yes** | The 40-character raw authorization code received at `redirect_uri`. |
+| `redirect_uri` | **Recommended** | If provided, validated via `$client->validateRedirectUri($redirectUri)`. Always pass the exact `redirect_uri` used in `/sso/authorize`. |
+| `code_verifier` | **Conditional** | **Required** if `code_challenge` was sent during `GET /sso/authorize`; verified via `SsoAuthorizationCode::verifyPkce()`. |
+
+#### Success Response (`HTTP 200 OK`)
 ```json
 {
   "token_type": "Bearer",
-  "access_token": "random_secure_access_token_string",
+  "access_token": "80_character_random_string_generated_by_portal",
   "expires_in": 3600,
-  "nonce": "optional_nonce_value",
+  "nonce": "optional_nonce_passed_during_authorize_or_null",
   "user": {
     "id": "42",
     "bound_user_id": "105",
-    "bound_username": "jdoe_external",
-    "name": "John Doe",
+    "bound_username": "jdoe",
+    "name": "Juan Dela Cruz",
     "email": "jdoe@bayawancity.gov.ph",
     "email_verified_at": "2026-09-15T08:30:00+08:00",
-    "profile_photo_url": "http://login_portal.local/storage/profile-photos/jdoe.jpg"
+    "profile_photo_url": "https://portal.example.gov.ph/storage/profile-photos/jdoe.jpg"
   }
 }
 ```
 
-### Security Actions:
-- Authorization code is **invalidated immediately** (`used_at = now()`).
-- Replay attempts return HTTP 400 with `'invalid_grant'`.
-- Client `last_used_at` is updated.
-- Audit event `sso_token_exchanged` is recorded.
+#### Error Responses from `/api/sso/token`
+| HTTP Status | `error` Code | `error_description` | Cause |
+|---|---|---|---|
+| `400` | `unsupported_grant_type` | `Only grant_type=authorization_code is supported.` | `grant_type` is missing or not `authorization_code`. |
+| `400` | `invalid_request` | `Missing required parameters: client_id, client_secret, and code are required.` | One or more of `client_id`, `client_secret`, or `code` is empty. |
+| `401` | `invalid_client` | `Client authentication failed.` | `client_id` does not exist, client `is_active` is `false`, or `client_secret` does not match. |
+| `400` | `invalid_grant` | `Invalid authorization code.` | Code hash does not exist in `sso_authorization_codes` or belongs to a different `client_id`. |
+| `400` | `invalid_grant` | `Authorization code has already been used.` | Code was already exchanged (`used_at !== null`). Replay prevented by atomic `markAsUsed()`. |
+| `400` | `invalid_grant` | `Authorization code has expired.` | More than 2 minutes elapsed since `/sso/authorize` issued the code. |
+| `400` | `invalid_grant` | `Redirect URI mismatch.` | `redirect_uri` failed `$client->validateRedirectUri($redirectUri)`. |
+| `400` | `invalid_grant` | `PKCE code verifier verification failed.` | `code_challenge` was sent on `/sso/authorize`, but `code_verifier` is missing or does not match. |
+| `403` | `access_denied` | `User account is invalid or banned.` | The Portal user associated with the code was deleted or banned (`$user->isBanned()`). |
 
 ---
 
-## 6. User Account Binding Flow
+### 3.4 Account Binding & Client Credential Verification Contract (`POST /api/sso/verify-credentials`)
+Because `SsoProviderController::authorize` requires an `SsoUserBinding` record before issuing an authorization code, users who do not yet have a binding are directed to the Portal's **Connected Systems** page (`GET /connected-systems`, `GET /settings/sso`, or `GET /user/profile`).
 
-Account binding links the LGUNET Portal identity (`user_id`) to the target application's local user account (`external_user_id`).
-
-### Accessible via:
-1. **Account Settings**: Profile > SSO Applications (`/user/profile`)
-2. **Connected Systems**: `/connected-systems` or `/settings/sso`
-
-### Secure Binding Process:
-1. User clicks **[Bind Account]**.
-2. A secure modal prompts the user for:
-   - **LGUNET Portal Password**: Authenticates that the current session owner is performing the binding.
-   - **Client Username / Email**: User identifier in the target application.
-   - **Client Password**: Authenticates ownership of the external account.
-3. LGUNET Portal calls the client's verification endpoint:
-   `POST {api_url}/api/sso/verify-credentials`
-   sending `username`, `password`, and `client_secret`.
-4. Client application authenticates the credentials against its local database and returns:
-   ```json
-   {
-     "success": true,
-     "user": {
-       "id": "105",
-       "username": "jdoe_external",
-       "email": "jdoe@bayawancity.gov.ph"
+When the user submits their target system username and password to bind their account (`POST /connected-systems/{clientId}/bind`), `ConnectedSystemsController::bind`:
+1. Resolves candidate verification URLs from the client's `api_url` and `redirect_uri` (`ConnectedSystemsController::resolveCandidateApiUrls`):
+   - `{base}/api/sso/verify-credentials`
+   - `{base}/sso/verify-credentials`
+2. Sends a server-to-server `POST` request (`Content-Type: application/x-www-form-urlencoded`, 5-second timeout) with form parameters:
+   - `username`: The username or email entered by the user.
+   - `password`: The plaintext password entered by the user (verified against the client database and immediately discarded).
+   - `client_secret`: The client's registered plaintext `client_secret` so the client can authenticate that the request genuinely came from the `[SSO Server]`.
+3. Expects the `[Client Application]` to respond with:
+   - **On valid credentials (`HTTP 200 OK`)**:
+     ```json
+     {
+       "success": true,
+       "user": {
+         "id": "105",
+         "username": "jdoe",
+         "email": "jdoe@bayawancity.gov.ph"
+       }
      }
+     ```
+     The `[SSO Server]` casts `user.id` to `(string)` and stores it as `external_user_id` in `sso_user_bindings` (with unique constraint on `[user_id, client_id]` and check preventing the same `external_user_id` from being bound to two different Portal users). On subsequent `/api/sso/token` exchanges, this `external_user_id` is returned to the client as `user.bound_user_id`.
+   - **On invalid credentials (`HTTP 400` / `401`)**:
+     ```json
+     {
+       "success": false,
+       "message": "Invalid username or password."
+     }
+     ```
+
+---
+
+### 3.5 Token Storage, Expiry, Refresh, and Revocation
+- **Authorization Code (`code`)**:
+  - **Storage**: SHA-256 hash stored on the `[SSO Server]` in `sso_authorization_codes.code`.
+  - **Expiry**: **2 minutes** (`120 seconds`) from issuance.
+  - **Revocation / Single-Use**: Atomically marked with `used_at = now()` during `/api/sso/token` exchange (`SsoAuthorizationCode::markAsUsed()`). Cannot be reused.
+- **Access Token (`access_token`)**:
+  - **Behavior**: `/api/sso/token` returns `"access_token": Str::random(80)`, `"token_type": "Bearer"`, and `"expires_in": 3600`.
+  - **Important Implementation Fact**: `SsoService::exchangeToken()` generates `access_token` as an ephemeral 80-character random string and **does not persist it** in `personal_access_tokens` or any database table. The complete verified user profile is returned directly inside the `/api/sso/token` response under the `"user"` key.
+  - **Client Storage**: Clients **do not need to store `access_token` in their database** and **must not call `GET /api/user` or `GET /api/sso/userinfo` with `access_token`** (doing so returns `401 Unauthorized` because `access_token` is not a persisted Sanctum token). Instead, consume `response.json('user')` directly during the `/api/sso/token` callback and establish a native local session.
+- **Refresh & Revocation**:
+  - The `[SSO Server]` does **not** issue `refresh_token` values and does **not** expose token refresh or token revocation endpoints.
+  - Once the client authenticates the user and creates a local session (`Auth::login($user, remember: true)`), the client's own session configuration (`SESSION_LIFETIME` and remember-me cookie) governs session duration.
+
+---
+
+### 3.6 Local Logout vs. SSO Logout Scope
+- **Local Logout (`[Client Application]`)**:
+  - Calling `Auth::guard('web')->logout()`, `$request->session()->invalidate()`, and `$request->session()->regenerateToken()` on the `[Client Application]` destroys **only the client application's local session and CSRF token**.
+  - The user's central session on the `[SSO Server]` (`login_portal`) remains active so they continue to have access to the Portal Dashboard and other connected systems.
+- **Central Portal Logout (`[SSO Server]`)**:
+  - Logging out of `login_portal` (`POST /logout` on the `[SSO Server]`) terminates the user's central Portal session, preventing new `/sso/authorize` code issuances until the user logs in again.
+  - Because the `[SSO Server]` does **not** implement OIDC Front-Channel or Back-Channel Single Logout (SLO), logging out of `login_portal` does **not** automatically destroy already-established local sessions in connected client applications.
+
+---
+
+### 3.7 Authorization Boundaries: Authentication vs. Client Access Control
+Successful SSO authentication proves **identity** (*who the user is* in LGUNET Portal), which is distinct from **authorization** (*what the user is permitted to access* inside the `[Client Application]`):
+1. **Account Provisioning Policy (`LOGIN_PORTAL_AUTO_PROVISION`)**:
+   - **Open / Auto-Provisioned Clients (`LOGIN_PORTAL_AUTO_PROVISION=true`)**: Any Portal user who binds an account (or authenticates via SSO) and does not yet match a local user record is automatically provisioned in the client's `users` table with default least-privilege permissions.
+   - **Restricted / Pre-Provisioned Clients (`LOGIN_PORTAL_AUTO_PROVISION=false`)**: Only users who already have a local account in the client database (matched via `bound_user_id`, `login_portal_user_id`, or `email`) may sign in. Unrecognized users are denied access at `/sso/callback` with a `403` / login error before any local session is created.
+2. **Local Account Status Checks**:
+   - Even if a user's Portal account is active, the client **must** check local status flags (e.g., `$user->is_active`, `$user->is_banned`, `$user->suspended_at`) in `/sso/callback` before calling `Auth::login($user)`.
+3. **Role & Permission Enforcement**:
+   - The `[SSO Server]` token response (`user`) provides identity attributes (`id`, `bound_user_id`, `bound_username`, `name`, `email`, `email_verified_at`, `profile_photo_url`), **not** client-specific roles or permissions. Client routes must continue to enforce local authorization middleware, Gates, and Policies.
+
+---
+
+### 3.8 Identified Implementation Discrepancies & Flagged Notes
+
+Developers and AI agents must be aware of the following verified behaviors in the current `[SSO Server]` codebase:
+
+1. **Identity Delivered in `/api/sso/token` (Do Not Call `/api/user` or `/api/sso/userinfo` with `access_token`)**:
+   - `routes/api.php` defines `GET /api/user` (with `auth:sanctum`) and `GET /api/sso/userinfo` (`SsoProviderController::userinfo` without `auth:sanctum`). Because `SsoService::exchangeToken()` generates `access_token` via `Str::random(80)` without saving a Sanctum token, calling either endpoint with `Bearer {access_token}` returns `401 Unauthorized`. Always read the `user` object directly from the `POST /api/sso/token` response.
+2. **Account Binding (`sso_user_bindings`) Is Enforced on `/sso/authorize`**:
+   - `SsoProviderController::authorize` (lines 80–93) checks `SsoUserBinding::where('user_id', $user->id)->where('client_id', $client->client_id)->first()`. If no row exists, the browser is redirected to `/connected-systems`. Therefore, every client application must implement `POST /api/sso/verify-credentials` (or `POST /sso/verify-credentials`) so users can bind their accounts from the Portal UI.
+3. **IdP-Initiated Dashboard Launch (`GET /sso/launch/{clientName}`) vs. Client CSRF `state`**:
+   - When a user clicks **Open System** from the Portal Dashboard (`GET /sso/launch/{clientId}`), `SsoProviderController::launch` generates a Portal-side `state = Str::random(40)` and redirects through `/sso/authorize` to `{redirect_uri}?code={code}&state={state}`.
+   - Because the browser did not visit the client's `/sso/redirect` route first, the client session has no `sso_state`.
+   - **Recommended Client Handling**: In `/sso/callback`, if `session('sso_state')` is `null` (indicating an uninitiated / IdP-launched arrival) while `code` is present, you may either redirect the browser to `route('sso.redirect')` to transparently initiate a proper SP-initiated flow with a client-generated `state` and PKCE challenge (which completes immediately because the user is already logged in at the Portal), or require all logins to start from `route('sso.redirect')`. Never skip `state` verification when `session('sso_state')` is present, and never accept a `code` without verifying a client-generated `sso_state`.
+4. **Profile Binding Modal vs. Connected Systems Binding Modal**:
+   - `resources/js/Pages/Profile/Partials/SsoApplicationsForm.vue` includes a `portal_password` input field in its form payload, whereas `resources/js/Pages/Sso/ConnectedSystems.vue` and `ConnectedSystemsController::bind` only validate `username` and `password`. This is internal to the Portal UI and does not affect the client's `/api/sso/verify-credentials` endpoint.
+5. **SSO Server vs. Client Tables**:
+   - The tables `sso`, `sso_authorization_codes`, and `sso_user_bindings` belong **exclusively to the `[SSO Server]`** (see [Appendix A](#appendix-a-sso-server-internal-database-schema-reference-only)). Client applications must **not** create those tables; client applications only require their own `users` table (with `login_portal_user_id` and `sso_provider` columns) and `sessions` table.
+
+---
+
+## 4. Client Database Schema Requirements (`[Client Application]`)
+
+Do **not** copy the `[SSO Server]` tables (`sso`, `sso_authorization_codes`, `sso_user_bindings`) into your client application. Below is the exact schema required on the **`[Client Application]`**.
+
+### 4.1 Client Table Summary
+
+| Table Name | Status on Client | Supplied By | Purpose |
+|---|---|---|---|
+| `users` | **Required** | Framework default + **SSO migration required** | Stores local user accounts and maps them to `[SSO Server]` identities via `login_portal_user_id`. |
+| `sessions` | **Required** (when `SESSION_DRIVER=database`) | Framework default (`0001_01_01_000000_create_users_table.php`) | Persists `sso_state`, `sso_code_verifier`, `sso_nonce` across the external redirect to the `[SSO Server]`, and stores the authenticated user session. |
+| `password_reset_tokens` | **Optional** | Framework default | Used only for local password-reset emails; not touched by SSO. |
+
+### 4.2 Client `users` Table Specification
+
+| Column | Type | Nullable | Default | Index / Constraint | Purpose in SSO Integration |
+|---|---|---|---|---|---|
+| `id` | `BIGINT UNSIGNED` | `NOT NULL` | `AUTO_INCREMENT` | `PRIMARY KEY` | Local user primary key. Stored on the `[SSO Server]` as `sso_user_bindings.external_user_id` when bound, and returned in `/api/sso/token` as `user.bound_user_id`. |
+| `login_portal_user_id` | `BIGINT UNSIGNED` | `NULL` | `NULL` | `UNIQUE` (`users_login_portal_user_id_unique`) | Stores the immutable `[SSO Server]` user ID (`(int) user.id`). `NULL` for local-only accounts that have never logged in via SSO. `UNIQUE` ensures one Portal user maps to at most one local user. *(No foreign key constraint because the `[SSO Server]` database is separate).* |
+| `sso_provider` | `VARCHAR(255)` | `NULL` | `'login_portal'` | None (or optional index) | Records the identity provider name (`'login_portal'`) for linked/provisioned users. |
+| `name` | `VARCHAR(255)` | `NOT NULL` | — | None | User's display name (`user.name`). |
+| `email` | `VARCHAR(255)` | `NOT NULL` | — | `UNIQUE` (`users_email_unique`) | User's email address (`user.email`). Used as fallback for first-time account linking. |
+| `email_verified_at` | `TIMESTAMP` | `NULL` | `NULL` | None | Populated from `user.email_verified_at` when verified on the `[SSO Server]`. |
+| `password` | `VARCHAR(255)` | `NOT NULL` (or `NULL`) | — | None | Local password hash. Preserved untouched for existing users so local login and `/api/sso/verify-credentials` continue working. Set to `Hash::make(Str::random(32))` for newly auto-provisioned SSO users so `NOT NULL` constraints are satisfied. |
+| `remember_token` | `VARCHAR(100)` | `NULL` | `NULL` | None | Used by `Auth::login($user, remember: true)`. |
+| `created_at` | `TIMESTAMP` | `NULL` | `NULL` | None | Eloquent creation timestamp. |
+| `updated_at` | `TIMESTAMP` | `NULL` | `NULL` | None | Eloquent update timestamp. |
+
+### 4.3 Client `sessions` Table Specification (When `SESSION_DRIVER=database`)
+
+| Column | Type | Nullable | Index / Constraint | Purpose |
+|---|---|---|---|---|
+| `id` | `VARCHAR(255)` | `NOT NULL` | `PRIMARY KEY` | Session cookie identifier (regenerated on `session()->regenerate()`). |
+| `user_id` | `BIGINT UNSIGNED` | `NULL` | `INDEX` | Authenticated local `users.id` (`NULL` while guest during `/sso/redirect`). |
+| `ip_address` | `VARCHAR(45)` | `NULL` | None | Client IPv4/IPv6 address. |
+| `user_agent` | `TEXT` | `NULL` | None | Browser User-Agent string. |
+| `payload` | `LONGTEXT` | `NOT NULL` | None | Base64-serialized session data (`sso_state`, `sso_code_verifier`, `sso_nonce`, auth guard state). |
+| `last_activity` | `INT` | `NOT NULL` | `INDEX` | Unix timestamp of last request. |
+
+---
+
+# Guide 1: Step-by-Step Manual Guide
+
+Follow these steps in exact execution order to integrate a **Laravel (`10.x`–`13.x`)** client application with **LGUNET Portal (`[SSO Server]`)**. Each step specifies whether commands or edits run on **`[SSO Server]`** or **`[Client Application]`**, distinguishes **New Client** vs. **Existing Client** setup, separates **Required** from **Optional** features, and explains how to verify the step.
+
+> **Using Another Framework?** In the `[SSO Server]` Admin Panel (`GET /admin/sso` → **Integration Guide**), the interactive generator and PDF exporter (`resources/js/Utils/ssoIntegrationDocs.js`) provide tailored step-by-step code and AI prompts for **Laravel + Inertia (Vue 3)**, **Laravel + Livewire**, **Laravel Blade**, **Native PHP / jQuery**, **Node.js / Express**, **Python / Django**, **ASP.NET Core (C#)**, **Spring Boot (Java)**, **Nuxt 3**, **Vue / React SPA**, and **Generic REST API**.
+
+---
+
+### Step 1 (`[SSO Server]` — Required): Register the Client Application on Login Portal
+
+**Purpose**: Create the OAuth 2.0 client record in the `[SSO Server]` `sso` table and obtain the `client_id`, one-time `client_secret`, and registered `redirect_uri`.
+
+1. **`[SSO Server]`** If you want to upload an application icon and have not linked public storage on the SSO server yet, run:
+   ```bash
+   # Run on [SSO Server]
+   php artisan storage:link --no-interaction
+   ```
+2. **`[SSO Server]`** Log in to LGUNET Portal with an Administrator account and navigate to:
+   - **Admin Panel → SSO Portal** (`https://your-login-portal.example/admin/sso` or `http://127.0.0.1:8000/admin/sso` in local development).
+3. **`[SSO Server]`** Click **Register SSO Client** and fill in the fields:
+   - **Client / Portal Name**: e.g., `Project Tracker`
+   - **Target Framework / Programming Language**: Select your client stack (e.g., `Laravel + Jetstream + Inertia (Vue.js)` or `Laravel (Standard MVC / Blade)`).
+   - **Client ID**: Click **Generate New** (produces e.g. `client_a1b2c3d4e5f6g7h8`) or enter a unique slug (e.g., `project-tracker`).
+   - **Client Secret**: Leave the auto-generated 64-character secret or click **Generate Random**.
+   - **Redirect URI**: Enter the exact callback URL of your `[Client Application]`:
+     - Local development example: `http://127.0.0.1:8001/sso/callback`
+     - Production example: `https://tracker.bayawancity.gov.ph/sso/callback`
+   - **System Base URL** (`api_url`): Enter the root URL of your `[Client Application]` reachable by the `[SSO Server]` for account-binding verification:
+     - Local development example: `http://127.0.0.1:8001`
+     - Production example: `https://tracker.bayawancity.gov.ph`
+   - **Active SSO Client**: Checked (`true`).
+4. **`[SSO Server]`** Click **Register Client**.
+5. **`[SSO Server]`** A **"New Client Secret Generated"** modal will appear. **Copy the 64-character `CLIENT SECRET KEY` immediately**—it is hidden from all future page loads (`$hidden = ['client_secret']`). If you ever lose it, click **Rotate Secret** on the client card to generate a new one.
+
+**How to Verify Step 1**:
+- Confirm the new client card appears under **Admin Panel → SSO Portal** with the green **Active SSO Client** badge, matching **CLIENT ID**, and exact **REDIRECT URI**.
+
+---
+
+### Step 2 (`[Client Application]` — Required): Configure Environment Variables & Services
+
+**Purpose**: Store the `[SSO Server]` base URL, client credentials, callback URI, and session cookie policy in `.env` and expose them via `config/services.php` so secrets are never hardcoded in source control and remain compatible with `php artisan config:cache`.
+
+1. **`[Client Application]`** Edit `.env` (and add empty/example placeholders to `.env.example`):
+
+   **File**: `.env` (`[Client Application]`)
+   ```dotenv
+   # =========================================================================
+   # LGUNET Portal Single Sign-On (SSO) Configuration
+   # =========================================================================
+   # Base URL of the central SSO Server (no trailing slash)
+   LOGIN_PORTAL_URL=http://127.0.0.1:8000
+
+   # Public Client ID from SSO Server Admin Panel -> SSO Portal
+   LOGIN_PORTAL_CLIENT_ID=client_your_16_char_id
+
+   # Confidential 64-char Client Secret from SSO Server one-time modal (SERVER-SIDE ONLY)
+   LOGIN_PORTAL_CLIENT_SECRET=your_64_character_plain_client_secret_from_portal_admin
+
+   # Exact callback URL registered in the SSO Server Redirect URI field
+   LOGIN_PORTAL_REDIRECT_URI=http://127.0.0.1:8001/sso/callback
+
+   # Provisioning policy:
+   # true  = auto-create a local User on first SSO login if no match is found
+   # false = restrict login strictly to pre-existing local User accounts
+   LOGIN_PORTAL_AUTO_PROVISION=true
+
+   # =========================================================================
+   # Session & Cookie Requirements for OAuth 2.0 Redirects
+   # =========================================================================
+   # Must be 'database' or 'redis' (never 'array' in browser flows)
+   SESSION_DRIVER=database
+   SESSION_LIFETIME=120
+   SESSION_ENCRYPT=false
+   SESSION_PATH=/
+   SESSION_DOMAIN=null
+   SESSION_HTTP_ONLY=true
+   # MUST be 'lax' so the browser sends the session cookie when redirected back from the SSO Server
+   SESSION_SAME_SITE=lax
+   # Set to false on local http://127.0.0.1; MUST be true on production https://
+   SESSION_SECURE_COOKIE=false
+   ```
+
+2. **`[Client Application]`** Register the `login_portal` configuration block in `config/services.php`:
+
+   **File**: `config/services.php` (`[Client Application]`)
+   ```php
+   <?php
+
+   return [
+
+       // ... existing third-party services (postmark, ses, slack, etc.) ...
+
+       'login_portal' => [
+           'url' => rtrim((string) env('LOGIN_PORTAL_URL', 'http://127.0.0.1:8000'), '/'),
+           'client_id' => env('LOGIN_PORTAL_CLIENT_ID'),
+           'client_secret' => env('LOGIN_PORTAL_CLIENT_SECRET'),
+           'redirect_uri' => env('LOGIN_PORTAL_REDIRECT_URI'),
+           'auto_provision' => (bool) env('LOGIN_PORTAL_AUTO_PROVISION', true),
+       ],
+
+   ];
+   ```
+
+**How to Verify Step 2**:
+Run on **`[Client Application]`**:
+```bash
+# Run on [Client Application]
+php artisan config:clear
+php artisan tinker --execute 'dump(config("services.login_portal.url"), config("services.login_portal.client_id"), config("services.login_portal.redirect_uri"), !empty(config("services.login_portal.client_secret")));'
+```
+Expected output: Prints your `LOGIN_PORTAL_URL`, `LOGIN_PORTAL_CLIENT_ID`, `LOGIN_PORTAL_REDIRECT_URI`, and `true` for the secret check.
+
+---
+
+### Step 3 (`[Client Application]` — Required): Database Migrations & `User` Model
+
+**Purpose**: Ensure the `[Client Application]` database has the `users` and `sessions` tables and adds `login_portal_user_id` (`BIGINT UNSIGNED NULL UNIQUE`) and `sso_provider` (`VARCHAR(255) NULL DEFAULT 'login_portal'`) to `users` without losing any existing user data.
+
+Choose **Path A** (for a brand-new client application) or **Path B** (for an existing client application with existing users). Both paths use the same safe additive migration.
+
+#### Path A (New Client Application) vs. Path B (Existing Client Application)
+- **If this is a New Client Application**: Laravel's default `database/migrations/0001_01_01_000000_create_users_table.php` already defines the `users`, `password_reset_tokens`, and `sessions` tables. Keep that migration intact and create the additive migration below so SSO columns are cleanly tracked.
+- **If this is an Existing Client Application**: Do **not** run `migrate:fresh` or modify old migrations. Create the non-destructive additive migration below, which checks `Schema::hasColumn()` before altering `users` and preserves all existing user IDs, passwords, roles, and foreign keys. If your existing app uses `SESSION_DRIVER=database` and does not yet have a `sessions` table, run `php artisan session:table --no-interaction` first.
+
+1. **`[Client Application]`** Generate the SSO columns migration:
+   ```bash
+   # Run on [Client Application]
+   php artisan make:migration add_sso_columns_to_users_table --table=users --no-interaction
+   ```
+
+2. **`[Client Application]`** Populate the generated migration file in `database/migrations/`:
+
+   **File**: `database/migrations/xxxx_xx_xx_xxxxxx_add_sso_columns_to_users_table.php` (`[Client Application]`)
+   ```php
+   <?php
+
+   use Illuminate\Database\Migrations\Migration;
+   use Illuminate\Database\Schema\Blueprint;
+   use Illuminate\Support\Facades\Schema;
+
+   return new class extends Migration
+   {
+       /**
+        * Run the migrations.
+        */
+       public function up(): void
+       {
+           Schema::table('users', function (Blueprint $table): void {
+               if (! Schema::hasColumn('users', 'login_portal_user_id')) {
+                   $table->unsignedBigInteger('login_portal_user_id')
+                       ->nullable()
+                       ->unique()
+                       ->after('id');
+               }
+
+               if (! Schema::hasColumn('users', 'sso_provider')) {
+                   $table->string('sso_provider')
+                       ->nullable()
+                       ->default('login_portal')
+                       ->after('login_portal_user_id');
+               }
+           });
+       }
+
+       /**
+        * Reverse the migrations.
+        */
+       public function down(): void
+       {
+           Schema::table('users', function (Blueprint $table): void {
+               if (Schema::hasColumn('users', 'login_portal_user_id')) {
+                   $table->dropUnique(['login_portal_user_id']);
+                   $table->dropColumn('login_portal_user_id');
+               }
+
+               if (Schema::hasColumn('users', 'sso_provider')) {
+                   $table->dropColumn('sso_provider');
+               }
+           });
+       }
+   };
+   ```
+
+3. **`[Client Application]`** Run the migration:
+   ```bash
+   # Run on [Client Application]
+   php artisan migrate --no-interaction
+   ```
+
+4. **`[Client Application]`** Update `app/Models/User.php` to allow mass assignment of `login_portal_user_id`, `sso_provider`, and `email_verified_at` (while preserving all existing model traits, relationships, and casts):
+
+   **File**: `app/Models/User.php` (`[Client Application]`)
+   ```php
+   <?php
+
+   namespace App\Models;
+
+   use Illuminate\Database\Eloquent\Factories\HasFactory;
+   use Illuminate\Foundation\Auth\User as Authenticatable;
+   use Illuminate\Notifications\Notifiable;
+
+   class User extends Authenticatable
+   {
+       use HasFactory, Notifiable;
+
+       /**
+        * The attributes that are mass assignable.
+        *
+        * @var list<string>
+        */
+       protected $fillable = [
+           'name',
+           'email',
+           'password',
+           'login_portal_user_id',
+           'sso_provider',
+           'email_verified_at',
+       ];
+
+       /**
+        * The attributes that should be hidden for serialization.
+        *
+        * @var list<string>
+        */
+       protected $hidden = [
+           'password',
+           'remember_token',
+       ];
+
+       /**
+        * Get the attributes that should be cast.
+        *
+        * @return array<string, string>
+        */
+       protected function casts(): array
+       {
+           return [
+               'email_verified_at' => 'datetime',
+               'password' => 'hashed',
+               'login_portal_user_id' => 'integer',
+           ];
+       }
    }
    ```
-5. LGUNET Portal records the binding in `sso_user_bindings` with `is_verified = true`.
-6. **Passwords are discarded immediately** and never stored.
+
+**How to Verify Step 3**:
+Run on **`[Client Application]`**:
+```bash
+# Run on [Client Application]
+php artisan tinker --execute 'dump(\ Illuminate\Support\Facades\Schema::getColumnListing("users"));'
+```
+Expected output: The array includes `"id"`, `"login_portal_user_id"`, `"sso_provider"`, `"name"`, `"email"`, `"password"`.
 
 ---
 
-## 7. Example SSO Client Integration (Laravel)
+### Step 4 (`[Client Application]` — Required): Implement `SsoClientController`
 
-To integrate a new Laravel application as an SSO Client while preserving existing local users and password authentication:
+**Purpose**: Implement the complete client-side SSO lifecycle in a single controller:
+1. **`redirect()`**: Validates configuration, generates cryptographic `state`, PKCE `code_verifier` + `S256` `code_challenge`, and `nonce`, stores them in session, and redirects to `{LOGIN_PORTAL_URL}/sso/authorize`.
+2. **`callback()`**: Handles upstream error parameters, consumes and verifies `sso_state` (with automatic SP re-initiation if arriving from an IdP-initiated `/sso/launch/{client}` click without a local `sso_state`), exchanges `code` + `code_verifier` via backchannel `POST /api/sso/token`, verifies `nonce`, resolves the user via the 4-tier mapping hierarchy (`bound_user_id` → `login_portal_user_id` → `email` → auto-provision), checks local authorization boundaries, logs the user in, regenerates the session ID, and redirects to `intended('/dashboard')`.
+3. **`verifyCredentials()`**: Authenticates `client_secret` and local `username`/`password` for `POST /api/sso/verify-credentials` so Portal users can bind their accounts under **Connected Systems**.
+4. **`logout()`**: Performs local session logout (used if your client app does not already provide a Fortify/Jetstream/Breeze `POST /logout` route).
 
-### Step 1: Environment Variables (`.env`)
-Store your client credentials securely using environment variables. Never hardcode credentials into source code:
-```env
-LOGIN_PORTAL_URL=https://your-login-portal.example
-LOGIN_PORTAL_CLIENT_ID=your_client_id
-LOGIN_PORTAL_CLIENT_SECRET=your_client_secret
-LOGIN_PORTAL_REDIRECT_URI=https://your-app.example/sso/callback
-```
+1. **`[Client Application]`** Create the controller:
+   ```bash
+   # Run on [Client Application]
+   php artisan make:controller Auth/SsoClientController --no-interaction
+   ```
 
-### Step 2: Configuration (`config/services.php`)
-Expose the environment variables in `config/services.php`:
-```php
-'login_portal' => [
-    'url' => env('LOGIN_PORTAL_URL', 'https://your-login-portal.example'),
-    'client_id' => env('LOGIN_PORTAL_CLIENT_ID'),
-    'client_secret' => env('LOGIN_PORTAL_CLIENT_SECRET'),
-    'redirect_uri' => env('LOGIN_PORTAL_REDIRECT_URI'),
-],
-```
+2. **`[Client Application]`** Write the complete implementation in `app/Http/Controllers/Auth/SsoClientController.php`:
 
-### Step 3: Identity Columns Migration
-Generate a migration to add `login_portal_user_id` and `sso_provider` to the local `users` table:
+   **File**: `app/Http/Controllers/Auth/SsoClientController.php` (`[Client Application]`)
+   ```php
+   <?php
+
+   namespace App\Http\Controllers\Auth;
+
+   use App\Http\Controllers\Controller;
+   use App\Models\User;
+   use Illuminate\Http\Client\ConnectionException;
+   use Illuminate\Http\JsonResponse;
+   use Illuminate\Http\RedirectResponse;
+   use Illuminate\Http\Request;
+   use Illuminate\Support\Carbon;
+   use Illuminate\Support\Facades\Auth;
+   use Illuminate\Support\Facades\Hash;
+   use Illuminate\Support\Facades\Http;
+   use Illuminate\Support\Facades\Log;
+   use Illuminate\Support\Facades\Schema;
+   use Illuminate\Support\Str;
+   use Throwable;
+
+   class SsoClientController extends Controller
+   {
+       /**
+        * Step 1: Initiate OAuth 2.0 Authorization Code flow with CSRF state, PKCE (S256), and nonce.
+        */
+       public function redirect(Request $request): RedirectResponse
+       {
+           $portalUrl = rtrim((string) config('services.login_portal.url'), '/');
+           $clientId = (string) config('services.login_portal.client_id');
+           $clientSecret = (string) config('services.login_portal.client_secret');
+           $redirectUri = (string) config('services.login_portal.redirect_uri');
+
+           if ($portalUrl === '' || $clientId === '' || $clientSecret === '' || $redirectUri === '') {
+               Log::error('SSO redirect aborted: missing services.login_portal configuration.');
+
+               return redirect()->route('login')->withErrors([
+                   'email' => 'Single Sign-On is not configured on this application. Please contact the administrator.',
+               ]);
+           }
+
+           $state = Str::random(40);
+           $nonce = Str::random(40);
+           $codeVerifier = Str::random(64);
+           $codeChallenge = rtrim(strtr(base64_encode(hash('sha256', $codeVerifier, true)), '+/', '-_'), '=');
+
+           $request->session()->put([
+               'sso_state' => $state,
+               'sso_nonce' => $nonce,
+               'sso_code_verifier' => $codeVerifier,
+           ]);
+
+           $query = http_build_query([
+               'client_id' => $clientId,
+               'redirect_uri' => $redirectUri,
+               'response_type' => 'code',
+               'state' => $state,
+               'nonce' => $nonce,
+               'code_challenge' => $codeChallenge,
+               'code_challenge_method' => 'S256',
+           ]);
+
+           return redirect()->away("{$portalUrl}/sso/authorize?{$query}");
+       }
+
+       /**
+        * Step 2: Handle callback from Login Portal, exchange authorization code, and establish local session.
+        */
+       public function callback(Request $request): RedirectResponse
+       {
+           // 1. Check if upstream provider returned an explicit OAuth error
+           if ($request->filled('error')) {
+               $request->session()->forget(['sso_state', 'sso_nonce', 'sso_code_verifier']);
+               $description = (string) $request->query('error_description', 'Access was denied by the Login Portal.');
+
+               return redirect()->route('login')->withErrors(['email' => $description]);
+           }
+
+           // 2. Consume single-use CSRF state, nonce, and PKCE verifier from session
+           $sessionState = $request->session()->pull('sso_state');
+           $sessionNonce = $request->session()->pull('sso_nonce');
+           $codeVerifier = $request->session()->pull('sso_code_verifier');
+           $returnedState = (string) $request->query('state', '');
+
+           // Optional IdP-initiated launch support:
+           // If user clicked "Open System" (/sso/launch/{client}) on the Portal Dashboard, the browser
+           // arrives with a code and portal-generated state but no client session sso_state.
+           // Re-initiating via /sso/redirect establishes a client-generated state + PKCE challenge.
+           if ($sessionState === null && $request->filled('code') && $returnedState !== '' && ! $request->session()->pull('sso_idp_reinitiated', false)) {
+               $request->session()->put('sso_idp_reinitiated', true);
+
+               return redirect()->route('sso.redirect');
+           }
+
+           if (! is_string($sessionState) || $sessionState === '' || $returnedState === '' || ! hash_equals($sessionState, $returnedState)) {
+               Log::warning('SSO callback rejected: invalid or expired CSRF state parameter.');
+
+               return redirect()->route('login')->withErrors([
+                   'email' => 'Invalid or expired SSO state session. Please try signing in again.',
+               ]);
+           }
+
+           // 3. Validate presence of single-use authorization code
+           $code = (string) $request->query('code', '');
+           if ($code === '') {
+               return redirect()->route('login')->withErrors([
+                   'email' => 'Authorization code missing from Login Portal response.',
+               ]);
+           }
+
+           $portalUrl = rtrim((string) config('services.login_portal.url'), '/');
+           $clientId = (string) config('services.login_portal.client_id');
+           $clientSecret = (string) config('services.login_portal.client_secret');
+           $redirectUri = (string) config('services.login_portal.redirect_uri');
+
+           if ($portalUrl === '' || $clientId === '' || $clientSecret === '' || $redirectUri === '') {
+               Log::error('SSO callback aborted: missing services.login_portal configuration.');
+
+               return redirect()->route('login')->withErrors([
+                   'email' => 'Single Sign-On configuration is incomplete.',
+               ]);
+           }
+
+           // 4. Server-to-Server Backchannel Token Exchange (POST /api/sso/token)
+           $tokenPayload = [
+               'grant_type' => 'authorization_code',
+               'client_id' => $clientId,
+               'client_secret' => $clientSecret,
+               'redirect_uri' => $redirectUri,
+               'code' => $code,
+           ];
+
+           if (is_string($codeVerifier) && $codeVerifier !== '') {
+               $tokenPayload['code_verifier'] = $codeVerifier;
+           }
+
+           try {
+               $response = Http::asForm()
+                   ->acceptJson()
+                   ->timeout(15)
+                   ->post("{$portalUrl}/api/sso/token", $tokenPayload);
+           } catch (ConnectionException|Throwable $e) {
+               Log::error('SSO token exchange network error.', [
+                   'portal_url' => $portalUrl,
+                   'error' => $e->getMessage(),
+               ]);
+
+               return redirect()->route('login')->withErrors([
+                   'email' => 'Unable to communicate with Login Portal. Please try again shortly.',
+               ]);
+           }
+
+           if ($response->failed()) {
+               $errorCode = (string) $response->json('error', 'token_exchange_failed');
+               $errorDescription = (string) $response->json('error_description', 'SSO authentication failed at provider.');
+
+               Log::warning('SSO token exchange rejected by provider.', [
+                   'status' => $response->status(),
+                   'error' => $errorCode,
+                   'error_description' => $errorDescription,
+               ]);
+
+               return redirect()->route('login')->withErrors(['email' => $errorDescription]);
+           }
+
+           // 5. Verify nonce when present to prevent replay across sessions
+           $returnedNonce = $response->json('nonce');
+           if (is_string($sessionNonce) && $sessionNonce !== '' && is_string($returnedNonce) && $returnedNonce !== '') {
+               if (! hash_equals($sessionNonce, $returnedNonce)) {
+                   Log::warning('SSO callback rejected: nonce mismatch.');
+
+                   return redirect()->route('login')->withErrors([
+                       'email' => 'SSO session nonce verification failed. Please try again.',
+                   ]);
+               }
+           }
+
+           // 6. Validate identity payload returned directly in /api/sso/token response
+           $userData = $response->json('user');
+           if (! is_array($userData) || empty($userData['id']) || empty($userData['email'])) {
+               Log::error('SSO callback received malformed user object from provider.');
+
+               return redirect()->route('login')->withErrors([
+                   'email' => 'Invalid identity payload received from Login Portal.',
+               ]);
+           }
+
+           $portalUserId = (int) $userData['id'];
+           $boundUserId = ! empty($userData['bound_user_id']) ? (string) $userData['bound_user_id'] : null;
+           $email = (string) $userData['email'];
+           $name = (string) ($userData['name'] ?? explode('@', $email)[0]);
+
+           // 7. Resolve local user via 4-tier hierarchy
+           $user = null;
+
+           // Tier 1: Match by explicit bound_user_id (from sso_user_bindings.external_user_id)
+           if ($boundUserId !== null && ctype_digit($boundUserId)) {
+               $candidate = User::find((int) $boundUserId);
+               if ($candidate && ($candidate->login_portal_user_id === null || (int) $candidate->login_portal_user_id === $portalUserId)) {
+                   $user = $candidate;
+               }
+           }
+
+           // Tier 2: Match by linked login_portal_user_id
+           if (! $user) {
+               $user = User::where('login_portal_user_id', $portalUserId)->first();
+           }
+
+           // Tier 3: Match by local email address (if not already linked to a different Portal user)
+           if (! $user) {
+               $emailCandidate = User::where('email', $email)->first();
+               if ($emailCandidate) {
+                   if ($emailCandidate->login_portal_user_id !== null && (int) $emailCandidate->login_portal_user_id !== $portalUserId) {
+                       return redirect()->route('login')->withErrors([
+                           'email' => 'This local email account is already linked to a different Login Portal identity.',
+                       ]);
+                   }
+                   $user = $emailCandidate;
+               }
+           }
+
+           // Link login_portal_user_id on matched existing user if not yet recorded
+           if ($user) {
+               if ((int) $user->login_portal_user_id !== $portalUserId || $user->sso_provider !== 'login_portal') {
+                   $user->forceFill([
+                       'login_portal_user_id' => $portalUserId,
+                       'sso_provider' => 'login_portal',
+                   ])->save();
+               }
+           } else {
+               // Tier 4: First-login auto-provisioning (governed by LOGIN_PORTAL_AUTO_PROVISION)
+               if (! config('services.login_portal.auto_provision', true)) {
+                   return redirect()->route('login')->withErrors([
+                       'email' => 'Your account is not authorized to access this application. Please request access from an administrator.',
+                   ]);
+               }
+
+               $user = User::create([
+                   'name' => $name,
+                   'email' => $email,
+                   'login_portal_user_id' => $portalUserId,
+                   'sso_provider' => 'login_portal',
+                   'email_verified_at' => ! empty($userData['email_verified_at'])
+                       ? Carbon::parse($userData['email_verified_at'])
+                       : now(),
+                   'password' => Hash::make(Str::random(32)),
+               ]);
+           }
+
+           // 8. Enforce Client Authorization Boundaries (e.g., local ban / suspension check)
+           if ((method_exists($user, 'isBanned') && $user->isBanned()) || (isset($user->is_banned) && $user->is_banned)) {
+               return redirect()->route('login')->withErrors([
+                   'email' => 'Your local account on this application has been suspended.',
+               ]);
+           }
+
+           // 9. Establish local authenticated session & regenerate session ID (Fixation Defense)
+           Auth::login($user, remember: true);
+           $request->session()->regenerate();
+
+           return redirect()->intended('/dashboard');
+       }
+
+       /**
+        * Step 3: Verify local user credentials for Login Portal "Connected Systems" account binding.
+        * Called server-to-server by Login Portal via POST /api/sso/verify-credentials.
+        */
+       public function verifyCredentials(Request $request): JsonResponse
+       {
+           $expectedSecret = (string) config('services.login_portal.client_secret');
+           $providedSecret = (string) $request->input('client_secret', '');
+
+           if ($expectedSecret === '' || $providedSecret === '' || ! hash_equals($expectedSecret, $providedSecret)) {
+               return response()->json([
+                   'success' => false,
+                   'message' => 'Unauthorized client secret.',
+               ], 401);
+           }
+
+           $login = trim((string) $request->input('username', ''));
+           $password = (string) $request->input('password', '');
+
+           if ($login === '' || $password === '') {
+               return response()->json([
+                   'success' => false,
+                   'message' => 'Username and password are required.',
+               ], 400);
+           }
+
+           $query = User::query()->where('email', $login);
+           if (Schema::hasColumn('users', 'username')) {
+               $query->orWhere('username', $login);
+           }
+           $query->orWhere('name', $login);
+
+           $user = $query->first();
+
+           if (! $user || ! Hash::check($password, $user->password)) {
+               return response()->json([
+                   'success' => false,
+                   'message' => 'Invalid username or password.',
+               ], 400);
+           }
+
+           if ((method_exists($user, 'isBanned') && $user->isBanned()) || (isset($user->is_banned) && $user->is_banned)) {
+               return response()->json([
+                   'success' => false,
+                   'message' => 'This local account is suspended.',
+               ], 403);
+           }
+
+           return response()->json([
+               'success' => true,
+               'user' => [
+                   'id' => (string) $user->id,
+                   'username' => $user->username ?? $user->email,
+                   'email' => $user->email,
+               ],
+           ]);
+       }
+
+       /**
+        * Step 4: Local application logout (destroys client session only; does not end central Portal session).
+        */
+       public function logout(Request $request): RedirectResponse
+       {
+           Auth::guard('web')->logout();
+
+           $request->session()->invalidate();
+           $request->session()->regenerateToken();
+
+           return redirect()->route('login');
+       }
+   }
+   ```
+
+**How to Verify Step 4**:
+Run on **`[Client Application]`**:
 ```bash
-php artisan make:migration add_sso_columns_to_users_table --table=users
+# Run on [Client Application]
+php -l app/Http/Controllers/Auth/SsoClientController.php
 ```
-```php
-public function up(): void
-{
-    Schema::table('users', function (Blueprint $table) {
-        $table->unsignedBigInteger('login_portal_user_id')->nullable()->unique()->after('id');
-        $table->string('sso_provider')->nullable()->default('login_portal')->after('login_portal_user_id');
-    });
-}
+Expected output: `No syntax errors detected in app/Http/Controllers/Auth/SsoClientController.php`.
+
+---
+
+### Step 5 (`[Client Application]` — Required): Register Web and API Routes
+
+**Purpose**: Expose `/sso/redirect` and `/sso/callback` under the `web` middleware group (so sessions and cookies are active) and expose `POST /api/sso/verify-credentials` in `routes/api.php` (so it is stateless and CSRF-exempt for server-to-server account binding calls from the `[SSO Server]`).
+
+> **Note for Laravel 11 / 12 / 13**: If your client application does not have `routes/api.php` enabled yet, run `php artisan install:api --no-interaction` (or ensure `api: __DIR__.'/../routes/api.php'` is present in `bootstrap/app.php` `->withRouting(...)`). We also register `/sso/verify-credentials` as a fallback route exempted from CSRF in `bootstrap/app.php` so both candidate URLs checked by `ConnectedSystemsController::resolveCandidateApiUrls()` (`/api/sso/verify-credentials` and `/sso/verify-credentials`) work seamlessly.
+
+1. **`[Client Application]`** Register the browser SSO routes in `routes/web.php`:
+
+   **File**: `routes/web.php` (`[Client Application]`)
+   ```php
+   <?php
+
+   use App\Http\Controllers\Auth\SsoClientController;
+   use Illuminate\Support\Facades\Route;
+
+   // SSO Browser Redirect & Callback Routes
+   // Note: Do NOT wrap /sso/callback in 'guest' if you want already-logged-in users
+   // launching from the Portal Dashboard to seamlessly refresh their session.
+   Route::middleware('throttle:60,1')->group(function (): void {
+       Route::get('/sso/redirect', [SsoClientController::class, 'redirect'])->name('sso.redirect');
+       Route::get('/sso/callback', [SsoClientController::class, 'callback'])->name('sso.callback');
+   });
+
+   // Fallback credential verification route (CSRF-exempt in bootstrap/app.php)
+   Route::post('/sso/verify-credentials', [SsoClientController::class, 'verifyCredentials'])
+       ->middleware('throttle:30,1')
+       ->name('sso.verify-credentials');
+
+   // Only register this logout route if your app does not already use Jetstream/Fortify/Breeze /logout
+   if (! Route::has('logout')) {
+       Route::post('/logout', [SsoClientController::class, 'logout'])
+           ->middleware('auth')
+           ->name('logout');
+   }
+   ```
+
+2. **`[Client Application]`** Register the primary API credential verification route in `routes/api.php`:
+
+   **File**: `routes/api.php` (`[Client Application]`)
+   ```php
+   <?php
+
+   use App\Http\Controllers\Auth\SsoClientController;
+   use Illuminate\Support\Facades\Route;
+
+   Route::post('/sso/verify-credentials', [SsoClientController::class, 'verifyCredentials'])
+       ->middleware('throttle:30,1')
+       ->name('api.sso.verify-credentials');
+   ```
+
+3. **`[Client Application]`** Ensure `routes/api.php` is loaded and `/sso/verify-credentials` is exempted from web CSRF verification in `bootstrap/app.php`:
+
+   **File**: `bootstrap/app.php` (`[Client Application]`)
+   ```php
+   ->withRouting(
+       web: __DIR__.'/../routes/web.php',
+       api: __DIR__.'/../routes/api.php',
+       commands: __DIR__.'/../routes/console.php',
+       health: '/up',
+   )
+   ->withMiddleware(function (Middleware $middleware): void {
+       $middleware->validateCsrfTokens(except: [
+           'sso/verify-credentials',
+           'api/sso/verify-credentials',
+       ]);
+   })
+   ```
+
+**How to Verify Step 5**:
+Run on **`[Client Application]`**:
+```bash
+# Run on [Client Application]
+php artisan route:list --path=sso
 ```
+Expected output: Displays `GET|HEAD sso/redirect`, `GET|HEAD sso/callback`, `POST api/sso/verify-credentials`, and `POST sso/verify-credentials`.
 
-### Step 4: Routes (`routes/web.php`)
-Register the redirection and callback routes:
-```php
-use App\Http\Controllers\Auth\SsoClientController;
+---
 
-Route::middleware('guest')->group(function () {
-    Route::get('/sso/redirect', [SsoClientController::class, 'redirect'])->name('sso.redirect');
-    Route::get('/sso/callback', [SsoClientController::class, 'callback'])->name('sso.callback');
-});
-```
+### Step 6 (`[Client Application]` — Required): Add the SSO Login Button to the Login View
 
-### Step 5: Controller (`app/Http/Controllers/Auth/SsoClientController.php`)
-```php
-namespace App\Http\Controllers\Auth;
+**Purpose**: Provide a **"Login with LGUNET Portal"** button on the client's login page while preserving the existing local username/email and password login form.
 
-use App\Http\Controllers\Controller;
-use App\Models\User;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
+> **Important for Inertia + Vue 3**: Use a standard `<a :href="route('sso.redirect')">` anchor tag (or `<a href="/sso/redirect">`), **never** Inertia's `<Link>` component, because `/sso/redirect` performs an external cross-origin browser redirect to the `[SSO Server]`, which cannot be loaded as an XHR Inertia page visit.
 
-class SsoClientController extends Controller
-{
-    public function redirect(Request $request)
-    {
-        $state = Str::random(40);
-        $request->session()->put('sso_state', $state);
-
-        $params = http_build_query([
-            'client_id' => config('services.login_portal.client_id'),
-            'redirect_uri' => config('services.login_portal.redirect_uri'),
-            'response_type' => 'code',
-            'state' => $state,
-        ]);
-
-        return redirect()->away(rtrim(config('services.login_portal.url'), '/') . '/sso/authorize?' . $params);
-    }
-
-    public function callback(Request $request)
-    {
-        // 1. Validate & Invalidate CSRF State
-        $sessionState = $request->session()->pull('sso_state');
-        $returnedState = $request->query('state');
-
-        if (! $sessionState || ! $returnedState || ! hash_equals($sessionState, $returnedState)) {
-            Log::warning('SSO state validation failed during callback.');
-            return redirect()->route('login')->withErrors(['email' => 'Invalid or expired SSO state session. Please try again.']);
-        }
-
-        // 2. Validate Authorization Code
-        $code = $request->query('code');
-        if (! $code) {
-            return redirect()->route('login')->withErrors(['email' => 'Authorization code missing from Login Portal response.']);
-        }
-
-        // 3. Backchannel Server-to-Server Token Exchange
-        try {
-            $tokenUrl = rtrim(config('services.login_portal.url'), '/') . '/api/sso/token';
-            $response = Http::asForm()->timeout(15)->post($tokenUrl, [
-                'grant_type' => 'authorization_code',
-                'client_id' => config('services.login_portal.client_id'),
-                'client_secret' => config('services.login_portal.client_secret'),
-                'redirect_uri' => config('services.login_portal.redirect_uri'),
-                'code' => $code,
-            ]);
-        } catch (\Exception $e) {
-            Log::error('SSO token exchange network exception', ['message' => $e->getMessage()]);
-            return redirect()->route('login')->withErrors(['email' => 'Unable to communicate with Login Portal.']);
-        }
-
-        if ($response->failed()) {
-            Log::error('SSO token exchange failed', ['status' => $response->status()]);
-            return redirect()->route('login')->withErrors(['email' => 'SSO authentication failed at provider.']);
-        }
-
-        $userData = $response->json('user');
-        if (! is_array($userData) || empty($userData['id']) || empty($userData['email'])) {
-            return redirect()->route('login')->withErrors(['email' => 'Invalid identity payload received from Login Portal.']);
-        }
-
-        // 4. Safe User Matching & Provisioning
-        // Primary match: verified Login Portal User ID
-        $user = User::where('login_portal_user_id', $userData['id'])->first();
-
-        if (! $user) {
-            // Secondary match: existing local account by verified email
-            $user = User::where('email', $userData['email'])->first();
-
-            if ($user) {
-                // Safely link existing local account to Login Portal identity
-                $user->forceFill([
-                    'login_portal_user_id' => $userData['id'],
-                    'sso_provider' => 'login_portal',
-                ])->save();
-            } else {
-                // Auto-provision new local user with unguessable random password
-                $user = User::create([
-                    'name' => $userData['name'] ?? explode('@', $userData['email'])[0],
-                    'email' => $userData['email'],
-                    'login_portal_user_id' => $userData['id'],
-                    'sso_provider' => 'login_portal',
-                    'password' => Hash::make(Str::random(32)),
-                ]);
-            }
-        }
-
-        // 5. Establish Local Session & Regenerate Session ID (Fixation Protection)
-        Auth::login($user, remember: true);
-        $request->session()->regenerate();
-
-        return redirect()->intended('/dashboard');
-    }
-}
-```
-
-### Step 6: UI Integration ("Login with LGUNET Portal" Button)
-Add the SSO login option to your application's login template while strictly preserving the existing username/password form:
-```html
-<!-- LGUNET Portal Single Sign-On Button -->
-<div class="mb-4">
-    <a href="{{ route('sso.redirect') }}" class="w-full inline-flex justify-center items-center px-4 py-2.5 bg-[#1b4332] hover:bg-[#081c15] text-white font-bold text-sm rounded-xl shadow-xs transition">
+#### Option 6A: Laravel + Inertia.js (Vue 3)
+**File**: `resources/js/Pages/Auth/Login.vue` (`[Client Application]`)
+```vue
+<!-- Place inside your login card above the existing <form @submit.prevent="submit"> -->
+<div class="mb-5">
+    <a
+        href="/sso/redirect"
+        class="w-full flex items-center justify-center space-x-2 py-3 px-4 bg-[#1b4332] hover:bg-[#081c15] text-white font-bold text-sm rounded-xl shadow-xs transition duration-150"
+    >
+        <svg class="size-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+        </svg>
         <span>Login with LGUNET Portal</span>
     </a>
+
     <div class="relative flex py-4 items-center">
         <div class="flex-grow border-t border-gray-300"></div>
-        <span class="flex-shrink mx-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">or sign in with credentials</span>
+        <span class="flex-shrink mx-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            or sign in with credentials
+        </span>
         <div class="flex-grow border-t border-gray-300"></div>
     </div>
 </div>
 ```
 
-### Step 7: Automated Feature Testing (Mocked HTTP)
-Test your SSO implementation using `Http::fake()` without depending on a live Login Portal server:
+#### Option 6B: Laravel Blade / Livewire
+**File**: `resources/views/auth/login.blade.php` (`[Client Application]`)
+```blade
+<!-- Place inside your login card above the existing <form method="POST" action="{{ route('login') }}"> -->
+<div class="mb-5">
+    <a
+        href="{{ route('sso.redirect') }}"
+        class="w-full inline-flex items-center justify-center gap-2 py-3 px-4 bg-[#1b4332] hover:bg-[#081c15] text-white font-bold text-sm rounded-xl shadow-xs transition duration-150"
+    >
+        <svg class="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+        </svg>
+        <span>Login with LGUNET Portal</span>
+    </a>
+
+    <div class="relative flex py-4 items-center">
+        <div class="flex-grow border-t border-gray-300"></div>
+        <span class="flex-shrink mx-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            or sign in with credentials
+        </span>
+        <div class="flex-grow border-t border-gray-300"></div>
+    </div>
+</div>
+```
+
+**How to Verify Step 6**:
+- If using Vite/Inertia on **`[Client Application]`**, run `npm run build` (or `npm run dev`), visit `/login`, and confirm the **"Login with LGUNET Portal"** button renders above the local login form.
+
+---
+
+### Step 7 (`[Client Application]` & `[SSO Server]` — Required): Local Development vs. Production Setup
+
+**Purpose**: Configure ports, HTTPS/TLS, reverse proxies, cookies, and config caching so browser redirects and backchannel HTTP calls succeed in both local development and production.
+
+#### 7.1 Local Development Setup
+When running both `[SSO Server]` and `[Client Application]` on the same development machine:
+1. **Use Distinct Ports**:
+   - Run **`[SSO Server]`** on port `8000`:
+     ```bash
+     # Run on [SSO Server]
+     php artisan serve --host=127.0.0.1 --port=8000
+     ```
+   - Run **`[Client Application]`** on port `8001` (Note: PHP's single-threaded built-in server requires at least 2 workers or separate servers so `[SSO Server]` calling `[Client Application]` `/api/sso/verify-credentials` does not deadlock; running on different ports `8000` and `8001` prevents deadlocks):
+     ```bash
+     # Run on [Client Application]
+     php artisan serve --host=127.0.0.1 --port=8001
+     ```
+2. **Consistent Loopback Host (`127.0.0.1` vs `localhost`)**:
+   - Browser session cookies are scoped by hostname. If a user starts at `http://localhost:8001/sso/redirect` and the callback returns to `http://127.0.0.1:8001/sso/callback`, the browser will not send the `localhost` session cookie to `127.0.0.1`, causing an `Invalid or expired SSO state session` error!
+   - Always use the **exact same hostname** (`127.0.0.1` or `localhost`) in the browser address bar, `APP_URL`, `LOGIN_PORTAL_REDIRECT_URI`, and the SSO Server's registered `redirect_uri`.
+3. **Local Cookie Flags**:
+   - In `.env` on `[Client Application]`, set `SESSION_SAME_SITE=lax` and `SESSION_SECURE_COOKIE=false` when serving over `http://`.
+
+#### 7.2 Production Setup & Deployment Commands
+1. **Mandatory HTTPS / TLS**:
+   - Both `LOGIN_PORTAL_URL` and `LOGIN_PORTAL_REDIRECT_URI` **must** use `https://` with valid CA-signed TLS certificates so `client_secret`, authorization codes, and session cookies are encrypted in transit.
+2. **Production Cookie & Session Hardening (`.env` on `[Client Application]`)**:
+   ```dotenv
+   APP_ENV=production
+   APP_DEBUG=false
+   APP_URL=https://your-app.example
+   LOGIN_PORTAL_URL=https://your-login-portal.example
+   LOGIN_PORTAL_REDIRECT_URI=https://your-app.example/sso/callback
+   SESSION_DRIVER=database
+   SESSION_SECURE_COOKIE=true
+   SESSION_HTTP_ONLY=true
+   SESSION_SAME_SITE=lax
+   ```
+3. **Reverse Proxy / Load Balancer (`TrustProxies`)**:
+   - If the `[Client Application]` sits behind Nginx, Cloudflare, or an AWS ALB terminating TLS, configure `$middleware->trustProxies(at: '*')` (or your proxy CIDR) in `bootstrap/app.php` so `request()->isSecure()` is `true` and secure cookies work properly.
+4. **Deployment Commands (`[Client Application]`)**:
+   ```bash
+   # Run on [Client Application] during production deployment
+   php artisan migrate --force --no-interaction
+   php artisan config:clear
+   php artisan config:cache
+   php artisan route:cache
+   npm run build
+   ```
+
+---
+
+### Step 8 (`[Client Application]` & `[SSO Server]` — Required): End-to-End Verification & Automated Feature Tests
+
+#### 8.1 End-to-End Manual Verification Checklist
+1. **Verify Credential Binding (`[SSO Server]` → `[Client Application]`)**:
+   - Ensure you have a local user in `[Client Application]` (e.g., `email: user@example.com`, `password: secret123`).
+   - Log in to **`[SSO Server]`**, visit `GET /connected-systems`, click **Bind Account** on your client application, and enter `user@example.com` + `secret123`.
+   - **Expected Result**: The `[SSO Server]` calls `POST /api/sso/verify-credentials` on `[Client Application]`, receives `200 OK` with `{"success": true, "user": {...}}`, creates the `sso_user_bindings` record, and displays the green **BOUND** badge.
+2. **Verify SP-Initiated SSO Login (`[Client Application]` → `[SSO Server]` → `[Client Application]`)**:
+   - In an incognito window (or after logging out of `[Client Application]`), visit `http://127.0.0.1:8001/login` and click **Login with LGUNET Portal**.
+   - **Expected Result**:
+     1. Browser hits `GET /sso/redirect`, stores `sso_state`, `sso_nonce`, and `sso_code_verifier` in session, and redirects (`302`) to `{LOGIN_PORTAL_URL}/sso/authorize?...`.
+     2. After authenticating at `[SSO Server]`, browser is redirected (`302`) to `http://127.0.0.1:8001/sso/callback?code=...&state=...`.
+     3. `[Client Application]` exchanges `code` + `code_verifier` via `POST /api/sso/token`, links `login_portal_user_id` on the local `User`, regenerates the session ID, and redirects (`302`) to `/dashboard` as an authenticated user.
+3. **Verify Local Logout Scope (`[Client Application]`)**:
+   - Click **Log Out** (`POST /logout`) in `[Client Application]`.
+   - **Expected Result**: You are logged out of `[Client Application]` (`/dashboard` redirects to `/login`), while your central session on `[SSO Server]` remains logged in.
+
+#### 8.2 Automated Feature Test Suite (`[Client Application]`)
+Create `tests/Feature/SsoIntegrationTest.php` on the **`[Client Application]`** to verify all protocol requirements using `Http::fake()` (never calling a live SSO server in tests):
+
+```bash
+# Run on [Client Application]
+php artisan make:test --phpunit SsoIntegrationTest --no-interaction
+```
+
+**File**: `tests/Feature/SsoIntegrationTest.php` (`[Client Application]`)
 ```php
+<?php
+
 namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -417,56 +1217,97 @@ class SsoIntegrationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_sso_redirect_generates_valid_state_and_url()
+    protected function setUp(): void
     {
-        $response = $this->get(route('sso.redirect'));
-        $response->assertStatus(302);
+        parent::setUp();
 
-        $targetUrl = $response->headers->get('Location');
-        $this->assertStringContainsString('/sso/authorize', $targetUrl);
-        $this->assertStringContainsString('client_id=', $targetUrl);
-        $this->assertStringContainsString('response_type=code', $targetUrl);
-
-        $sessionState = session('sso_state');
-        $this->assertNotEmpty($sessionState);
-        $this->assertStringContainsString('state=' . $sessionState, $targetUrl);
+        config([
+            'services.login_portal.url' => 'https://portal.example.test',
+            'services.login_portal.client_id' => 'client_test_123',
+            'services.login_portal.client_secret' => 'test_secret_64_chars_long_123456789012345678901234567890123456',
+            'services.login_portal.redirect_uri' => 'http://localhost/sso/callback',
+            'services.login_portal.auto_provision' => true,
+        ]);
     }
 
-    public function test_sso_callback_rejects_invalid_state()
+    public function test_sso_redirect_generates_state_nonce_pkce_and_authorization_url(): void
     {
-        session(['sso_state' => 'valid_state_token']);
+        $response = $this->get(route('sso.redirect'));
 
-        $response = $this->get(route('sso.callback', [
-            'state' => 'wrong_state',
-            'code' => 'auth_code_sample',
-        ]));
+        $response->assertRedirect();
+        $location = (string) $response->headers->get('Location');
+
+        $this->assertStringStartsWith('https://portal.example.test/sso/authorize?', $location);
+        $this->assertStringContainsString('client_id=client_test_123', $location);
+        $this->assertStringContainsString('response_type=code', $location);
+        $this->assertStringContainsString('code_challenge_method=S256', $location);
+
+        $state = session('sso_state');
+        $nonce = session('sso_nonce');
+        $verifier = session('sso_code_verifier');
+
+        $this->assertNotEmpty($state);
+        $this->assertNotEmpty($nonce);
+        $this->assertNotEmpty($verifier);
+        $this->assertStringContainsString('state='.urlencode($state), $location);
+        $this->assertStringContainsString('nonce='.urlencode($nonce), $location);
+    }
+
+    public function test_sso_callback_rejects_invalid_or_missing_state(): void
+    {
+        $response = $this->withSession(['sso_state' => 'expected_state_token'])
+            ->get(route('sso.callback', [
+                'state' => 'tampered_state_token',
+                'code' => 'sample_code',
+            ]));
 
         $response->assertRedirect(route('login'));
         $response->assertSessionHasErrors('email');
         $this->assertGuest();
     }
 
-    public function test_sso_callback_authenticates_and_provisions_new_user()
+    public function test_sso_callback_rejects_missing_authorization_code(): void
     {
         $state = Str::random(40);
-        session(['sso_state' => $state]);
+
+        $response = $this->withSession(['sso_state' => $state])
+            ->get(route('sso.callback', ['state' => $state]));
+
+        $response->assertRedirect(route('login'));
+        $response->assertSessionHasErrors('email');
+        $this->assertGuest();
+    }
+
+    public function test_sso_callback_provisions_new_user_and_establishes_session(): void
+    {
+        $state = Str::random(40);
+        $nonce = Str::random(40);
+        $verifier = Str::random(64);
 
         Http::fake([
-            '*/api/sso/token' => Http::response([
-                'access_token' => 'mock_token',
+            'https://portal.example.test/api/sso/token' => Http::response([
                 'token_type' => 'Bearer',
+                'access_token' => Str::random(80),
                 'expires_in' => 3600,
+                'nonce' => $nonce,
                 'user' => [
-                    'id' => 999,
+                    'id' => '999',
+                    'bound_user_id' => null,
+                    'bound_username' => null,
                     'name' => 'Jane Portal User',
                     'email' => 'jane@example.com',
+                    'email_verified_at' => now()->toIso8601String(),
                 ],
             ], 200),
         ]);
 
-        $response = $this->get(route('sso.callback', [
+        $response = $this->withSession([
+            'sso_state' => $state,
+            'sso_nonce' => $nonce,
+            'sso_code_verifier' => $verifier,
+        ])->get(route('sso.callback', [
             'state' => $state,
-            'code' => 'mock_auth_code_123',
+            'code' => 'valid_single_use_code',
         ]));
 
         $response->assertRedirect('/dashboard');
@@ -474,39 +1315,350 @@ class SsoIntegrationTest extends TestCase
 
         $user = User::where('email', 'jane@example.com')->first();
         $this->assertNotNull($user);
-        $this->assertEquals(999, $user->login_portal_user_id);
+        $this->assertSame(999, (int) $user->login_portal_user_id);
+        $this->assertSame('login_portal', $user->sso_provider);
+    }
+
+    public function test_sso_callback_links_existing_user_by_bound_user_id_or_email(): void
+    {
+        $existingUser = User::factory()->create([
+            'email' => 'existing@example.com',
+            'login_portal_user_id' => null,
+        ]);
+
+        $state = Str::random(40);
+
+        Http::fake([
+            'https://portal.example.test/api/sso/token' => Http::response([
+                'token_type' => 'Bearer',
+                'access_token' => Str::random(80),
+                'expires_in' => 3600,
+                'user' => [
+                    'id' => '42',
+                    'bound_user_id' => (string) $existingUser->id,
+                    'bound_username' => 'existing@example.com',
+                    'name' => $existingUser->name,
+                    'email' => 'existing@example.com',
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->withSession(['sso_state' => $state])
+            ->get(route('sso.callback', [
+                'state' => $state,
+                'code' => 'valid_code_42',
+            ]));
+
+        $response->assertRedirect('/dashboard');
+        $this->assertAuthenticatedAs($existingUser);
+        $this->assertSame(42, (int) $existingUser->fresh()->login_portal_user_id);
+    }
+
+    public function test_sso_callback_handles_failed_token_exchange_gracefully(): void
+    {
+        $state = Str::random(40);
+
+        Http::fake([
+            'https://portal.example.test/api/sso/token' => Http::response([
+                'error' => 'invalid_grant',
+                'error_description' => 'Authorization code has expired.',
+            ], 400),
+        ]);
+
+        $response = $this->withSession(['sso_state' => $state])
+            ->get(route('sso.callback', [
+                'state' => $state,
+                'code' => 'expired_code',
+            ]));
+
+        $response->assertRedirect(route('login'));
+        $response->assertSessionHasErrors('email');
+        $this->assertGuest();
+    }
+
+    public function test_verify_credentials_endpoint_authenticates_valid_local_user_for_binding(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'bindme@example.com',
+            'password' => Hash::make('MyLocalPass123!'),
+        ]);
+
+        $response = $this->postJson('/api/sso/verify-credentials', [
+            'username' => 'bindme@example.com',
+            'password' => 'MyLocalPass123!',
+            'client_secret' => config('services.login_portal.client_secret'),
+        ]);
+
+        $response->assertOk()
+            ->assertJson([
+                'success' => true,
+                'user' => [
+                    'id' => (string) $user->id,
+                    'email' => 'bindme@example.com',
+                ],
+            ]);
+    }
+
+    public function test_verify_credentials_rejects_invalid_client_secret(): void
+    {
+        $response = $this->postJson('/api/sso/verify-credentials', [
+            'username' => 'anyone@example.com',
+            'password' => 'password',
+            'client_secret' => 'wrong_secret',
+        ]);
+
+        $response->assertStatus(401)
+            ->assertJson(['success' => false]);
     }
 }
 ```
 
+Run the test suite on **`[Client Application]`**:
+```bash
+# Run on [Client Application]
+php artisan test --compact tests/Feature/SsoIntegrationTest.php
+```
+
 ---
 
-## 8. Audit Logging & Security Checklist
+# Guide 2: Integration using AI Agent
 
-### Audit Events Logged by LGUNET Portal:
-| Event | Log Key | Details Logged |
+Copy the self-contained prompt below and paste it directly into an AI coding agent (**Google Antigravity**, **Claude Code**, **Cursor**, **GitHub Copilot**, or **Codex**) opened inside your **separate `[Client Application]` repository**. It embeds the complete, verified `[SSO Server]` contract so the agent does not need access to the `login_portal` repository.
+
+```markdown
+# Task: Integrate OAuth 2.0 Single Sign-On (SSO) Client with Central LGUNET Portal
+
+You are an expert software engineer integrating this client application repository with the central **LGUNET Portal (`login_portal`) SSO Server**. This repository is the **Relying Party (`[Client Application]`)** and does NOT have access to the SSO server's source code. Treat the verified SSO Server Integration Contract below as the single source of truth.
+
+---
+
+## Phase 1: Mandatory Repository Inspection (Read Before Writing Any Code)
+
+Before creating or modifying any files, inspect this repository and determine:
+1. **Framework & Package Versions**:
+   - Inspect `composer.json` (and run `composer show --direct` if PHP/Laravel) or `package.json` / project files (`requirements.txt`, `.csproj`, `pom.xml`) to confirm exact installed framework and package versions.
+   - Check for any project-specific agent instructions (`AGENTS.md`, `CLAUDE.md`, `.ai/rules`) and follow them strictly.
+2. **Existing Authentication & Session Infrastructure**:
+   - Inspect `config/auth.php`, `config/session.php`, `config/services.php`, `bootstrap/app.php` (or `app/Http/Kernel.php`), `routes/web.php`, `routes/api.php`, existing Auth controllers, and the login UI view (`resources/js/Pages/Auth/Login.vue`, `resources/views/auth/login.blade.php`, etc.).
+   - Identify how users currently log in and log out, and where authenticated users are redirected (e.g., `/dashboard`).
+3. **Existing Database Schema & User Model**:
+   - Inspect `database/migrations/*` and `app/Models/User.php` (or equivalent User entity).
+   - Check existing columns on `users` (specifically whether `id`, `name`, `username`, `email`, `password`, `email_verified_at`, `is_banned`, `login_portal_user_id`, or `sso_provider` already exist) and whether the `sessions` table exists if `SESSION_DRIVER=database`.
+4. **Missing Credentials Check**:
+   - Check if `LOGIN_PORTAL_URL`, `LOGIN_PORTAL_CLIENT_ID`, `LOGIN_PORTAL_CLIENT_SECRET`, and `LOGIN_PORTAL_REDIRECT_URI` are already configured in `.env`.
+   - If real credentials are not yet provided, configure safe placeholders in `.env` and `.env.example` and ask the user for the registered values (from the SSO Server's `GET /admin/sso` panel) without ever logging, echoing, or committing plaintext secrets into version-controlled code.
+
+---
+
+## Phase 2: Verified SSO Server Integration Contract (Source of Truth)
+
+### 1. Endpoints on the SSO Server (`${LOGIN_PORTAL_URL}`)
+- **Authorization Endpoint (Browser Redirect)**: `GET ${LOGIN_PORTAL_URL}/sso/authorize`
+  - **Rate Limit**: 60 requests/min.
+  - **Query Parameters**:
+    - `client_id` (required): Registered public client ID.
+    - `redirect_uri` (required): Must match the client's registered `redirect_uri` on the SSO server (scheme, host, port, and path).
+    - `response_type` (required): Must be `code`.
+    - `state` (required by client): Cryptographically random CSRF token (`>= 40` chars) stored in client session.
+    - `code_challenge` (recommended, PKCE): `BASE64URL(SHA256(code_verifier))` (without `=` padding).
+    - `code_challenge_method` (recommended, PKCE): `S256` (or `plain`). Note: When `code_challenge` is sent to `/sso/authorize`, the SSO server strictly requires the matching `code_verifier` on `/api/sso/token`.
+    - `nonce` (optional): Random session-binding string echoed back in the token exchange response.
+  - **Server Behavior**:
+    - If `client_id` or `redirect_uri` is invalid/inactive, returns `HTTP 400` JSON (`invalid_request`, `unauthorized_client`, `invalid_redirect_uri`, `unsupported_response_type`).
+    - If the Portal user is not logged in, redirects to Portal `/login` and automatically resumes `/sso/authorize` after authentication.
+    - If the Portal user is banned, returns `HTTP 403` JSON (`access_denied`).
+    - **Mandatory Account Binding**: The SSO server checks its `sso_user_bindings` table for `(user_id, client_id)`. If the user has not bound their account for this client yet, the SSO server redirects the user's browser to `/connected-systems` on the Portal and pauses the SSO flow until binding completes.
+    - Once authenticated and bound, issues a single-use 40-character `code` (valid for **2 minutes** / 120 seconds) and redirects the browser to:
+      `${LOGIN_PORTAL_REDIRECT_URI}?code={code}&state={state}`
+- **Portal Dashboard Launcher (IdP-Initiated)**: `GET ${LOGIN_PORTAL_URL}/sso/launch/{clientId}`
+  - Generates a Portal-side `state` and redirects through `/sso/authorize` to `${LOGIN_PORTAL_REDIRECT_URI}?code={code}&state={state}`. Because this flow starts on the Portal Dashboard without visiting the client's `/sso/redirect` first, the client session will not have `sso_state`. If `/sso/callback` receives a `code` and `state` when `session('sso_state')` is `null` (and has not already re-initiated), redirect once to the client's `/sso/redirect` route so a proper client-side `sso_state` and PKCE challenge are established without weakening CSRF validation.
+- **Backchannel Token Exchange Endpoint (Server-to-Server POST)**:
+  - `POST ${LOGIN_PORTAL_URL}/api/sso/token` (or `POST ${LOGIN_PORTAL_URL}/sso/token`)
+  - **Content-Type**: `application/x-www-form-urlencoded` or `application/json` (Rate limit: 60 req/min).
+  - **Request Body**:
+    - `grant_type`: `"authorization_code"` (required)
+    - `client_id`: `${LOGIN_PORTAL_CLIENT_ID}` (required)
+    - `client_secret`: `${LOGIN_PORTAL_CLIENT_SECRET}` (required, server-side only)
+    - `code`: The authorization code from callback query string (required, single-use, 2-min TTL)
+    - `redirect_uri`: `${LOGIN_PORTAL_REDIRECT_URI}` (required)
+    - `code_verifier`: The raw PKCE verifier stored in session during `/sso/redirect` (required whenever `code_challenge` was sent)
+  - **Success Response (`200 OK`)**:
+    ```json
+    {
+      "token_type": "Bearer",
+      "access_token": "80_char_random_string",
+      "expires_in": 3600,
+      "nonce": "echoed_nonce_or_null",
+      "user": {
+        "id": "42",
+        "bound_user_id": "105",
+        "bound_username": "jdoe",
+        "name": "Juan Dela Cruz",
+        "email": "jdoe@bayawancity.gov.ph",
+        "email_verified_at": "2026-09-15T08:30:00+08:00",
+        "profile_photo_url": "https://..."
+      }
+    }
+    ```
+  - **CRITICAL CONTRACT RULE**: The SSO server returns the complete verified `user` payload directly inside the `POST /api/sso/token` response. Its `access_token` is an ephemeral assertion string that is NOT stored in Sanctum's `personal_access_tokens` table. Do **NOT** call `GET /api/user` or `GET /api/sso/userinfo` with `access_token` (doing so returns `401 Unauthorized`). Do **NOT** implement token refresh (`refresh_token`) or remote token revocation, as those endpoints do not exist on the SSO server.
+
+### 2. Required Client Endpoint for Account Binding (`POST /api/sso/verify-credentials`)
+When a user binds their account on the SSO Server's **Connected Systems** page (`/connected-systems`), the SSO Server sends a server-to-server `POST` (`application/x-www-form-urlencoded`, 5s timeout) to `{client_base_url}/api/sso/verify-credentials` (and fallback `{client_base_url}/sso/verify-credentials`) with:
+- `username`: User's local email, username, or name in this client application.
+- `password`: User's plaintext password in this client application.
+- `client_secret`: The client's `LOGIN_PORTAL_CLIENT_SECRET`.
+
+Your client endpoint MUST:
+1. Verify `client_secret` against `config('services.login_portal.client_secret')` using constant-time `hash_equals()`. Return `401` JSON `{"success": false, "message": "Unauthorized client secret."}` on mismatch.
+2. Look up the local user by `email` (and `username` if column exists, or `name`) and verify `password` using `Hash::check()`. Return `400` JSON `{"success": false, "message": "Invalid username or password."}` on failure.
+3. On success, return `200 OK` JSON:
+   ```json
+   {
+     "success": true,
+     "user": {
+       "id": "<string: local user primary key>",
+       "username": "<string: local username or email>",
+       "email": "<string: local email>"
+     }
+   }
+   ```
+
+---
+
+## Phase 3: Client Implementation Requirements
+
+1. **Environment & Configuration**:
+   - Add `LOGIN_PORTAL_URL`, `LOGIN_PORTAL_CLIENT_ID`, `LOGIN_PORTAL_CLIENT_SECRET`, `LOGIN_PORTAL_REDIRECT_URI`, and `LOGIN_PORTAL_AUTO_PROVISION=true` to `.env.example` (and `.env` if missing, preserving existing values).
+   - Ensure `SESSION_SAME_SITE=lax` and `SESSION_HTTP_ONLY=true` so session cookies survive the cross-origin redirect back from the SSO Server.
+   - Register the `login_portal` array in `config/services.php` (`url`, `client_id`, `client_secret`, `redirect_uri`, `auto_provision`).
+2. **Non-Destructive Database Migration (Client Schema Only)**:
+   - Do **NOT** create the SSO server's internal tables (`sso`, `sso_authorization_codes`, `sso_user_bindings`).
+   - Do **NOT** run destructive commands (`migrate:fresh`, `migrate:reset`, `db:wipe`) or drop existing columns.
+   - Create an additive migration on `users` adding (only if missing via `Schema::hasColumn`):
+     - `login_portal_user_id`: `unsignedBigInteger`, `nullable()`, `unique()`, placed after `id`.
+     - `sso_provider`: `string`, `nullable()`, `default('login_portal')`, placed after `login_portal_user_id`.
+   - Update `User::$fillable` (and casts if applicable) while preserving all existing model attributes, traits, and relationships.
+3. **User Identity Resolution & Account Linking (4-Tier Hierarchy)**:
+   In `/sso/callback`, after validating `state`, `nonce`, and the `POST /api/sso/token` response (`user` object with required `id` and `email`):
+   - **Tier 1 (`bound_user_id`)**: If `user.bound_user_id` is non-empty and numeric, find `User::find((int) $userData['bound_user_id'])` (ensuring it is not linked to a different `login_portal_user_id`).
+   - **Tier 2 (`login_portal_user_id`)**: If not found, query `User::where('login_portal_user_id', (int) $userData['id'])->first()`.
+   - **Tier 3 (`email`)**: If not found, query `User::where('email', $userData['email'])->first()`. If found, verify its `login_portal_user_id` is `null` or matches `user.id` (rejecting with an error if already linked to a different Portal user).
+   - On any Tier 1–3 match, persist `login_portal_user_id = (int) $userData['id']` and `sso_provider = 'login_portal'` while preserving the user's existing local password, roles, and data.
+   - **Tier 4 (First-Login Auto-Provisioning)**: If no local user matches:
+     - Check `config('services.login_portal.auto_provision', true)`. If `false`, reject login with an authorization error.
+     - If `true`, create a new `User` with `name`, `email`, `login_portal_user_id`, `sso_provider = 'login_portal'`, `email_verified_at`, and `password = Hash::make(Str::random(32))`.
+4. **Authorization Boundaries, Session Fixation Protection & Logout**:
+   - Before calling `Auth::login($user, remember: true)`, verify local authorization/status checks (e.g., reject banned or deactivated local users).
+   - Immediately call `$request->session()->regenerate()` after `Auth::login()` and redirect via `redirect()->intended('/dashboard')` (or the app's home route).
+   - Preserve existing local logout (`POST /logout`), or add one if missing, which invalidates only the client's local session and CSRF token.
+5. **Routes, Middleware & UI Integration**:
+   - Register `GET /sso/redirect` (`sso.redirect`) and `GET /sso/callback` (`sso.callback`) in `routes/web.php`.
+   - Register `POST /api/sso/verify-credentials` in `routes/api.php` and fallback `POST /sso/verify-credentials` in `routes/web.php` (exempted from CSRF in `bootstrap/app.php` or `VerifyCsrfToken`).
+   - Add a **"Login with LGUNET Portal"** button to the login page linking to `/sso/redirect` using a standard `<a>` tag (not an XHR SPA `<Link>`) while keeping the existing local username/password form intact.
+6. **Automated Feature Tests (Mocked HTTP)**:
+   - Create feature tests (e.g., `tests/Feature/SsoIntegrationTest.php`) using `Http::fake()` (or equivalent mock library) covering:
+     1. `/sso/redirect` generates `sso_state`, `sso_nonce`, `sso_code_verifier`, and redirects to `/sso/authorize` with `client_id`, `redirect_uri`, `response_type=code`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
+     2. `/sso/callback` rejects missing or mismatched `state` and leaves user unauthenticated.
+     3. `/sso/callback` rejects missing `code`.
+     4. `/sso/callback` exchanges `code` via `POST /api/sso/token`, provisions a new user when `auto_provision=true`, regenerates the session, and redirects to the dashboard.
+     5. `/sso/callback` matches and links an existing local user by `bound_user_id`, `login_portal_user_id`, and `email` without overwriting their password.
+     6. `/sso/callback` blocks auto-provisioning when `auto_provision=false` for unknown users.
+     7. `/sso/callback` handles failed token exchange (`400 invalid_grant` / `401 invalid_client` / network error) safely.
+     8. `POST /api/sso/verify-credentials` verifies `client_secret` and local user credentials for account binding and rejects invalid secrets (`401`) or wrong passwords (`400`).
+   - Run the tests and ensure all pass.
+
+---
+
+## Phase 4: Required Final Report
+
+When finished, provide a concise final report containing:
+1. **Repository Inspection Summary**: Detected framework/package versions, existing auth stack, and database schema.
+2. **Created & Modified Files**: Exact file paths and what changed in each.
+3. **Database Migrations**: Migration file name(s) and schema changes applied.
+4. **Configuration & Environment Keys**: Required `.env` variables and `config/services.php` entries.
+5. **Verification & Commands to Run**: Exact commands executed (migrations, test suite, build/cache commands) and any remaining manual steps required on the SSO Server (`GET /admin/sso` registration and `/connected-systems` account binding).
+```
+
+---
+
+## 5. Comprehensive Troubleshooting & Diagnostic Guide
+
+| # | Symptom / Error | Where It Occurs | Root Cause | Resolution |
+|---|---|---|---|---|
+| 1 | `{"error": "invalid_redirect_uri", "error_description": "The provided redirect_uri does not match registered client configuration."}` (`HTTP 400`) | `[SSO Server]` `GET /sso/authorize` or `POST /api/sso/token` | `LOGIN_PORTAL_REDIRECT_URI` sent by the client does not match the `redirect_uri` saved on the `[SSO Server]` (`scheme`, `host`, `port`, or `path` differs). | Ensure `LOGIN_PORTAL_REDIRECT_URI` in `.env` on `[Client Application]` matches the registered **Redirect URI** in `[SSO Server]` `/admin/sso` character-for-character, then run `php artisan config:clear` on `[Client Application]`. |
+| 2 | `{"error": "unauthorized_client", "error_description": "Invalid or inactive client ID."}` (`HTTP 400`) | `[SSO Server]` `GET /sso/authorize` | `LOGIN_PORTAL_CLIENT_ID` does not exist in `sso.client_id`, or the client's toggle is set to **Disabled** (`is_active = false`). | Verify `LOGIN_PORTAL_CLIENT_ID` in `.env` and confirm the client is toggled **Active** in `[SSO Server]` `/admin/sso`. |
+| 3 | `{"error": "invalid_client", "error_description": "Client authentication failed."}` (`HTTP 401`) | `[SSO Server]` `POST /api/sso/token` | `LOGIN_PORTAL_CLIENT_SECRET` in the client `.env` does not match the secret stored in `sso.client_secret`, or config cache is stale after secret rotation. | Rotate the secret in `[SSO Server]` `/admin/sso`, copy the new 64-character secret from the one-time modal into `.env` on `[Client Application]`, and run `php artisan config:clear`. |
+| 4 | `{"error": "invalid_grant", "error_description": "Authorization code has already been used."}` or `"...has expired."` (`HTTP 400`) | `[SSO Server]` `POST /api/sso/token` | Authorization codes are strictly single-use (`markAsUsed()`) and expire 2 minutes (`120 seconds`) after issuance. Caused by refreshing the callback URL, double-submitting in SPA dev mode, or clock drift. | Always initiate a fresh login from `/sso/redirect`. Ensure `/sso/callback` exchanges the code only once and redirects immediately. |
+| 5 | `{"error": "invalid_grant", "error_description": "PKCE code verifier verification failed."}` (`HTTP 400`) | `[SSO Server]` `POST /api/sso/token` | `code_challenge` was sent during `/sso/authorize`, but `code_verifier` was omitted or corrupted during `POST /api/sso/token`. | Ensure `sso_code_verifier` is stored in the session during `/sso/redirect` and passed as `code_verifier` in the `POST /api/sso/token` form body. |
+| 6 | Redirected to Portal `/connected-systems` with: `"This application is not linked to your LGUNET Portal account. Please bind your account first."` (`HTTP 302`) | `[SSO Server]` `GET /sso/authorize` or `GET /sso/launch/{client}` | `SsoProviderController::authorize` requires a verified row in `sso_user_bindings` for `(user_id, client_id)`. | On the Portal `/connected-systems` page, click **Bind Account** and enter your local `[Client Application]` username/email and password. Once bound, the Portal automatically resumes `/sso/authorize`. |
+| 7 | Portal Bind Account modal fails with: `"Unable to connect to {Client} server. Please make sure the system is online."` | `[SSO Server]` `POST /connected-systems/{clientId}/bind` | `ConnectedSystemsController::bind` could not reach `{base}/api/sso/verify-credentials` or `{base}/sso/verify-credentials` (timeout, wrong `api_url`, CSRF `419`, or single-threaded `php artisan serve` deadlock). | 1. Implement `POST /api/sso/verify-credentials` on `[Client Application]` (Step 4 & Step 5).<br>2. Exempt `sso/verify-credentials` from CSRF.<br>3. Set **System Base URL** (`api_url`) in `[SSO Server]` `/admin/sso` to the reachable client base URL.<br>4. Run `[SSO Server]` and `[Client Application]` on separate ports (`8000` and `8001`). |
+| 8 | `"Invalid or expired SSO state session. Please try signing in again."` on `/sso/callback` | `[Client Application]` `GET /sso/callback` | `session('sso_state')` was lost during the browser redirect round-trip. Common causes: switching between `localhost` and `127.0.0.1`, `SESSION_SAME_SITE=strict`, or `SESSION_SECURE_COOKIE=true` on plain `http://`. | Use the exact same hostname (`127.0.0.1` or `localhost`) everywhere, set `SESSION_SAME_SITE=lax`, and set `SESSION_SECURE_COOKIE=false` on local HTTP (`true` on production HTTPS). |
+| 9 | `401 Unauthorized` when calling `GET /api/user` or `GET /api/sso/userinfo` | `[SSO Server]` `/api/user` or `/api/sso/userinfo` | `SsoService::exchangeToken()` generates `access_token` via `Str::random(80)` without storing a Sanctum token, so `/api/user` and `/api/sso/userinfo` do not authenticate `access_token`. | Do not call `/api/user` or `/api/sso/userinfo`. Read the verified `user` object directly from the `POST /api/sso/token` JSON response (`$response->json('user')`). |
+| 10 | `cURL error 60: SSL certificate problem: self signed certificate` | `[Client Application]` `POST /api/sso/token` or `[SSO Server]` `POST /api/sso/verify-credentials` | Local development environment uses a self-signed TLS certificate (`https://*.test` or internal IP) not trusted by PHP's `curl.cainfo`. | Configure `curl.cainfo` / `openssl.cafile` in `php.ini` to trust your local CA, or use `http://127.0.0.1` in local development. Never disable TLS verification in production. |
+
+---
+
+## Appendix A: SSO Server Internal Database Schema (Reference Only — Do Not Create on Client)
+
+The three tables below exist **only on the `[SSO Server]` (`login_portal`)** and are documented here strictly for architectural transparency.
+
+### A.1 `sso` (Registered SSO Clients on `[SSO Server]`)
+| Column | Type | Description |
 |---|---|---|
-| Client Created | `created_sso_client` | client_id, name, framework |
-| Client Updated | `updated_sso_client` | client_id, name, framework |
-| Secret Rotated | `regenerated_sso_secret` | client_id, name |
-| Client Enabled | `enabled_sso_client` | client_id |
-| Client Disabled | `disabled_sso_client` | client_id |
-| Client Deleted | `deleted_sso_client` | client_id, name |
-| Code Issued | `sso_authorization_code_issued` | client_id, redirect_uri, has_pkce |
-| Token Exchanged | `sso_token_exchanged` | client_id, user_id, bound_user_id |
-| Replay Attempt | `replayed_authorization_code` | client_id, code_id |
-| Expired Code Attempt | `expired_authorization_code` | client_id, code_id |
-| URI Mismatch | `sso_redirect_uri_mismatch` | client_id, attempted_redirect_uri |
-| Binding Created | `sso_user_binding_created` | client_id, external_username |
-| Binding Removed | `sso_user_binding_removed` | client_id |
+| `id` | `BIGINT UNSIGNED (PK)` | Primary key |
+| `name` | `VARCHAR(255)` | Client application display name |
+| `description` | `TEXT (NULL)` | Optional application description |
+| `client_id` | `VARCHAR(255) (UNIQUE)` | Public client identifier |
+| `client_secret` | `VARCHAR(255)` | Confidential 64-character secret (hidden from serialization) |
+| `redirect_uri` | `TEXT` | Authorized callback URL(s), comma-separated |
+| `api_url` | `VARCHAR(500) (NULL)` | Base URL of client for `/api/sso/verify-credentials` |
+| `icon` | `VARCHAR(255) (NULL)` | Public disk path under `sso-icons/` |
+| `framework` | `VARCHAR(100)` | Selected framework preset (default `laravel_inertia`) |
+| `created_by` | `BIGINT UNSIGNED (FK NULL)` | Admin `users.id` (`nullOnDelete`) |
+| `is_active` | `BOOLEAN (DEFAULT TRUE)` | Whether client is permitted to authorize and exchange tokens |
+| `last_used_at` | `TIMESTAMP (NULL)` | Updated on each successful token exchange |
+| `created_at` / `updated_at` | `TIMESTAMP` | Eloquent timestamps |
 
-### Production Readiness & Security Standards:
-1. **HTTPS / TLS Mandatory**: All production redirects and backchannel API endpoints MUST use HTTPS encryption.
-2. **CSRF State Validation**: Generate a cryptographically secure random `state` (e.g. `Str::random(40)` or `random_bytes(32)`), store it in protected server session, compare using constant-time `hash_equals()`, and invalidate it immediately upon return.
-3. **Server-Side Secret Protection**: Client secrets must NEVER be committed to Git, exposed in frontend JavaScript bundles, or passed via browser query parameters. Token exchange must occur server-to-server.
-4. **Safe User Mapping**: Match returning users by `login_portal_user_id` first, fallback to verified email. Never automatically merge unverified accounts.
-5. **Session Fixation Defense**: Always regenerate the local session identifier (`$request->session()->regenerate()`) immediately after authenticating the local user.
-6. **Credential Redaction in Logs**: Ensure access tokens, client secrets, authorization codes, and passwords are fully redacted from server and application logs.
-7. **Mocked Automated Tests**: Automated CI/CD test suites must mock Login Portal responses (e.g. `Http::fake()`, `nock`, `WireMock`) and never depend on a live external server.
-8. **Preserve Local Authentication**: SSO authentication must complement, rather than arbitrarily disable, existing local username and password authentication mechanisms.
+### A.2 `sso_authorization_codes` (Single-Use Authorization Codes on `[SSO Server]`)
+| Column | Type | Description |
+|---|---|---|
+| `id` | `BIGINT UNSIGNED (PK)` | Primary key |
+| `code` | `VARCHAR(255) (UNIQUE)` | `hash('sha256', $rawCode)` of the 40-char code (indexed with `client_id`) |
+| `client_id` | `VARCHAR(255)` | Associated `sso.client_id` |
+| `user_id` | `BIGINT UNSIGNED (FK)` | Authenticated Portal `users.id` (`cascadeOnDelete`) |
+| `redirect_uri` | `TEXT` | Redirect URI requested during `/sso/authorize` |
+| `code_challenge` | `VARCHAR(255) (NULL)` | PKCE challenge string |
+| `code_challenge_method` | `VARCHAR(255)` | PKCE method (`S256` default, or `plain`) |
+| `nonce` | `VARCHAR(255) (NULL)` | Optional session-binding nonce echoed in `/api/sso/token` |
+| `expires_at` | `TIMESTAMP` | `now()->addMinutes(2)` |
+| `used_at` | `TIMESTAMP (NULL)` | Set atomically on first exchange via `markAsUsed()` |
+| `created_at` / `updated_at` | `TIMESTAMP` | Eloquent timestamps |
 
+### A.3 `sso_user_bindings` (Verified Account Bindings on `[SSO Server]`)
+| Column | Type | Description |
+|---|---|---|
+| `id` | `BIGINT UNSIGNED (PK)` | Primary key |
+| `user_id` | `BIGINT UNSIGNED (FK)` | Portal `users.id` (`cascadeOnDelete`, unique with `client_id`) |
+| `client_id` | `VARCHAR(255)` | Associated `sso.client_id` |
+| `external_user_id` | `VARCHAR(255)` | Client's local `user.id` returned by `/api/sso/verify-credentials` |
+| `external_username` | `VARCHAR(255)` | Client's local `user.username` or `user.email` |
+| `is_verified` | `BOOLEAN (DEFAULT TRUE)` | Ownership verification flag |
+| `last_login_at` | `TIMESTAMP (NULL)` | Updated on each `/api/sso/token` exchange |
+| `created_at` / `updated_at` | `TIMESTAMP` | Eloquent timestamps |
+
+### A.4 Audit Events Recorded by `[SSO Server]` (`audit_logs`)
+| Event | Action Key | Details Recorded (Sensitive Keys Automatically Redacted) |
+|---|---|---|
+| Client Created | `created_sso_client` | `name`, `client_id`, `framework` |
+| Client Updated | `updated_sso_client` | `name`, `client_id`, `framework` |
+| Secret Rotated | `regenerated_sso_secret` | `name`, `client_id` |
+| Client Enabled / Disabled | `enabled_sso_client` / `disabled_sso_client` | `name`, `client_id`, `is_active` |
+| Client Deleted | `deleted_sso_client` | `name`, `client_id` |
+| Code Issued | `sso_authorization_code_issued` | `client_id`, `redirect_uri`, `has_state`, `has_pkce` |
+| Token Exchanged | `sso_token_exchanged` | `client_id`, `user_id`, `bound_user_id` |
+| Token Exchange Failed | `sso_token_exchange_failed` | `reason` (`invalid_client` or `code_not_found`), `client_id` |
+| Code Replay Blocked | `replayed_authorization_code` | `client_id`, `code_id` |
+| Expired Code Blocked | `expired_authorization_code` | `client_id`, `code_id` |
+| Redirect URI Mismatch | `sso_redirect_uri_mismatch` | `client_id`, `attempted_redirect_uri` |
+| PKCE Failure | `sso_pkce_verification_failed` | `client_id` |
+| Binding Created / Removed | `sso_user_binding_created` / `sso_user_binding_removed` | `client_id`, `external_username` |
